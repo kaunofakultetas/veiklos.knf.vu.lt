@@ -1,0 +1,132 @@
+services:
+
+  # ------------------------------------------------------------
+  #                Incoming and outgoing endpoints
+  # ------------------------------------------------------------
+  veiklos-endpoint:
+    container_name: veiklos-endpoint
+    image: caddy:2.11.2-alpine
+    read_only: true
+    tmpfs:
+      - /config
+      - /data
+    volumes:
+      - ./endpoint/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - 80:80
+    networks:
+      - public
+      - private
+    restart: unless-stopped
+
+
+  veiklos-exit:
+    container_name: veiklos-exit
+    image: vuknf/caddy-l4:2.11
+    read_only: true
+    volumes:
+     - ./exit/Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+        public: {}
+        private:
+          ipv4_address: 172.28.10.15
+    restart: unless-stopped
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+
+
+
+
+
+  # ------------------------------------------------------------
+  #                     Veiklos system stack
+  # ------------------------------------------------------------
+  veiklos-vite:
+    container_name: veiklos-vite
+    image: veiklos-vite
+    build:
+      context: ./vite
+      dockerfile: Dockerfile                                              # Prod
+      # dockerfile: Dockerfile.dev                                          # Dev
+    read_only: true                                                       # Prod
+    # volumes:                                                              # Dev
+    #   - ./vite/app:/app                                                   # Dev
+    tmpfs:
+      - /tmp
+    networks:
+      - private
+      # - public                                                            # Dev
+    restart: unless-stopped
+
+
+  veiklos-db:
+    container_name: veiklos-db
+    image: postgres:16
+    read_only: true
+    tmpfs:
+      - /run/postgresql
+      - /tmp
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./_DATA/postgres:/var/lib/postgresql/data
+    networks:
+      - private
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+
+  veiklos-backend:
+    container_name: veiklos-backend
+    build: ./backend
+    environment:
+        PORT: 4000
+
+        # Database
+        DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@veiklos-db:5432/${POSTGRES_DB}
+
+        # SSO
+        TENANT_ID: ${TENANT_ID}
+        CLIENT_ID: ${CLIENT_ID}
+        ISSUER: ${ISSUER}
+
+        # Email
+        SMTP_HOST: ${SMTP_HOST}
+        SMTP_PORT: ${SMTP_PORT}
+        SMTP_USER: ${SMTP_USER}
+        SMTP_PASS: ${SMTP_PASS}
+
+    depends_on:
+      veiklos-db:
+        condition: service_healthy
+    volumes:
+      - ./_DATA/uploads:/app/uploads
+    extra_hosts:
+      - "smtp.gmail.com:172.28.10.15"
+    networks:
+      - private
+    restart: unless-stopped
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+
+
+
+
+networks:
+  public:
+    driver: bridge
+  private:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.10.0/24
+          gateway: 172.28.10.1
