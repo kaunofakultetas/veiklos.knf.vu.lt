@@ -68,15 +68,15 @@ services:
       - /run/postgresql
       - /tmp
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: is_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - ./_DATA/postgres:/var/lib/postgresql/data
     networks:
       - private
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d is_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -87,16 +87,22 @@ services:
     container_name: veiklos-backend
     build: ./backend
     environment:
-        PORT: ${PORT}
-        DATABASE_URL: ${DATABASE_URL}
+        PORT: 4000
+
+        # Database
+        DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@veiklos-db:5432/${POSTGRES_DB}
+
+        # SSO
         TENANT_ID: ${TENANT_ID}
         CLIENT_ID: ${CLIENT_ID}
         ISSUER: ${ISSUER}
 
+        # Email
         SMTP_HOST: ${SMTP_HOST}
         SMTP_PORT: ${SMTP_PORT}
         SMTP_USER: ${SMTP_USER}
         SMTP_PASS: ${SMTP_PASS}
+
     depends_on:
       veiklos-db:
         condition: service_healthy
