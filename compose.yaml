@@ -1,5 +1,8 @@
 services:
 
+  # ------------------------------------------------------------
+  #                Incoming and outgoing endpoints
+  # ------------------------------------------------------------
   veiklos-endpoint:
     container_name: veiklos-endpoint
     image: caddy:2.11.2-alpine
@@ -28,23 +31,32 @@ services:
         private:
           ipv4_address: 172.28.10.15
     restart: unless-stopped
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
 
 
+
+
+
+  # ------------------------------------------------------------
+  #                     Veiklos system stack
+  # ------------------------------------------------------------
   veiklos-vite:
     container_name: veiklos-vite
     image: veiklos-vite
     build:
       context: ./vite
-      #dockerfile: Dockerfile                                   # Prod
-      dockerfile: Dockerfile.dev                                # Dev
-    #read_only: true
-    volumes:                                                    # Dev
-      - ./vite/app:/app                                         # Dev
+      dockerfile: Dockerfile                                              # Prod
+      # dockerfile: Dockerfile.dev                                          # Dev
+    read_only: true                                                       # Prod
+    # volumes:                                                              # Dev
+    #   - ./vite/app:/app                                                   # Dev
     tmpfs:
       - /tmp
     networks:
       - private
-      - public                                                  # Dev
+      # - public                                                            # Dev
     restart: unless-stopped
 
 
@@ -73,9 +85,7 @@ services:
 
   veiklos-backend:
     container_name: veiklos-backend
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: ./backend
     environment:
         PORT: ${PORT}
         DATABASE_URL: ${DATABASE_URL}
@@ -92,12 +102,14 @@ services:
         condition: service_healthy
     volumes:
       - ./_DATA/uploads:/app/uploads
-    networks:
-      - private
     extra_hosts:
       - "smtp.gmail.com:172.28.10.15"
+    networks:
+      - private
     restart: unless-stopped
-
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
 
 
 
