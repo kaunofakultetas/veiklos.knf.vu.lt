@@ -1,12 +1,2 @@
-logs
-*.log
-
-node_modules
-dist
-dist-ssr
-
-*.local
-
+/_DATA/
 .env
-.env.*
-!.env.example
