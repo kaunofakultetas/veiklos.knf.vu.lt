@@ -1,19 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMsal } from "@azure/msal-react";
-import { loginRequest } from "../../authConfig";
 import "../../components/employee.css";
-
-function useIdToken() {
-  const { instance, accounts } = useMsal();
-  return async () => {
-    const account = accounts[0];
-    const resp = await instance.acquireTokenSilent({
-      ...loginRequest,
-      account,
-    });
-    return resp.idToken;
-  };
-}
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
@@ -47,7 +33,6 @@ function formatDate(iso) {
 }
 
 export default function EvaluatePage() {
-  const getToken = useIdToken();
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -68,12 +53,10 @@ export default function EvaluatePage() {
       setLoading(true);
       setMsg("");
       try {
-        const token = await getToken();
         const activeRole = getActiveRole();
 
         const res = await fetch("/api/activities/committee", {
           headers: {
-            Authorization: `Bearer ${token}`,
             "X-Active-Role": activeRole,
           },
         });
@@ -100,12 +83,10 @@ export default function EvaluatePage() {
       setDownloadingId(act.id);
       setMsg("");
 
-      const token = await getToken();
       const activeRole = getActiveRole();
 
       const res = await fetch(`/api/activities/${act.id}/attachment`, {
         headers: {
-          Authorization: `Bearer ${token}`,
           "X-Active-Role": activeRole,
         },
       });
@@ -141,13 +122,11 @@ export default function EvaluatePage() {
     setActingId(id);
     setMsg("");
     try {
-      const token = await getToken();
       const activeRole = getActiveRole();
 
       const res = await fetch(`/api/activities/${id}/committee`, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${token}`,
           "X-Active-Role": activeRole,
           "Content-Type": "application/json",
         },

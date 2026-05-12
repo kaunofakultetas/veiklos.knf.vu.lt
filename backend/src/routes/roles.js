@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
-import { verifyJwt } from "../auth/verifyJwt.js";
+import { verifySamlSession } from "../auth/verifySamlSession.js";
 import { TBL_ROLES, TBL_USER_ROLES } from "../db/tables.js";
 
 const router = Router();
 
 // GET /api/roles -> list role catalog
-router.get("/", verifyJwt, async (_req, res) => {
+router.get("/", verifySamlSession, async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT id, name, description
     FROM ${TBL_ROLES}
@@ -15,7 +15,7 @@ router.get("/", verifyJwt, async (_req, res) => {
 });
 
 // POST /api/roles/assign { user_oid, role_name }
-router.post("/assign", verifyJwt, async (req, res) => {
+router.post("/assign", verifySamlSession, async (req, res) => {
   const { user_oid, role_name } = req.body;
   if (!user_oid || !role_name) 
     return res.status(400).json({ error: "Klaida: Vartotojo OID ir rolė yra privalomi" });

@@ -1,17 +1,6 @@
 import { useEffect, useState, useRef } from "react";
-import { useMsal } from "@azure/msal-react";
-import { loginRequest } from "../../authConfig";
 import { AppSelect } from "../../components/appCommon.jsx";
 import "../../components/employee.css";
-
-function useIdToken() {
-  const { instance, accounts } = useMsal();
-  return async () => {
-    const account = accounts[0];
-    const resp = await instance.acquireTokenSilent({ ...loginRequest, account });
-    return resp.idToken;
-  };
-}
 
 function codeToNums(code) {
   const parts = String(code).match(/\d+/g);
@@ -36,7 +25,6 @@ function getActiveRole() {
 }
 
 export default function NewActivityPage() {
-  const getToken = useIdToken();
 
   const [themes, setThemes] = useState([]);
   const [selectedThemeId, setSelectedThemeId] = useState("");
@@ -60,11 +48,9 @@ export default function NewActivityPage() {
       setLoadingThemes(true);
       setMsg("");
       try {
-        const token = await getToken();
         const activeRole = getActiveRole();
         const res = await fetch("/api/themes", {
           headers: {
-            Authorization: `Bearer ${token}`,
             "X-Active-Role": activeRole,
           },
         });
@@ -109,7 +95,6 @@ export default function NewActivityPage() {
 
     try {
       setSubmitting(true);
-      const token = await getToken();
       const activeRole = getActiveRole();
 
       const formData = new FormData();
@@ -127,7 +112,6 @@ export default function NewActivityPage() {
       const res = await fetch("/api/activities", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "X-Active-Role": activeRole,
         },
         body: formData,

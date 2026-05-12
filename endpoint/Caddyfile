@@ -1,11 +1,13 @@
 :80 {
+    log
+
     route {
 
         # ------------------------------------------------------------
         #                         Security headers
         # ------------------------------------------------------------
         # SECURITY: Block other applications from accessing the application at the Caddy level
-        @foreign expression `{http.request.header.Origin} != "" && !{http.request.header.Origin}.endsWith("://" + {http.request.host})`
+        @foreign expression `{http.request.header.Origin} != "" && {http.request.header.Origin} != "null" && !{http.request.header.Origin}.endsWith("://" + {http.request.host}) && {http.request.uri} != "/auth/saml/assert"`
         respond @foreign 403
 
         # SECURITY: Restricts the scripts in the browser from communicating with external sources
@@ -36,15 +38,37 @@
 
     
     
+        # Keycloak IdP
+        handle /keycloak* {
+            reverse_proxy keycloak:8080 {
+                header_up X-Forwarded-Proto https
+                header_up X-Forwarded-Host  {http.request.host}
+                header_up X-Forwarded-For   {http.request.remote.host}
+            }
+        }
+
+
+        # Backend - SAML
+        handle /auth/saml/* {
+            reverse_proxy veiklos-backend:4000 {
+                header_up X-Forwarded-Proto https
+            }
+        }
+
+
         # Backend - API
         handle /api/* {
-            reverse_proxy veiklos-backend:4000
+            reverse_proxy veiklos-backend:4000 {
+                header_up X-Forwarded-Proto https
+            }
         }
-    
-    
+
+
         # Backend - Uploads
         handle /uploads/* {
-            reverse_proxy veiklos-backend:4000
+            reverse_proxy veiklos-backend:4000 {
+                header_up X-Forwarded-Proto https
+            }
         }
     
     

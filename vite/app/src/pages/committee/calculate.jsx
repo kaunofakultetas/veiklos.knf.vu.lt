@@ -1,23 +1,11 @@
 import { useEffect, useState } from "react";
-import { useMsal } from "@azure/msal-react";
-import { loginRequest } from "../../authConfig";
 import "../../components/employee.css";
-
-function useIdToken() {
-  const { instance, accounts } = useMsal();
-  return async () => {
-    const account = accounts[0];
-    const resp = await instance.acquireTokenSilent({ ...loginRequest, account });
-    return resp.idToken;
-  };
-}
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
 
 export default function CalculatePage() {
-  const getToken = useIdToken();
 
   const [themeTotals, setThemeTotals] = useState([]);
   const [themesLoading, setThemesLoading] = useState(false);
@@ -42,19 +30,16 @@ export default function CalculatePage() {
       setEmployeesLoading(true);
       setMsg("");
       try {
-        const token = await getToken();
         const activeRole = getActiveRole();
 
         const [themesRes, employeesRes] = await Promise.all([
           fetch("/api/activities/evaluated/theme-totals", {
             headers: {
-              Authorization: `Bearer ${token}`,
               "X-Active-Role": activeRole,
             },
           }),
           fetch("/api/activities/evaluated/employees", {
             headers: {
-              Authorization: `Bearer ${token}`,
               "X-Active-Role": activeRole,
             },
           }),
@@ -105,14 +90,12 @@ export default function CalculatePage() {
       setMsg("");
 
       try {
-        const token = await getToken();
         const activeRole = getActiveRole();
 
         const res = await fetch(
           `/api/activities/evaluated/employee/${selectedEmployeeOid}/subthemes`,
           {
             headers: {
-              Authorization: `Bearer ${token}`,
               "X-Active-Role": activeRole,
             },
           }
@@ -189,7 +172,6 @@ export default function CalculatePage() {
       setSavingPoint(true);
       setMsg("");
 
-      const token = await getToken();
       const activeRole = getActiveRole();
 
       const res = await fetch(
@@ -197,7 +179,6 @@ export default function CalculatePage() {
         {
           method: "PATCH",
           headers: {
-            Authorization: `Bearer ${token}`,
             "X-Active-Role": activeRole,
             "Content-Type": "application/json",
           },

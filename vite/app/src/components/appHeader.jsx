@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMsal } from "@azure/msal-react";
 import { useNavigate } from "react-router-dom";
-import { loginRequest } from "../authConfig";
 import vuLogo from "../assets/VU.png";
 import "./appHeader.css";
 
@@ -14,19 +12,8 @@ const roleToPath = (role) => {
   }
 };
 
-function useIdToken() {
-  const { instance, accounts } = useMsal();
-  return async () => {
-    const account = accounts[0];
-    const resp = await instance.acquireTokenSilent({ ...loginRequest, account });
-    return resp.idToken;
-  };
-}
-
 export default function AppHeader({ children }) {
-  const { instance, accounts } = useMsal();
   const navigate = useNavigate();
-  const getIdToken = useIdToken();
 
   const [roles, setRoles] = useState([]);
   const [activeRole, setActiveRole] = useState(
@@ -34,14 +21,10 @@ export default function AppHeader({ children }) {
   );
   const [fullName, setFullName] = useState("");
 
-    // load roles + role updates
   useEffect(() => {
     const loadMe = async () => {
       try {
-        const idToken = await getIdToken();
-        const res = await fetch("/api/me", {
-          headers: { Authorization: `Bearer ${idToken}` },
-        });
+        const res = await fetch("/api/me");
         if (!res.ok) return;
         const data = await res.json();
 
@@ -70,18 +53,10 @@ export default function AppHeader({ children }) {
     };
     loadMe();
 
-    // react to RolesPage
-    const handler = () => {
-      loadMe();
-    };
-
+    const handler = () => loadMe();
     window.addEventListener("app:roles-updated", handler);
-
-    return () => {
-      window.removeEventListener("app:roles-updated", handler);
-    };
+    return () => window.removeEventListener("app:roles-updated", handler);
   }, []);
-
 
   const onRoleChange = (next) => {
     setActiveRole(next);
@@ -89,20 +64,13 @@ export default function AppHeader({ children }) {
     navigate(roleToPath(next), { replace: true });
   };
 
-  const signOut = async () => {
-    const active = instance.getActiveAccount?.() || accounts[0];
-    await instance.logoutPopup({ account: active, mainWindowRedirectUri: "/" });
-    instance.setActiveAccount?.(null);
+  const signOut = () => {
     localStorage.removeItem("activeRole");
+    window.location.href = "/auth/saml/logout";
   };
 
-    // logo click
-    const handleLogoClick = () => {
-    if (activeRole) {
-      navigate(roleToPath(activeRole));
-    } else {
-      navigate("/");
-    }
+  const handleLogoClick = () => {
+    navigate(activeRole ? roleToPath(activeRole) : "/");
   };
 
   return (
@@ -125,15 +93,12 @@ export default function AppHeader({ children }) {
               className="app-role-select"
             >
               {roles.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
+                <option key={r} value={r}>{r}</option>
               ))}
             </select>
           ) : (
             <b className="app-role-value">
-              {activeRole ||
-                (roles.length === 0 ? "Kraunama…" : "(nėra)")}
+              {activeRole || (roles.length === 0 ? "Kraunama…" : "(nėra)")}
             </b>
           )}
         </div>
@@ -143,10 +108,7 @@ export default function AppHeader({ children }) {
           <span className="app-user-name">{fullName || "—"}</span>
         </div>
 
-        <button
-          onClick={signOut}
-          className="btn btn-primary app-signout"
-        >
+        <button onClick={signOut} className="btn btn-primary app-signout">
           Atsijungti
         </button>
       </div>

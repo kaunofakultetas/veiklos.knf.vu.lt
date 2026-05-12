@@ -1,10 +1,13 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
+import { authorize } from "../auth/authorize.js";
 
 const router = Router();
 
-// GET /api/user-roles
-router.get("/", async (req, res) => {
+const managerOnly = authorize(["Vadybininkas"]);
+
+// GET /api/user-roles?email=...
+router.get("/", managerOnly, async (req, res) => {
   try {
     const email = (req.query.email || "").trim();
     if (!email) return res.status(400).json({ error: "Klaida: Vartotojo el. paštas ir rolė yra privalomi" });
@@ -39,8 +42,8 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST /api/user-roles/assign email, role
-router.post("/assign", async (req, res) => {
+// POST /api/user-roles/assign { email, role }
+router.post("/assign", managerOnly, async (req, res) => {
   try {
     const { email, role } = req.body || {};
     if (!email || !role) return res.status(400).json({ error: "Klaida: Vartotojo el. paštas ir rolė yra privalomi" });
@@ -70,8 +73,8 @@ router.post("/assign", async (req, res) => {
   }
 });
 
-// POST /api/user-roles/remove email, role
-router.post("/remove", async (req, res) => {
+// POST /api/user-roles/remove { email, role }
+router.post("/remove", managerOnly, async (req, res) => {
   try {
     const { email, role } = req.body || {};
     if (!email || !role) return res.status(400).json({ error: "Klaida: Vartotojo el. paštas ir rolė yra privalomi" });

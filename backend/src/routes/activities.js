@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
-import { verifyJwt } from "../auth/verifyJwt.js";
+import { verifySamlSession } from "../auth/verifySamlSession.js";
 import { attachRoles } from "../auth/attachRoles.js";
 import { sendRejectionEmail } from "./emailService.js";
 import { sendReturnEmail } from "./emailService.js";
@@ -72,9 +72,9 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // guards
-const guard = [verifyJwt, attachRoles, requireActiveRoleIn(["Darbuotojas"])];
-const managerGuard = [verifyJwt, attachRoles, requireActiveRoleIn(["Vadybininkas"])];
-const committeeGuard = [verifyJwt, attachRoles, requireActiveRoleIn(["Komisijos narys"])];
+const guard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Darbuotojas"])];
+const managerGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Vadybininkas"])];
+const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Komisijos narys"])];
 
 // POST /api/activities  – create new activity
 router.post("/", guard, loadUserFullName, upload.single("attachment"), async (req, res) => {
@@ -724,7 +724,7 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
 });
 
 // GET /api/activities/:id/attachment – download attachment
-router.get("/:id/attachment", verifyJwt, attachRoles, async (req, res) => {
+router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) => {
   try {
     const { id } = req.params;
     const oid = req.user?.oid || req.user?.sub;

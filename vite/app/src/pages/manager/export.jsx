@@ -1,20 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMsal } from "@azure/msal-react";
-import { loginRequest } from "../../authConfig";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
 import "../../components/employee.css";
-
-function useIdToken() {
-  const { instance, accounts } = useMsal();
-  return async () => {
-    const account = accounts[0];
-    const resp = await instance.acquireTokenSilent({
-      ...loginRequest,
-      account,
-    });
-    return resp.idToken;
-  };
-}
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
@@ -139,7 +125,6 @@ function MultiSelectDropdown({
 }
 
 export default function ManagerExportPage() {
-  const getToken = useIdToken();
 
   const [themes, setThemes] = useState([]);
   const [activities, setActivities] = useState([]);
@@ -156,19 +141,16 @@ export default function ManagerExportPage() {
       setLoading(true);
       setMsg("");
       try {
-        const token = await getToken();
         const activeRole = getActiveRole();
 
         const [actsRes, themesRes] = await Promise.all([
           fetch("/api/activities/all", {
             headers: {
-              Authorization: `Bearer ${token}`,
               "X-Active-Role": activeRole,
             },
           }),
           fetch("/api/themes", {
             headers: {
-              Authorization: `Bearer ${token}`,
               "X-Active-Role": activeRole,
             },
           }),

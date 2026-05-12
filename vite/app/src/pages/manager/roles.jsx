@@ -1,22 +1,7 @@
 import { useState, useEffect } from "react";
-import { useMsal } from "@azure/msal-react";
-import { loginRequest } from "../../authConfig";
 import "../../components/employee.css";
 
-function useIdToken() {
-  const { instance, accounts } = useMsal();
-  return async () => {
-    const account = accounts[0];
-    const resp = await instance.acquireTokenSilent({
-      ...loginRequest,
-      account,
-    });
-    return resp.idToken;
-  };
-}
-
 export default function RolesPage() {
-  const getToken = useIdToken();
   const [currentUserEmail, setCurrentUserEmail] = useState("");
 
   const [email, setEmail] = useState("");
@@ -30,10 +15,7 @@ export default function RolesPage() {
   useEffect(() => {
     (async () => {
       try {
-        const token = await getToken();
-        const res = await fetch("/api/me", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetch("/api/me");
         if (!res.ok) return;
         const data = await res.json().catch(() => ({}));
         setCurrentUserEmail((data.email || "").toLowerCase());

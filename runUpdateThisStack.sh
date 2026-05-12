@@ -2,6 +2,7 @@
 
 mkdir -p ./_DATA/postgres
 mkdir -p ./_DATA/uploads
+mkdir -p ./_DATA/keycloak-db
 
 
 

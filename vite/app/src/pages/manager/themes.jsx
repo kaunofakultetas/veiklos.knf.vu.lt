@@ -1,20 +1,6 @@
 import { useEffect, useState } from "react";
-import { useMsal } from "@azure/msal-react";
-import { loginRequest } from "../../authConfig";
 import { AppSelect } from "../../components/appCommon.jsx";
 import "../../components/employee.css";
-
-function useIdToken() {
-  const { instance, accounts } = useMsal();
-  return async () => {
-    const account = accounts[0];
-    const resp = await instance.acquireTokenSilent({
-      ...loginRequest,
-      account,
-    });
-    return resp.idToken;
-  };
-}
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
@@ -41,7 +27,6 @@ function compareCodes(a, b) {
 
 
 export default function ThemesPage() {
-  const getToken = useIdToken();
 
   const [themes, setThemes] = useState([]);
   const [expanded, setExpanded] = useState({});
@@ -57,14 +42,12 @@ export default function ThemesPage() {
   const [sDesc, setSDesc] = useState("");
 
   const apiFetch = async (url, init = {}) => {
-    const token = await getToken();
     const activeRole = getActiveRole();
 
     const res = await fetch(url, {
       ...init,
       headers: {
         ...(init.headers || {}),
-        Authorization: `Bearer ${token}`,
         "X-Active-Role": activeRole,
         ...(init.body ? { "Content-Type": "application/json" } : {}),
       },

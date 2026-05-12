@@ -1,23 +1,11 @@
 import { useEffect, useState } from "react";
-import { useMsal } from "@azure/msal-react";
-import { loginRequest } from "../../authConfig";
 import "../../components/employee.css";
-
-function useIdToken() {
-  const { instance, accounts } = useMsal();
-  return async () => {
-    const account = accounts[0];
-    const resp = await instance.acquireTokenSilent({ ...loginRequest, account });
-    return resp.idToken;
-  };
-}
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
 
 export default function LimitsPage() {
-  const getToken = useIdToken();
   const [themes, setThemes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -33,12 +21,10 @@ export default function LimitsPage() {
       setLoading(true);
       setMsg("");
       try {
-        const token = await getToken();
         const activeRole = getActiveRole();
 
         const res = await fetch("/api/themes", {
           headers: {
-            Authorization: `Bearer ${token}`,
             "X-Active-Role": activeRole,
           },
         });
@@ -97,13 +83,11 @@ export default function LimitsPage() {
       setSavingId(subId);
       setMsg("");
 
-      const token = await getToken();
       const activeRole = getActiveRole();
 
       const res = await fetch(`/api/themes/subthemes/${subId}/cap`, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${token}`,
           "X-Active-Role": activeRole,
           "Content-Type": "application/json",
         },
@@ -162,13 +146,11 @@ export default function LimitsPage() {
       setSavingThemeId(themeId);
       setMsg("");
 
-      const token = await getToken();
       const activeRole = getActiveRole();
 
       const res = await fetch(`/api/themes/${themeId}/total-sum`, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${token}`,
           "X-Active-Role": activeRole,
           "Content-Type": "application/json",
         },

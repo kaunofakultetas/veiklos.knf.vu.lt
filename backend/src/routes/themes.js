@@ -1,15 +1,15 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
-import { verifyJwt } from "../auth/verifyJwt.js";
+import { verifySamlSession } from "../auth/verifySamlSession.js";
 import { attachRoles } from "../auth/attachRoles.js";
 import { requireActiveRoleIn } from "../auth/requireActiveRole.js";
 
 const router = Router();
 
 // guards
-const readGuard = [verifyJwt, attachRoles]; 
-const manageGuard = [verifyJwt, attachRoles, requireActiveRoleIn(["Vadybininkas"])];
-const committeeGuard = [verifyJwt, attachRoles, requireActiveRoleIn(["Komisijos narys"])];
+const readGuard = [verifySamlSession, attachRoles];
+const manageGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Vadybininkas"])];
+const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Komisijos narys"])];
 
 // GET /api/themes  employee + manager + committee
 router.get("/", readGuard, async (_req, res) => {
