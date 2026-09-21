@@ -5,8 +5,10 @@
 # ==============================================
 mkdir -p ./_DATA/{postgres,uploads,keycloak-db}
 mkdir -p ./_LOGS
+mkdir -p ./_SAML
 sudo chown -R 1000:1000 ./_DATA
 sudo chown -R 1000:1000 ./_LOGS
+sudo chown -R 1000:1000 ./_SAML
 
 
 

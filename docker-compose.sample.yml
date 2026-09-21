@@ -130,6 +130,7 @@ services:
         condition: service_healthy
     volumes:
       - ./_DATA/uploads:/app/uploads
+      - ./_SAML:/app/certs:ro
     extra_hosts:
       - "smtp.gmail.com:172.28.10.15"
     networks:
