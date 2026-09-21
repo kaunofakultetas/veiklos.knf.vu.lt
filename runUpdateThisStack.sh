@@ -4,6 +4,9 @@
 # STEP 1: Create necessary files and directories
 # ==============================================
 mkdir -p ./_DATA/{postgres,uploads,keycloak-db}
+mkdir -p ./_LOGS
+sudo chown -R 1000:1000 ./_DATA
+sudo chown -R 1000:1000 ./_LOGS
 
 
 
