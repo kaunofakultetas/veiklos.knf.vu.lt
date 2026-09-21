@@ -1,5 +1,4 @@
-/_DATA/
+/_*
 .env
 docker-compose.yml
-.claude/
-backend/certs/
+/.claude
