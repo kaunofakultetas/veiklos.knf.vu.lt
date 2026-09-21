@@ -1,14 +1,14 @@
-FROM node:20-slim
+FROM node:24.16.0-alpine
 
 WORKDIR /app
 
-ENV NODE_ENV=production
+# Copy application source code
+COPY app /app
 
-COPY app/package*.json ./
-RUN npm ci --omit=dev
+# Install dependencies
+RUN npm install --omit=dev
 
-COPY app .
-
+ENV PORT=4000
 EXPOSE 4000
 
 CMD ["node", "src/index.js"]
