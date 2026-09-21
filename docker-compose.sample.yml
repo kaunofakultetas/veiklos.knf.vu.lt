@@ -100,14 +100,8 @@ services:
         # Database
         DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@veiklos-db:5432/${POSTGRES_DB}
 
-        # SSO
-        TENANT_ID: ${TENANT_ID}
-        CLIENT_ID: ${CLIENT_ID}
-        ISSUER: ${ISSUER}
-
         # SAML / Keycloak
         APP_BASE_URL: ${APP_BASE_URL}
-        SP_ENTITY_ID: ${SP_ENTITY_ID}
         SESSION_SECRET: ${SESSION_SECRET}
         SP_PRIVATE_KEY_PATH: ${SP_PRIVATE_KEY_PATH}
         SP_SIGNING_CERT_PATH: ${SP_SIGNING_CERT_PATH}
