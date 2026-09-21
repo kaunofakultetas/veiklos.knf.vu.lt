@@ -1,10 +1,68 @@
+// -----------------------------------------------------------
+//  [*] Employee — my activities list
+//
+//  /employee/my: every activity the employee has submitted,
+//  as a table with status pills, the manager's comment, the
+//  score and the attachment. A row opens the review modal;
+//  PATEIKTA/TIKSLINTI activities can be edited there,
+//  TIKSLINTI ones resubmitted, and anything not yet approved/
+//  scored/rejected deleted.
+//
+//  Activities and the theme tree load together on mount; all
+//  mutations patch the local list in place instead of
+//  refetching. Auth rides in the session cookie; only the
+//  X-Active-Role header travels.
+//
+//  Split into (root component last):
+//
+//    getActiveRole    — activeRole from localStorage
+//    MyActivitiesPage — table + modal (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useState } from "react";
 import { AppSelect } from "../../components/appCommon.jsx";
 import "../../components/employee.css";
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header, read fresh
+// per request.
+//
+// Used by:
+//   - MyActivitiesPage (below) — every API call
+// -----------------------------------------------------------
+
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// MyActivitiesPage (default export)
+// -----------------------------------------------------------
+//
+// Owns all state (list, themes, modal + edit fields, per-row
+// busy ids) and the API calls. Per-row busy state
+// (downloadingId / deletingId / resubmittingId) disables only
+// the touched row's button. The modal is an inline render
+// helper (renderModal) sharing this state.
+//
+// Used by:
+//   - App.jsx — route /employee/my
+// -----------------------------------------------------------
 
 export default function MyActivitiesPage() {
   const [items, setItems] = useState([]);
@@ -18,14 +76,16 @@ export default function MyActivitiesPage() {
   const [selectedActivity, setSelectedActivity] = useState(null);
   const [editing, setEditing] = useState(false);
 
-  // edit fields for modal
+  // Edit-form state is seeded when a row is opened and read
+  // when saving
   const [editThemeId, setEditThemeId] = useState("");
   const [editSubthemeId, setEditSubthemeId] = useState("");
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editAttachmentFile, setEditAttachmentFile] = useState(null);
 
-  // load activities + themes
+
+  // Activities and themes load in parallel on mount
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -70,9 +130,10 @@ export default function MyActivitiesPage() {
     };
 
     load();
-    //ignore
   }, []);
 
+
+  // Activity status → status-pill modifier class
   const statusClass = (status) => {
     switch (status) {
       case "PATEIKTA":
@@ -90,6 +151,8 @@ export default function MyActivitiesPage() {
     }
   };
 
+
+  // ISO → lt-LT date-time; empty input renders empty
   const formatDate = (iso) => {
     if (!iso) return "";
     const d = new Date(iso);
@@ -102,6 +165,9 @@ export default function MyActivitiesPage() {
     });
   };
 
+
+  // Attachment download via fetch + blob so the X-Active-Role
+  // header can travel along
   const handleDownload = async (act) => {
     if (!act.attachment_path) return;
     try {
@@ -122,7 +188,7 @@ export default function MyActivitiesPage() {
           const data = await res.json();
           if (data?.error) errText = data.error;
         } catch {
-          // ignore
+          // ignore — keep the HTTP status text
         }
         throw new Error(errText);
       }
@@ -142,6 +208,7 @@ export default function MyActivitiesPage() {
       setDownloadingId(null);
     }
   };
+
 
   const handleDelete = async (act) => {
     if (!window.confirm("Ar tikrai norite ištrinti šią veiklą?")) return;
@@ -164,7 +231,7 @@ export default function MyActivitiesPage() {
           const data = await res.json();
           if (data?.error) errText = data.error;
         } catch {
-          // ignore
+          // ignore — keep the HTTP status text
         }
         throw new Error(errText);
       }
@@ -177,6 +244,7 @@ export default function MyActivitiesPage() {
       setDeletingId(null);
     }
   };
+
 
   const handleResubmit = async (act) => {
     if (act.status !== "TIKSLINTI") return;
@@ -200,6 +268,8 @@ export default function MyActivitiesPage() {
         throw new Error(data?.error || `${res.status} ${res.statusText}`);
       }
 
+      // Patch the row (and the open modal) with the returned
+      // fresh copy
       setItems((prev) => prev.map((x) => (x.id === data.id ? data : x)));
       if (selectedActivity && selectedActivity.id === data.id) {
         setSelectedActivity(data);
@@ -213,6 +283,9 @@ export default function MyActivitiesPage() {
     }
   };
 
+
+  // Opening a row seeds the edit fields from it, but starts
+  // in view mode
   const openModal = (act) => {
     setSelectedActivity(act);
     setEditing(false);
@@ -228,6 +301,7 @@ export default function MyActivitiesPage() {
     setEditing(false);
   };
 
+
   const canEdit =
     selectedActivity &&
     (selectedActivity.status === "PATEIKTA" ||
@@ -236,6 +310,10 @@ export default function MyActivitiesPage() {
   const themeForEdit = themes.find((t) => String(t.id) === editThemeId);
   const subthemesForEdit = themeForEdit?.subthemes || [];
 
+
+  // Multipart PATCH — theme_code/subtheme_code go along (and
+  // before any file) so a replacement attachment gets the
+  // right filename prefix on the backend
   const handleSaveEdit = async () => {
     if (!selectedActivity) return;
     if (!editThemeId || !editSubthemeId || !editTitle.trim()) {
@@ -255,7 +333,6 @@ export default function MyActivitiesPage() {
       formData.append("title", editTitle);
       formData.append("description", editDescription || "");
 
-      // attachment prefix editing
       const themeObj = themes.find((t) => String(t.id) === String(editThemeId));
       const subObj = themeObj?.subthemes?.find(
         (s) => String(s.id) === String(editSubthemeId)
@@ -293,6 +370,10 @@ export default function MyActivitiesPage() {
     }
   };
 
+
+  // Inline render helper for the review/edit modal — kept
+  // inside the component because it reads nearly all of the
+  // state above
   const renderModal = () => {
     const act = selectedActivity;
     if (!act) return null;
@@ -309,7 +390,8 @@ export default function MyActivitiesPage() {
           </div>
 
           <div className="employee-modal-grid">
-            {/* theme */}
+            {/* Theme — picking a new one preselects its first
+                subtheme */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Tema</div>
               {!editing ? (
@@ -336,7 +418,7 @@ export default function MyActivitiesPage() {
               )}
             </div>
 
-            {/* subtheme */}
+            {/* Subtheme */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Potemė</div>
               {!editing ? (
@@ -356,7 +438,7 @@ export default function MyActivitiesPage() {
               )}
             </div>
 
-            {/* title */}
+            {/* Title */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Veiklos pavadinimas
@@ -372,7 +454,7 @@ export default function MyActivitiesPage() {
               )}
             </div>
 
-            {/* desc */}
+            {/* Description */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Veiklos aprašymas
@@ -396,7 +478,7 @@ export default function MyActivitiesPage() {
               )}
             </div>
 
-            {/* status */}
+            {/* Status — never editable */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Būsena</div>
               <div className="employee-modal-value">
@@ -406,7 +488,8 @@ export default function MyActivitiesPage() {
               </div>
             </div>
 
-            {/* attach */}
+            {/* Attachment: download in view mode, replace in
+                edit mode (empty input keeps the current file) */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Priedas</div>
               {!editing ? (
@@ -485,6 +568,7 @@ export default function MyActivitiesPage() {
       </div>
     );
   };
+
 
   return (
     <div className="page">
@@ -566,6 +650,9 @@ export default function MyActivitiesPage() {
                         )}
                       </td>
                       <td>
+                        {/* Row actions: review always; resubmit
+                            only for TIKSLINTI; delete until the
+                            activity is approved/scored/rejected */}
                         <div className="my-activities-actions">
                           <button
                             type="button"
@@ -589,7 +676,7 @@ export default function MyActivitiesPage() {
                           )}
 
                           {act.status !== "PATVIRTINTA" &&
-                            act.status !== "ĮVERTINTA" && 
+                            act.status !== "ĮVERTINTA" &&
                               act.status !== "ATMESTA" && (
                               <button
                                 type="button"

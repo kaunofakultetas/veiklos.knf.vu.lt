@@ -1,15 +1,88 @@
+// -----------------------------------------------------------
+//  [*] Manager — export all activities to Excel
+//
+//  /manager/export: EVERY activity in the system (all
+//  employees, all statuses) behind four multi-select filters
+//  — employee (searchable), theme, subtheme, status — with a
+//  preview table and an XLSX download built client-side.
+//
+//  The export carries more columns than the preview: it adds
+//  descriptions and all three comment fields (rejection,
+//  manager, committee).
+//
+//  Split into (root component last):
+//
+//    getActiveRole       — activeRole from localStorage
+//    codeToNums          — "1.2.3" → [1,2,3]
+//    compareCodes        — numeric-aware code ordering
+//    statusClass         — status → pill css class
+//    MultiSelectDropdown — checkbox dropdown, optional search
+//    ManagerExportPage   — the page (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header, read fresh
+// per request.
+//
+// Used by:
+//   - ManagerExportPage (below)
+// -----------------------------------------------------------
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// codeToNums
+// -----------------------------------------------------------
+//
+// Pulls the number runs out of a theme/subtheme code for
+// numeric comparison.
+//
+// Used by:
+//   - compareCodes (below)
+// -----------------------------------------------------------
+
 function codeToNums(code) {
   const parts = String(code).match(/\d+/g);
   return parts ? parts.map((n) => Number(n)) : [];
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// compareCodes
+// -----------------------------------------------------------
+//
+// Sort comparator for codes: "1.9" < "1.10" (plain string
+// sort would invert them); ties fall back to localeCompare.
+//
+// Used by:
+//   - ManagerExportPage (below) — subtheme option ordering
+// -----------------------------------------------------------
 
 function compareCodes(a, b) {
   const A = codeToNums(a);
@@ -24,6 +97,23 @@ function compareCodes(a, b) {
 
   return String(a).localeCompare(String(b));
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// statusClass
+// -----------------------------------------------------------
+//
+// Activity status → status-pill modifier class; unknown
+// statuses get the bare pill.
+//
+// Used by:
+//   - ManagerExportPage (below) — the preview table
+// -----------------------------------------------------------
 
 function statusClass(status) {
   switch (status) {
@@ -41,6 +131,27 @@ function statusClass(status) {
       return "status-pill";
   }
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// MultiSelectDropdown
+// -----------------------------------------------------------
+//
+// The checkbox-list dropdown filter, here with an optional
+// search box (withSearch) that narrows the visible options —
+// used for the employee list, which can get long. Summary:
+// placeholder / single label / "N pasirinkti". Note this is a
+// diverged copy of the one in employee/export.jsx (that one
+// has no search and says "pasirinkta").
+//
+// Used by:
+//   - ManagerExportPage (below) — all four filters
+// -----------------------------------------------------------
 
 function MultiSelectDropdown({
   label,
@@ -124,6 +235,25 @@ function MultiSelectDropdown({
   );
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ManagerExportPage (default export)
+// -----------------------------------------------------------
+//
+// Loads /api/activities/all and the theme tree in parallel on
+// mount; all filtering is client-side. The employee filter's
+// options are derived from the activities themselves, so only
+// employees who have registered something appear.
+//
+// Used by:
+//   - App.jsx — route /manager/export
+// -----------------------------------------------------------
+
 export default function ManagerExportPage() {
 
   const [themes, setThemes] = useState([]);
@@ -131,11 +261,14 @@ export default function ManagerExportPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
+  // Filter selections — empty array means "no filter"
   const [filterEmployeeIds, setFilterEmployeeIds] = useState([]);
   const [filterThemeIds, setFilterThemeIds] = useState([]);
   const [filterSubthemeIds, setFilterSubthemeIds] = useState([]);
   const [filterStatuses, setFilterStatuses] = useState([]);
 
+
+  // Activities and themes load in parallel on mount
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -182,6 +315,9 @@ export default function ManagerExportPage() {
     load();
   }, []);
 
+
+  // ISO → lt-LT date-time, also the format written into the
+  // XLSX cells
   const formatDate = (iso) => {
     if (!iso) return "";
     const d = new Date(iso);
@@ -194,6 +330,9 @@ export default function ManagerExportPage() {
     });
   };
 
+
+  // Distinct employees pulled from the activities, sorted by
+  // name with Lithuanian collation
   const employeeOptions = useMemo(() => {
     const map = new Map();
     for (const a of activities) {
@@ -219,6 +358,9 @@ export default function ManagerExportPage() {
     [themes]
   );
 
+
+  // The theme tree flattened once; subthemes keep their
+  // themeId so the theme filter can narrow them
   const allSubthemes = useMemo(() => {
     const list = [];
     for (const t of themes) {
@@ -242,6 +384,9 @@ export default function ManagerExportPage() {
     return [...filtered].sort((a, b) => compareCodes(a.code, b.code));
   }, [allSubthemes, filterThemeIds]);
 
+
+  // The status filter's fixed choices — ids double as the
+  // exact DB status strings
   const statusOptions = [
     { id: "PATEIKTA", label: "PATEIKTA" },
     { id: "PATVIRTINTA", label: "PATVIRTINTA" },
@@ -250,8 +395,8 @@ export default function ManagerExportPage() {
     { id: "ĮVERTINTA", label: "ĮVERTINTA" },
   ];
 
-  // filter
 
+  // AND across the four filters; empty filter always passes
   const filteredActivities = useMemo(() => {
     return activities.filter((a) => {
       const empId = String(a.employee_oid);
@@ -277,7 +422,9 @@ export default function ManagerExportPage() {
     filterStatuses,
   ]);
 
-  // XLSX 
+
+  // Build and download the workbook client-side — includes
+  // the comment columns the preview table omits
   const exportXLSX = () => {
     if (!filteredActivities.length) {
       setMsg("Nėra veiklų eksportui.");
@@ -325,6 +472,7 @@ export default function ManagerExportPage() {
     XLSX.writeFile(workbook, `veiklos-eksportas-vadybininkas-${ts}.xlsx`);
   };
 
+
   return (
     <div className="page">
       <header className="page-header">
@@ -334,7 +482,7 @@ export default function ManagerExportPage() {
       </header>
 
       <main className="page-content">
-        {/* filters */}
+        {/* Filters + the export button */}
         <section className="card card-wide">
           <div className="card-body">
             <div className="export-filters-row">
@@ -390,7 +538,8 @@ export default function ManagerExportPage() {
           </div>
         </section>
 
-        {/* table */}
+        {/* Preview of what the XLSX will contain (minus the
+            comment columns) */}
         <section className="card card-wide">
           <div className="card-body">
             <h3 className="section-title">Filtruotos veiklos</h3>

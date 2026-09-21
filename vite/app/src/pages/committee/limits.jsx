@@ -1,21 +1,81 @@
+// -----------------------------------------------------------
+//  [*] Committee — theme budgets & subtheme limits
+//
+//  /committee/limits, two tables on one card: each theme's
+//  total sum (its money budget) and each subtheme's score
+//  cap. Every row has its own number input and save button;
+//  saves go one row at a time.
+//
+//  The inputs are "new value" fields seeded with 0, not with
+//  the current values — the current value sits in its own
+//  read-only column, and a successful save resets the input
+//  back to 0.
+//
+//  Split into (root component last):
+//
+//    getActiveRole — activeRole from localStorage
+//    LimitsPage    — both tables (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useState } from "react";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header, read fresh
+// per request.
+//
+// Used by:
+//   - LimitsPage (below)
+// -----------------------------------------------------------
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// LimitsPage (default export)
+// -----------------------------------------------------------
+//
+// Loads the theme tree once; caps and themeTotals are
+// dictionaries of the per-row draft inputs keyed by
+// subtheme/theme id. A save PATCHes the one value and patches
+// the loaded tree in place, so the "current" columns update
+// without a refetch.
+//
+// Used by:
+//   - App.jsx — route /committee/limits
+// -----------------------------------------------------------
 
 export default function LimitsPage() {
   const [themes, setThemes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
+  // Draft inputs and per-row busy state — subtheme caps
   const [caps, setCaps] = useState({});
   const [savingId, setSavingId] = useState(null);
 
+  // Draft inputs and per-row busy state — theme totals
   const [themeTotals, setThemeTotals] = useState({});
   const [savingThemeId, setSavingThemeId] = useState(null);
 
+
+  // Load the tree and zero every draft input
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -60,6 +120,7 @@ export default function LimitsPage() {
     load();
   }, []);
 
+
   const handleCapChange = (subId, value) => {
     setCaps((prev) => ({
       ...prev,
@@ -67,6 +128,8 @@ export default function LimitsPage() {
     }));
   };
 
+
+  // Save one subtheme cap, patch the tree, zero the draft
   const handleSaveCap = async (subId) => {
     const raw = caps[subId];
     if (raw === "" || raw === null || raw === undefined) {
@@ -122,6 +185,7 @@ export default function LimitsPage() {
     }
   };
 
+
   const handleThemeTotalChange = (themeId, value) => {
     setThemeTotals((prev) => ({
       ...prev,
@@ -129,6 +193,8 @@ export default function LimitsPage() {
     }));
   };
 
+
+  // Save one theme's total sum — same pattern as the caps
   const handleSaveThemeTotal = async (themeId) => {
     const raw = themeTotals[themeId];
     if (raw === "" || raw === null || raw === undefined) {
@@ -180,6 +246,7 @@ export default function LimitsPage() {
     }
   };
 
+
   return (
     <div className="page">
       <header className="page-header">
@@ -195,7 +262,7 @@ export default function LimitsPage() {
               <div className="employee-muted">Kraunama…</div>
             ) : (
               <>
-                {/* limits */}
+                {/* Theme budgets */}
                 <h2 className="section-title">Temų bendros sumos</h2>
                 <div className="table-wrapper">
                   <table className="table my-activities-table">
@@ -248,7 +315,8 @@ export default function LimitsPage() {
 
                 <div style={{ height: 16 }} />
 
-                {/* subtheme limits */}
+                {/* Subtheme caps — one row per subtheme across
+                    all themes */}
                 <h2 className="section-title">Potemių limitai</h2>
                 <div className="table-wrapper">
                   <table className="table my-activities-table">

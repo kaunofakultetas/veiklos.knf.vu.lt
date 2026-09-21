@@ -1,6 +1,31 @@
+// -----------------------------------------------------------
+//  [*] Manager — workspace layout
+//
+//  The /manager shell: AppHeader with the four nav links
+//  (Rolių tvarkymas / Peržiūra / Eksportas / Temų tvarkymas),
+//  the routed page in <Outlet />, and the footer.
+// -----------------------------------------------------------
+
 import { NavLink, Outlet } from "react-router-dom";
 import AppHeader from "../../components/appHeader.jsx";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ManagerLayout (default export)
+// -----------------------------------------------------------
+//
+// Wrapped in RoleRoute("Vadybininkas") by the router, so
+// everything under it can assume the manager role is active.
+//
+// Used by:
+//   - App.jsx — layout element of /manager
+// -----------------------------------------------------------
 
 export default function ManagerLayout() {
   return (

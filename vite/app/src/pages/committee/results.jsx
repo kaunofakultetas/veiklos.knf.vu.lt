@@ -1,15 +1,89 @@
+// -----------------------------------------------------------
+//  [*] Committee — evaluated activities & re-scoring
+//
+//  /committee/results: every ĮVERTINTA activity with its
+//  score. A row opens the modal, where "Pervertinti" redoes
+//  the evaluation: theme/subtheme can be reassigned, the
+//  comments edited, and the score re-derived from a fresh
+//  people count (score = 1/n, 2 decimals, 0 people → 0).
+//
+//  Re-scoring keeps the activity ĮVERTINTA, so the row stays
+//  in this list and is patched in place. Auth rides in the
+//  session cookie; only the X-Active-Role header travels.
+//
+//  Split into (root component last):
+//
+//    getActiveRole — activeRole from localStorage
+//    codeToNums    — "1.2.3" → [1,2,3]
+//    compareCodes  — numeric-aware code ordering
+//    statusClass   — status → pill css class
+//    formatDate    — ISO → lt-LT date-time
+//    ResultsPage   — table + modal (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useState } from "react";
 import { AppSelect } from "../../components/appCommon.jsx";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header, read fresh
+// per request.
+//
+// Used by:
+//   - ResultsPage (below) — every API call
+// -----------------------------------------------------------
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// codeToNums
+// -----------------------------------------------------------
+//
+// Pulls the number runs out of a theme/subtheme code for
+// numeric comparison.
+//
+// Used by:
+//   - compareCodes (below)
+// -----------------------------------------------------------
+
 function codeToNums(code) {
   const parts = String(code).match(/\d+/g);
   return parts ? parts.map((n) => Number(n)) : [];
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// compareCodes
+// -----------------------------------------------------------
+//
+// Sort comparator for codes: "1.9" < "1.10" (plain string
+// sort would invert them); ties fall back to localeCompare.
+//
+// Used by:
+//   - ResultsPage (below) — subtheme dropdown ordering
+// -----------------------------------------------------------
 
 function compareCodes(a, b) {
   const A = codeToNums(a);
@@ -24,6 +98,24 @@ function compareCodes(a, b) {
 
   return String(a).localeCompare(String(b));
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// statusClass
+// -----------------------------------------------------------
+//
+// Activity status → status-pill modifier class; like the
+// evaluate page's copy this one has no TIKSLINTI case, which
+// never shows here anyway.
+//
+// Used by:
+//   - ResultsPage (below) — table and modal
+// -----------------------------------------------------------
 
 function statusClass(status) {
   switch (status) {
@@ -40,6 +132,23 @@ function statusClass(status) {
   }
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// formatDate
+// -----------------------------------------------------------
+//
+// ISO timestamp → "YYYY-MM-DD HH:MM" in the lt-LT locale;
+// empty input renders as an empty string.
+//
+// Used by:
+//   - ResultsPage (below) — the modal's Sukurta line
+// -----------------------------------------------------------
+
 function formatDate(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -52,6 +161,26 @@ function formatDate(iso) {
   });
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ResultsPage (default export)
+// -----------------------------------------------------------
+//
+// Loads /api/activities/evaluated and the theme tree in
+// parallel on mount. Re-scoring PATCHes
+// /api/activities/:id/committee with action "score" plus the
+// (possibly reassigned) theme/subtheme ids. The modal is an
+// inline render helper (renderModal) sharing this state.
+//
+// Used by:
+//   - App.jsx — route /committee/results
+// -----------------------------------------------------------
+
 export default function ResultsPage() {
 
   const [items, setItems] = useState([]);
@@ -59,6 +188,7 @@ export default function ResultsPage() {
   const [msg, setMsg] = useState("");
   const [downloadingId, setDownloadingId] = useState(null);
 
+  // Modal + re-scoring state
   const [selectedActivity, setSelectedActivity] = useState(null);
   const [editingScore, setEditingScore] = useState(false);
   const [editScore, setEditScore] = useState("");
@@ -66,10 +196,13 @@ export default function ResultsPage() {
   const [editCommitteeComments, setEditCommitteeComments] = useState("");
   const [peopleNum, setPeopleNum] = useState("");
 
+  // Theme reassignment state
   const [themes, setThemes] = useState([]);
   const [editThemeId, setEditThemeId] = useState("");
   const [editSubthemeId, setEditSubthemeId] = useState("");
 
+
+  // Evaluated activities and themes load in parallel on mount
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -113,6 +246,8 @@ export default function ResultsPage() {
   }, []);
 
 
+  // Attachment download via fetch + blob so the X-Active-Role
+  // header can travel along
   const handleDownload = async (act) => {
     if (!act.attachment_path) return;
     try {
@@ -154,6 +289,9 @@ export default function ResultsPage() {
     }
   };
 
+
+  // Opening a row seeds every edit field from it, in view
+  // mode
   const openModal = (act) => {
     setSelectedActivity(act);
     setEditingScore(false);
@@ -171,7 +309,11 @@ export default function ResultsPage() {
     setSavingScore(false);
   };
 
-  // reevaluate
+
+  // First click arms re-scoring; second click validates the
+  // people count, derives score = 1/n and PATCHes with the
+  // theme/subtheme too. (The empty-count message is a shipped
+  // truncated sentence, same as on the evaluate page.)
   const handleReevaluateClick = async () => {
     if (!selectedActivity) return;
 
@@ -221,7 +363,8 @@ export default function ResultsPage() {
         throw new Error(data?.error || `${res.status} ${res.statusText}`);
       }
 
-      // update list 
+      // Re-scoring keeps ĮVERTINTA — patch the row and the
+      // open modal in place
       setItems((prev) => prev.map((x) => (x.id === data.id ? data : x)));
       setSelectedActivity(data);
       setEditThemeId(String(data.theme_id ?? ""));
@@ -241,6 +384,10 @@ export default function ResultsPage() {
     }
   };
 
+
+  // Inline render helper for the review/re-scoring modal —
+  // kept inside the component because it reads nearly all of
+  // the state above
   const renderModal = () => {
     const act = selectedActivity;
     if (!act) return null;
@@ -267,7 +414,8 @@ export default function ResultsPage() {
           </div>
 
           <div className="employee-modal-grid">
-            {/* theme */}
+            {/* Theme — editable in re-scoring mode; picking a
+                new one preselects its first subtheme */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Tema</div>
               {!editingScore ? (
@@ -293,7 +441,7 @@ export default function ResultsPage() {
               )}
             </div>
 
-            {/* subtheme */}
+            {/* Subtheme */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Potemė</div>
               {!editingScore ? (
@@ -314,7 +462,7 @@ export default function ResultsPage() {
             </div>
 
 
-            {/* title */}
+            {/* The activity itself — read-only */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Veiklos pavadinimas
@@ -322,7 +470,6 @@ export default function ResultsPage() {
               <div className="employee-modal-value">{act.title}</div>
             </div>
 
-            {/* desc */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Veiklos aprašymas
@@ -336,7 +483,6 @@ export default function ResultsPage() {
               )}
             </div>
 
-            {/* state */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Būsena</div>
               <div className="employee-modal-value">
@@ -346,7 +492,6 @@ export default function ResultsPage() {
               </div>
             </div>
 
-            {/* attach */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Priedas</div>
               {act.attachment_path ? (
@@ -365,7 +510,6 @@ export default function ResultsPage() {
               )}
             </div>
 
-            {/* manager comms */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Vadybininkės komentarai
@@ -379,7 +523,8 @@ export default function ResultsPage() {
               )}
             </div>
 
-            {/* committee comms*/}
+            {/* Committee comments — writable only while
+                re-scoring */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Komisijos nario komentarai
@@ -394,7 +539,7 @@ export default function ResultsPage() {
               />
             </div>
 
-            {/* peopleNum */}
+            {/* People count → live 1/n score preview */}
             {editingScore && (
               <div className="employee-modal-field">
                 <div className="employee-modal-label">
@@ -423,7 +568,7 @@ export default function ResultsPage() {
               </div>
             )}
 
-            {/* score */}
+            {/* The derived score — never typed directly */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Įvertinimas
@@ -476,6 +621,7 @@ export default function ResultsPage() {
       </div>
     );
   };
+
 
   return (
     <div className="page">

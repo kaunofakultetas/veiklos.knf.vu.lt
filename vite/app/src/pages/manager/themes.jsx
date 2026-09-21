@@ -1,15 +1,87 @@
+// -----------------------------------------------------------
+//  [*] Manager — theme & subtheme administration
+//
+//  /manager/themes, two panels: creation forms on the left
+//  (new theme; new subtheme under a chosen theme), the
+//  collapsible theme tree with delete buttons on the right.
+//
+//  Creation and deletion only — there is no editing here,
+//  even though the backend has PATCH routes for it. Every
+//  successful change reloads the whole tree; creating a
+//  subtheme also expands its parent so the new row is
+//  visible.
+//
+//  Split into (root component last):
+//
+//    getActiveRole  — activeRole from localStorage
+//    codeToNums     — "1.2.3" → [1,2,3]
+//    compareCodes   — numeric-aware code ordering
+//    ThemesPage     — both panels (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useState } from "react";
 import { AppSelect } from "../../components/appCommon.jsx";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header, read fresh
+// per request.
+//
+// Used by:
+//   - ThemesPage (below) — apiFetch
+// -----------------------------------------------------------
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// codeToNums
+// -----------------------------------------------------------
+//
+// Pulls the number runs out of a theme/subtheme code for
+// numeric comparison.
+//
+// Used by:
+//   - compareCodes (below)
+// -----------------------------------------------------------
+
 function codeToNums(code) {
   const parts = String(code).match(/\d+/g);
   return parts ? parts.map((n) => Number(n)) : [];
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// compareCodes
+// -----------------------------------------------------------
+//
+// Sort comparator for codes: "1.9" < "1.10" (plain string
+// sort would invert them); ties fall back to localeCompare.
+//
+// Used by:
+//   - ThemesPage (below) — subtheme ordering in the tree
+// -----------------------------------------------------------
 
 function compareCodes(a, b) {
   const A = codeToNums(a);
@@ -26,6 +98,23 @@ function compareCodes(a, b) {
 }
 
 
+
+
+
+
+
+// -----------------------------------------------------------
+// ThemesPage (default export)
+// -----------------------------------------------------------
+//
+// All API calls go through the local apiFetch, which stamps
+// the auth headers on every request and throws the backend's
+// error message for the shared status line.
+//
+// Used by:
+//   - App.jsx — route /manager/themes
+// -----------------------------------------------------------
+
 export default function ThemesPage() {
 
   const [themes, setThemes] = useState([]);
@@ -33,14 +122,20 @@ export default function ThemesPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
+  // New-theme form
   const [tCode, setTCode] = useState("");
   const [tTitle, setTTitle] = useState("");
 
+  // New-subtheme form
   const [subParent, setSubParent] = useState("");
   const [sCode, setSCode] = useState("");
   const [sTitle, setSTitle] = useState("");
   const [sDesc, setSDesc] = useState("");
 
+
+  // fetch wrapper: auth headers always, Content-Type only
+  // when there is a body, backend error text as the thrown
+  // message
   const apiFetch = async (url, init = {}) => {
     const activeRole = getActiveRole();
 
@@ -57,7 +152,7 @@ export default function ThemesPage() {
     try {
       data = await res.json();
     } catch {
-      // ignore
+      // ignore — 204s have no body
     }
 
     if (!res.ok) {
@@ -66,6 +161,10 @@ export default function ThemesPage() {
     return data;
   };
 
+
+  // (Re)load the tree; every mutation calls this again.
+  // Reloading collapses all themes — expanded is rebuilt as
+  // all-false
   const load = async () => {
     setLoading(true);
     setMsg("");
@@ -90,6 +189,7 @@ export default function ThemesPage() {
     load();
   }, []);
 
+
   const toggleTheme = (id) =>
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
 
@@ -98,6 +198,7 @@ export default function ThemesPage() {
 
   const collapseAll = () =>
     setExpanded(Object.fromEntries(themes.map((t) => [t.id, false])));
+
 
   const createTheme = async () => {
     setMsg("");
@@ -119,6 +220,7 @@ export default function ThemesPage() {
     }
   };
 
+
   const createSubtheme = async () => {
     setMsg("");
     if (!subParent || !sCode || !sTitle) {
@@ -139,6 +241,8 @@ export default function ThemesPage() {
       setSDesc("");
       await load();
       setMsg("Potemė sukurta.");
+      // load() collapsed everything — reopen the parent so
+      // the new subtheme is visible
       setExpanded((prev) => ({
         ...prev,
         [Number(subParent)]: true,
@@ -147,6 +251,7 @@ export default function ThemesPage() {
       setMsg(e.message);
     }
   };
+
 
   const deleteTheme = async (id) => {
     setMsg("");
@@ -161,6 +266,7 @@ export default function ThemesPage() {
     }
   };
 
+
   const deleteSubtheme = async (id) => {
     setMsg("");
     if (!window.confirm("Ar tikrai pašalinti šią potemę?")) return;
@@ -173,15 +279,17 @@ export default function ThemesPage() {
     }
   };
 
+
   return (
     <div className="themes-layout">
-      {/* LEFT SIDE */}
+
+      {/* Left panel — the two creation forms sharing one
+          status line */}
       <section className="card employee-card themes-form-card">
         <div className="card-body">
           <h2 className="section-title">Nauja tema</h2>
 
           <div className="themes-form-grid">
-            {/* theme */}
             <div className="field">
               <label className="field-label">
                 Temos numeris <span className="required-mark">*</span>
@@ -219,7 +327,6 @@ export default function ThemesPage() {
 
             <hr />
 
-            {/* subtheme */}
             <h2 className="section-title">Nauja potemė</h2>
 
             <div className="field">
@@ -259,6 +366,8 @@ export default function ThemesPage() {
               />
             </div>
 
+            {/* Marked required in the UI, but only checked as
+                required by neither this form nor the backend */}
             <div className="field">
               <label className="field-label">
                 Potemės aprašymas <span className="required-mark">*</span>
@@ -291,7 +400,7 @@ export default function ThemesPage() {
         </div>
       </section>
 
-      {/* RIGHT SIDE */}
+      {/* Right panel — the collapsible tree */}
       <section className="card">
         <div className="card-body">
           <div className="theme-panel-header">

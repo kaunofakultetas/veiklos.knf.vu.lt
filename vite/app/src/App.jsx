@@ -1,9 +1,40 @@
+// -----------------------------------------------------------
+//  [*] App — routing and sign-in flow
+//
+//  The SPA's root: Keycloak/SAML sign-in, the role-based
+//  route tree, and the first-visit flow that picks the active
+//  role.
+//
+//  Auth is a session cookie. On load RoutesRoot probes
+//  GET /api/session/check once and publishes the result
+//  through AuthContext ({ user, session, loading }); signing
+//  in is a full-page redirect to /auth/saml/login, so the SPA
+//  never handles tokens itself.
+//
+//  The active role is the app's central switch. It lives in
+//  localStorage("activeRole"), gates every /manager,
+//  /committee and /employee route (RoleRoute), and the pages
+//  send it to the backend as the X-Active-Role header.
+//
+//  Split into (root component last):
+//
+//    AuthContext     — the session state for the whole tree
+//    roleToPath      — role name → workspace path
+//    SignIn          — the "Prisijungti" card
+//    RolePickerModal — role choice for multi-role users
+//    HomeGate        — "/" — sign-in / redirect / profile
+//    Profile         — role selection after sign-in
+//    RoleRoute       — guard for a workspace subtree
+//    RoutesRoot      — session probe + the <Routes> table
+//    App             — BrowserRouter wrapper (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useState, createContext, useContext } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import "./components/appLayout.css";
 import vuLogo from "./assets/VU logo.png";
 
-// manager pages
+// Manager pages
 import ManagerPage from "./pages/manager/index.jsx";
 import ManagerLayout from "./pages/manager/layout.jsx";
 import RolesPage from "./pages/manager/roles.jsx";
@@ -11,14 +42,14 @@ import ManagerReviewPage from "./pages/manager/review.jsx";
 import ManagerExportPage from "./pages/manager/export.jsx";
 import ThemesPage from "./pages/manager/themes.jsx";
 
-// employee pages
+// Employee pages
 import EmployeePage from "./pages/employee/index.jsx";
 import EmployeeLayout from "./pages/employee/layout.jsx";
 import NewActivity from "./pages/employee/newActivity.jsx";
 import MyActivities from "./pages/employee/myActivities.jsx";
 import ExportPage from "./pages/employee/export.jsx";
 
-// committee pages
+// Committee pages
 import CommitteePage from "./pages/committee/index.jsx";
 import CommitteeLayout from "./pages/committee/layout.jsx";
 import EvaluatePage from "./pages/committee/evaluate.jsx";
@@ -26,7 +57,42 @@ import ResultsPage from "./pages/committee/results.jsx";
 import LimitsPage from "./pages/committee/limits.jsx";
 import CalculatePage from "./pages/committee/calculate.jsx";
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// AuthContext
+// -----------------------------------------------------------
+//
+// { user, session, loading } from the one /api/session/check
+// probe in RoutesRoot — user null means "not signed in".
+//
+// Used by:
+//   - HomeGate, Profile, RoleRoute (below)
+// -----------------------------------------------------------
+
 export const AuthContext = createContext(null);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// roleToPath
+// -----------------------------------------------------------
+//
+// Role name (as stored in the DB, Lithuanian) → workspace
+// path. An unknown role falls back to "/". The same mapping
+// exists again in components/appHeader.jsx.
+//
+// Used by:
+//   - HomeGate, Profile (below)
+// -----------------------------------------------------------
 
 const roleToPath = (role) => {
   switch (role) {
@@ -37,6 +103,24 @@ const roleToPath = (role) => {
   }
 };
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// SignIn
+// -----------------------------------------------------------
+//
+// The unauthenticated landing card: VU logo + a button that
+// hard-navigates to /auth/saml/login, where the backend
+// bounces the browser to Keycloak.
+//
+// Used by:
+//   - HomeGate (below)
+// -----------------------------------------------------------
+
 function SignIn() {
   return (
     <div className="auth-page">
@@ -46,7 +130,7 @@ function SignIn() {
           alt="Vilniaus universiteto logotipas"
           className="auth-logo"
         />
-        <h1 className="auth-title">Bendro prisijungimo sistema</h1>
+        <h1 className="auth-title">Vilniaus universiteto veiklos</h1>
         <p className="auth-subtitle">
           Paslaugai reikalingas Jūsų tapatybės patvirtinimas.
         </p>
@@ -54,7 +138,7 @@ function SignIn() {
           onClick={() => { window.location.href = "/auth/saml/login"; }}
           className="btn btn-primary auth-button"
         >
-          Prisijungti
+          Prisijungti per VU bendro prisijungimo sistemą
         </button>
       </div>
       <footer className="app-footer">
@@ -65,6 +149,24 @@ function SignIn() {
     </div>
   );
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// RolePickerModal
+// -----------------------------------------------------------
+//
+// Blocking modal for users with several roles: pick one, hit
+// "Patvirtinti". No cancel — a role must be chosen to enter
+// the app.
+//
+// Used by:
+//   - Profile (below)
+// -----------------------------------------------------------
 
 function RolePickerModal({ roles, initial, onConfirm }) {
   const [sel, setSel] = useState(initial || roles[0] || "");
@@ -95,6 +197,24 @@ function RolePickerModal({ roles, initial, onConfirm }) {
   );
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// HomeGate
+// -----------------------------------------------------------
+//
+// The "/" route: SignIn when logged out, a redirect to the
+// stored active role's workspace when one is set, otherwise
+// Profile to pick a role.
+//
+// Used by:
+//   - RoutesRoot (below) — route "/"
+// -----------------------------------------------------------
+
 function HomeGate() {
   const { user } = useContext(AuthContext);
   const activeRole = localStorage.getItem("activeRole") || "";
@@ -104,6 +224,25 @@ function HomeGate() {
   return <Profile />;
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Profile
+// -----------------------------------------------------------
+//
+// The post-sign-in role flow, driven by the session from
+// AuthContext: exactly one role → auto-select and navigate;
+// several → RolePickerModal. Falls through to a "Kraunama…"
+// card while neither branch has fired.
+//
+// Used by:
+//   - HomeGate (below)
+// -----------------------------------------------------------
+
 function Profile() {
   const { session } = useContext(AuthContext);
   const navigate = useNavigate();
@@ -111,6 +250,9 @@ function Profile() {
   const [activeRole, setActiveRole] = useState(() => localStorage.getItem("activeRole") || "");
   const [needsRoleSelection, setNeedsRoleSelection] = useState(false);
 
+
+  // One role picks itself; several open the picker. Roles
+  // may come as strings or { name } objects — tolerate both
   useEffect(() => {
     if (!session) return;
     const roleNames = (session.roles || []).map((r) => typeof r === "string" ? r : r.name);
@@ -125,9 +267,12 @@ function Profile() {
     }
   }, [session]);
 
+
+  // Keep localStorage in sync when the role changes
   useEffect(() => {
     if (activeRole) localStorage.setItem("activeRole", activeRole);
   }, [activeRole]);
+
 
   const roles = (session?.roles || []).map((r) => typeof r === "string" ? r : r.name);
 
@@ -137,6 +282,7 @@ function Profile() {
     setNeedsRoleSelection(false);
     navigate(roleToPath(role), { replace: true });
   };
+
 
   if (needsRoleSelection) {
     return (
@@ -154,6 +300,25 @@ function Profile() {
     </div>
   );
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// RoleRoute
+// -----------------------------------------------------------
+//
+// Guard around a workspace subtree: logged out → back to "/",
+// wrong ACTIVE role → the "Netinkama rolė" card. This is
+// UI-level protection only — the backend enforces roles
+// again via the session and X-Active-Role.
+//
+// Used by:
+//   - RoutesRoot (below) — around each workspace layout
+// -----------------------------------------------------------
 
 function RoleRoute({ required, children }) {
   const { user } = useContext(AuthContext);
@@ -176,9 +341,31 @@ function RoleRoute({ required, children }) {
   return children;
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// RoutesRoot
+// -----------------------------------------------------------
+//
+// Probes /api/session/check once on load, shows "Kraunama…"
+// until it answers, then publishes the result through
+// AuthContext and renders the route table: "/" (HomeGate),
+// one guarded subtree per workspace, and a catch-all
+// redirect.
+//
+// Used by:
+//   - App (below)
+// -----------------------------------------------------------
+
 function RoutesRoot() {
   const [authState, setAuthState] = useState({ user: null, session: null, loading: true });
 
+
+  // The one session probe — a 401 just means "not signed in"
   useEffect(() => {
     fetch("/api/session/check")
       .then((res) => {
@@ -194,6 +381,7 @@ function RoutesRoot() {
       .catch(() => setAuthState({ user: null, session: null, loading: false }));
   }, []);
 
+
   if (authState.loading) {
     return (
       <div className="page page-centered">
@@ -203,6 +391,7 @@ function RoutesRoot() {
       </div>
     );
   }
+
 
   return (
     <AuthContext.Provider value={authState}>
@@ -246,6 +435,23 @@ function RoutesRoot() {
     </AuthContext.Provider>
   );
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// App (default export)
+// -----------------------------------------------------------
+//
+// Just the BrowserRouter around RoutesRoot — the session
+// probe and AuthContext live one level down.
+//
+// Used by:
+//   - main.jsx
+// -----------------------------------------------------------
 
 export default function App() {
   return (

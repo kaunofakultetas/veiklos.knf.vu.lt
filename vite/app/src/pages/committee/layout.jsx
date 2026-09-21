@@ -1,6 +1,33 @@
+// -----------------------------------------------------------
+//  [*] Committee — workspace layout
+//
+//  The /committee shell: AppHeader with the four nav links
+//  (Įvertinti veiklas / Įvertinimai / Skaičiuoklė / Limitų
+//  nustatymas), the routed page in <Outlet />, and the
+//  footer.
+// -----------------------------------------------------------
+
 import { NavLink, Outlet } from "react-router-dom";
 import AppHeader from "../../components/appHeader.jsx";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// CommitteeLayout (default export)
+// -----------------------------------------------------------
+//
+// Wrapped in RoleRoute("Komisijos narys") by the router, so
+// everything under it can assume the committee role is
+// active.
+//
+// Used by:
+//   - App.jsx — layout element of /committee
+// -----------------------------------------------------------
 
 export default function CommitteeLayout() {
   return (

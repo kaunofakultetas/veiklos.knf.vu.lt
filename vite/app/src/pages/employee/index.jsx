@@ -1,4 +1,28 @@
+// -----------------------------------------------------------
+//  [*] Employee — workspace home
+//
+//  The static welcome card at /employee: what the employee
+//  can do here and the support email. No data fetching.
+// -----------------------------------------------------------
+
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// EmployeePage (default export)
+// -----------------------------------------------------------
+//
+// Pure static content — the real functionality lives in the
+// nav pages (new / my / export).
+//
+// Used by:
+//   - App.jsx — index route of /employee
+// -----------------------------------------------------------
 
 export default function EmployeePage() {
   return (

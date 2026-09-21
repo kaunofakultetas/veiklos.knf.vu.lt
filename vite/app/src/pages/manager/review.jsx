@@ -1,15 +1,90 @@
+// -----------------------------------------------------------
+//  [*] Manager — pending activity review
+//
+//  /manager/review: the PATEIKTA queue as a table with four
+//  actions per row — approve (with confirm), deny and return
+//  (each in a modal demanding a comment), and a review modal
+//  that can also edit the theme/subtheme and the manager's
+//  comments.
+//
+//  An activity whose status changes (approve/deny/return)
+//  leaves the list immediately; a plain edit keeps PATEIKTA
+//  and the row is patched in place. Deny and return trigger a
+//  notification email to the employee on the backend. Auth
+//  rides in the session cookie; only the X-Active-Role
+//  header travels.
+//
+//  Split into (root component last):
+//
+//    getActiveRole     — activeRole from localStorage
+//    codeToNums        — "1.2.3" → [1,2,3]
+//    compareCodes      — numeric-aware code ordering
+//    ManagerReviewPage — queue + three modals (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useState } from "react";
 import { AppSelect } from "../../components/appCommon.jsx";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header, read fresh
+// per request.
+//
+// Used by:
+//   - ManagerReviewPage (below) — every API call
+// -----------------------------------------------------------
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// codeToNums
+// -----------------------------------------------------------
+//
+// Pulls the number runs out of a theme/subtheme code for
+// numeric comparison.
+//
+// Used by:
+//   - compareCodes (below)
+// -----------------------------------------------------------
+
 function codeToNums(code) {
   const parts = String(code).match(/\d+/g);
   return parts ? parts.map((n) => Number(n)) : [];
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// compareCodes
+// -----------------------------------------------------------
+//
+// Sort comparator for codes: "1.9" < "1.10" (plain string
+// sort would invert them); ties fall back to localeCompare.
+//
+// Used by:
+//   - ManagerReviewPage (below) — subtheme dropdown ordering
+// -----------------------------------------------------------
 
 function compareCodes(a, b) {
   const A = codeToNums(a);
@@ -25,6 +100,27 @@ function compareCodes(a, b) {
   return String(a).localeCompare(String(b));
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ManagerReviewPage (default export)
+// -----------------------------------------------------------
+//
+// Owns the queue, the three modals' state and every API call;
+// all verdicts funnel through callManagerAction, which PATCHes
+// /api/activities/:id/manager and reconciles the local list
+// from the response. The three modals are inline render
+// helpers (renderModal / renderRejectModal / renderReturnModal)
+// sharing this state.
+//
+// Used by:
+//   - App.jsx — route /manager/review
+// -----------------------------------------------------------
+
 export default function ManagerReviewPage() {
 
   const [items, setItems] = useState([]);
@@ -34,7 +130,7 @@ export default function ManagerReviewPage() {
   const [actingId, setActingId] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
 
-  // edit modal
+  // Review/edit modal
   const [selectedActivity, setSelectedActivity] = useState(null);
   const [editManagerComments, setEditManagerComments] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
@@ -42,17 +138,19 @@ export default function ManagerReviewPage() {
   const [editThemeId, setEditThemeId] = useState("");
   const [editSubthemeId, setEditSubthemeId] = useState("");
 
-  //return modal
+  // Return modal
   const [returningActivity, setReturningActivity] = useState(null);
   const [returnComment, setReturnComment] = useState("");
   const [savingReturn, setSavingReturn] = useState(false);
 
-  // reject modal
+  // Reject modal
   const [rejectingActivity, setRejectingActivity] = useState(null);
   const [rejectComment, setRejectComment] = useState("");
   const [savingReject, setSavingReject] = useState(false);
 
-  // load activities
+
+  // Pending queue and the theme tree load in parallel on
+  // mount
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -99,6 +197,8 @@ export default function ManagerReviewPage() {
     load();
   }, []);
 
+
+  // Activity status → status-pill modifier class
   const statusClass = (status) => {
     switch (status) {
       case "PATEIKTA":
@@ -116,6 +216,8 @@ export default function ManagerReviewPage() {
     }
   };
 
+
+  // ISO → lt-LT date-time; empty input renders empty
   const formatDate = (iso) => {
     if (!iso) return "";
     const d = new Date(iso);
@@ -128,6 +230,9 @@ export default function ManagerReviewPage() {
     });
   };
 
+
+  // Attachment download via fetch + blob so the X-Active-Role
+  // header can travel along
   const handleDownload = async (act) => {
     if (!act.attachment_path) return;
     try {
@@ -148,7 +253,7 @@ export default function ManagerReviewPage() {
           const data = await res.json();
           if (data?.error) errText = data.error;
         } catch {
-          // ignore
+          // ignore — keep the HTTP status text
         }
         throw new Error(errText);
       }
@@ -169,6 +274,9 @@ export default function ManagerReviewPage() {
     }
   };
 
+
+  // The one PATCH funnel: a response that left PATEIKTA drops
+  // out of the queue, a plain edit is patched in place
   const callManagerAction = async (id, body) => {
     setActingId(id);
     setMsg("");
@@ -189,7 +297,6 @@ export default function ManagerReviewPage() {
         throw new Error(data?.error || `${res.status} ${res.statusText}`);
       }
 
-      // remove from list
       if (data.status !== "PATEIKTA") {
         setItems((prev) => prev.filter((x) => x.id !== id));
       } else {
@@ -205,12 +312,13 @@ export default function ManagerReviewPage() {
     }
   };
 
+
   const handleApprove = async (act) => {
     if (!window.confirm("Patvirtinti šią veiklą?")) return;
     try {
       await callManagerAction(act.id, { action: "approve" });
     } catch {
-      // ignore
+      // ignore — callManagerAction already surfaced the error
     }
   };
 
@@ -236,6 +344,9 @@ export default function ManagerReviewPage() {
     setModalEditing(false);
   };
 
+
+  // Save without an action keyword = plain edit; theme/
+  // subtheme only travel when edit mode was on
   const handleSaveEdit = async () => {
     if (!selectedActivity) return;
 
@@ -260,11 +371,12 @@ export default function ManagerReviewPage() {
       setModalEditing(false);
       setMsg("Veikla atnaujinta.");
     } catch {
-      // ignore
+      // ignore — callManagerAction already surfaced the error
     } finally {
       setSavingEdit(false);
     }
   };
+
 
   const closeRejectModal = () => {
     setRejectingActivity(null);
@@ -322,6 +434,10 @@ export default function ManagerReviewPage() {
 
 
 
+  // Inline render helper for the review/edit modal — kept
+  // inside the component because it reads nearly all of the
+  // state above; "Redaguoti" toggles the pickers and comment
+  // textarea writable
   const renderModal = () => {
     const act = selectedActivity;
     if (!act) return null;
@@ -345,7 +461,8 @@ export default function ManagerReviewPage() {
           </div>
 
           <div className="employee-modal-grid">
-            {/* theme */}
+            {/* Theme — picking a new one preselects the first
+                subtheme of the sorted list */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Tema</div>
               {!modalEditing ? (
@@ -371,7 +488,7 @@ export default function ManagerReviewPage() {
               )}
             </div>
 
-            {/* subtheme */}
+            {/* Subtheme */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Potemė</div>
               {!modalEditing ? (
@@ -391,13 +508,13 @@ export default function ManagerReviewPage() {
               )}
             </div>
 
-            {/* title */}
+            {/* Title and description are the employee's — read-
+                only even in edit mode */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Veiklos pavadinimas</div>
               <div className="employee-modal-value">{act.title}</div>
             </div>
 
-            {/* desc */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Veiklos aprašymas</div>
               {act.description ? (
@@ -409,7 +526,7 @@ export default function ManagerReviewPage() {
               )}
             </div>
 
-            {/* status */}
+            {/* Status */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Būsena</div>
               <div className="employee-modal-value">
@@ -417,7 +534,7 @@ export default function ManagerReviewPage() {
               </div>
             </div>
 
-            {/* attach */}
+            {/* Attachment download */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Priedas</div>
               {act.attachment_path ? (
@@ -436,7 +553,7 @@ export default function ManagerReviewPage() {
               )}
             </div>
 
-            {/* manager comms */}
+            {/* Manager comments — writable only in edit mode */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Vadybininkės komentarai</div>
               <textarea
@@ -481,6 +598,9 @@ export default function ManagerReviewPage() {
     );
   };
 
+
+  // Deny confirmation modal — demands the comment that gets
+  // emailed to the employee
   const renderRejectModal = () => {
     const act = rejectingActivity;
     if (!act) return null;
@@ -531,6 +651,9 @@ export default function ManagerReviewPage() {
     );
   };
 
+
+  // Return-for-revision modal — same shape, leads to
+  // TIKSLINTI with the manager's clarification request
     const renderReturnModal = () => {
     const act = returningActivity;
     if (!act) return null;
@@ -580,6 +703,7 @@ export default function ManagerReviewPage() {
       </div>
     );
   };
+
 
   return (
     <div className="page">

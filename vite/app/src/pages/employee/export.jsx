@@ -1,15 +1,88 @@
+// -----------------------------------------------------------
+//  [*] Employee — export to Excel
+//
+//  /employee/export: the employee's own activities behind
+//  three multi-select filters (theme, subtheme, status), a
+//  preview table, and an XLSX download of the filtered rows
+//  built client-side with SheetJS.
+//
+//  Empty filter = no filtering ("(visi)"). Picking themes
+//  narrows the subtheme options to those themes and resets
+//  any subtheme picks.
+//
+//  Split into (root component last):
+//
+//    getActiveRole       — activeRole from localStorage
+//    codeToNums          — "1.2.3" → [1,2,3]
+//    compareCodes        — numeric-aware code ordering
+//    statusClass         — status → pill css class
+//    MultiSelectDropdown — checkbox dropdown filter
+//    ExportPage          — the page (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header, read fresh
+// per request.
+//
+// Used by:
+//   - ExportPage (below)
+// -----------------------------------------------------------
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// codeToNums
+// -----------------------------------------------------------
+//
+// Pulls the number runs out of a theme/subtheme code for
+// numeric comparison.
+//
+// Used by:
+//   - compareCodes (below)
+// -----------------------------------------------------------
+
 function codeToNums(code) {
   const parts = String(code).match(/\d+/g);
   return parts ? parts.map((n) => Number(n)) : [];
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// compareCodes
+// -----------------------------------------------------------
+//
+// Sort comparator for codes: "1.9" < "1.10" (plain string
+// sort would invert them); ties fall back to localeCompare.
+//
+// Used by:
+//   - ExportPage (below) — subtheme option ordering
+// -----------------------------------------------------------
 
 function compareCodes(a, b) {
   const A = codeToNums(a);
@@ -24,6 +97,23 @@ function compareCodes(a, b) {
 
   return String(a).localeCompare(String(b));
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// statusClass
+// -----------------------------------------------------------
+//
+// Activity status → status-pill modifier class; unknown
+// statuses get the bare pill.
+//
+// Used by:
+//   - ExportPage (below) — the preview table
+// -----------------------------------------------------------
 
 function statusClass(status) {
   switch (status) {
@@ -41,6 +131,25 @@ function statusClass(status) {
       return "status-pill";
   }
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// MultiSelectDropdown
+// -----------------------------------------------------------
+//
+// A checkbox-list dropdown filter. The trigger summarizes the
+// selection: placeholder when empty, the option's label when
+// exactly one, "N pasirinkta" otherwise. No outside-click
+// close — only the trigger toggles it.
+//
+// Used by:
+//   - ExportPage (below) — theme / subtheme / status filters
+// -----------------------------------------------------------
 
 function MultiSelectDropdown({
   label,
@@ -104,6 +213,25 @@ function MultiSelectDropdown({
   );
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ExportPage (default export)
+// -----------------------------------------------------------
+//
+// Loads the theme tree and /api/activities/my in parallel on
+// mount; filtering happens client-side over that snapshot.
+// The XLSX is written with XLSX.writeFile, which triggers the
+// browser download itself — no backend export endpoint.
+//
+// Used by:
+//   - App.jsx — route /employee/export
+// -----------------------------------------------------------
+
 export default function ExportPage() {
 
   const [themes, setThemes] = useState([]);
@@ -111,11 +239,13 @@ export default function ExportPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
-  // filters
+  // Filter selections — empty array means "no filter"
   const [filterThemeIds, setFilterThemeIds] = useState([]);
   const [filterSubthemeIds, setFilterSubthemeIds] = useState([]);
   const [filterStatuses, setFilterStatuses] = useState([]);
 
+
+  // Themes and activities load in parallel on mount
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -163,6 +293,9 @@ export default function ExportPage() {
     load();
   }, []);
 
+
+  // ISO → lt-LT date-time, also the format written into the
+  // XLSX cells
   const formatDate = (iso) => {
     if (!iso) return "";
     const d = new Date(iso);
@@ -175,7 +308,7 @@ export default function ExportPage() {
     });
   };
 
-  // options
+
   const themeOptions = useMemo(
     () =>
       themes.map((t) => ({
@@ -185,7 +318,9 @@ export default function ExportPage() {
     [themes]
   );
 
-  // filter
+
+  // The theme tree flattened once; subthemes keep their
+  // themeId so the theme filter can narrow them
   const allSubthemes = useMemo(() => {
     const list = [];
     for (const t of themes) {
@@ -209,6 +344,9 @@ export default function ExportPage() {
     return [...filtered].sort((a, b) => compareCodes(a.code, b.code));
   }, [allSubthemes, filterThemeIds]);
 
+
+  // The status filter's fixed choices — ids double as the
+  // exact DB status strings
   const statusOptions = [
     { id: "PATEIKTA", label: "PATEIKTA" },
     { id: "PATVIRTINTA", label: "PATVIRTINTA" },
@@ -217,7 +355,8 @@ export default function ExportPage() {
     { id: "ĮVERTINTA", label: "ĮVERTINTA" },
   ];
 
-  // filter logic
+
+  // AND across the three filters; empty filter always passes
   const filteredActivities = useMemo(
     () =>
       activities.filter((a) => {
@@ -239,7 +378,8 @@ export default function ExportPage() {
     [activities, filterThemeIds, filterSubthemeIds, filterStatuses]
   );
 
-  // xlsx export
+
+  // Build and download the workbook client-side
   const exportXLSX = () => {
     if (!filteredActivities.length) {
       setMsg("Nėra veiklų eksportui.");
@@ -281,6 +421,7 @@ export default function ExportPage() {
     XLSX.writeFile(workbook, `veiklos-eksportas-${ts}.xlsx`);
   };
 
+
   return (
     <div className="page">
       <header className="page-header">
@@ -290,11 +431,10 @@ export default function ExportPage() {
       </header>
 
       <main className="page-content">
-        {/* filters / export button */}
+        {/* Filters + the export button */}
         <section className="card">
           <div className="card-body">
             <div className="export-filters-row">
-              {/* theme */}
               <MultiSelectDropdown
                 label="Tema"
                 options={themeOptions}
@@ -306,7 +446,6 @@ export default function ExportPage() {
                 placeholder="(visos temos)"
               />
 
-              {/* subthemes */}
               <MultiSelectDropdown
                 label="Potemė"
                 options={subthemeOptions}
@@ -315,7 +454,6 @@ export default function ExportPage() {
                 placeholder="(visos potemės)"
               />
 
-              {/* status */}
               <MultiSelectDropdown
                 label="Būsena"
                 options={statusOptions}
@@ -324,7 +462,6 @@ export default function ExportPage() {
                 placeholder="(visos būsenos)"
               />
 
-              {/* export button */}
               <div className="export-filters-actions">
                 <button
                   type="button"
@@ -345,7 +482,7 @@ export default function ExportPage() {
           </div>
         </section>
 
-        {/* results */}
+        {/* Preview of what the XLSX will contain */}
         <section className="card">
           <div className="card-body">
             <h2 className="section-title">Filtruotos veiklos</h2>

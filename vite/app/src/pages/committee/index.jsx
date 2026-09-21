@@ -1,4 +1,29 @@
+// -----------------------------------------------------------
+//  [*] Committee — workspace home
+//
+//  The static welcome card at /committee: what the committee
+//  member can do here and the support email. No data
+//  fetching.
+// -----------------------------------------------------------
+
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// CommitteePage (default export)
+// -----------------------------------------------------------
+//
+// Pure static content — the real functionality lives in the
+// nav pages (evaluate / results / calculate / limits).
+//
+// Used by:
+//   - App.jsx — index route of /committee
+// -----------------------------------------------------------
 
 export default function CommitteePage() {
   return (

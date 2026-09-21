@@ -1,6 +1,31 @@
+// -----------------------------------------------------------
+//  [*] Employee — workspace layout
+//
+//  The /employee shell: AppHeader with the three nav links
+//  (Nauja veikla / Mano veiklos / Eksportas), the routed page
+//  in <Outlet />, and the footer.
+// -----------------------------------------------------------
+
 import { NavLink, Outlet } from "react-router-dom";
 import AppHeader from "../../components/appHeader.jsx";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// EmployeeLayout (default export)
+// -----------------------------------------------------------
+//
+// Wrapped in RoleRoute("Darbuotojas") by the router, so
+// everything under it can assume the employee role is active.
+//
+// Used by:
+//   - App.jsx — layout element of /employee
+// -----------------------------------------------------------
 
 export default function EmployeeLayout() {
   return (

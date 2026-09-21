@@ -1,11 +1,69 @@
+// -----------------------------------------------------------
+//  [*] Employee — new activity form
+//
+//  /employee/new: pick theme + subtheme, name and describe
+//  the activity, optionally attach a file, POST it as
+//  multipart to /api/activities. A successful submit resets
+//  the form in place (theme/subtheme selection survives).
+//
+//  The FormData field order matters: theme_code and
+//  subtheme_code are appended BEFORE the attachment so
+//  multer's filename callback on the backend already has them
+//  when the file arrives — they become the stored filename's
+//  prefix.
+//
+//  Split into (root component last):
+//
+//    codeToNums       — "1.2.3" → [1,2,3]
+//    compareCodes     — numeric-aware code ordering
+//    getActiveRole    — activeRole from localStorage
+//    NewActivityPage  — the form (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useState, useRef } from "react";
 import { AppSelect } from "../../components/appCommon.jsx";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// codeToNums
+// -----------------------------------------------------------
+//
+// Pulls the number runs out of a theme/subtheme code, so
+// "1.10" can be compared numerically instead of as text.
+//
+// Used by:
+//   - compareCodes (below)
+// -----------------------------------------------------------
 
 function codeToNums(code) {
   const parts = String(code).match(/\d+/g);
   return parts ? parts.map((n) => Number(n)) : [];
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// compareCodes
+// -----------------------------------------------------------
+//
+// Sort comparator for codes: number-run by number-run, so
+// "1.9" < "1.10" (plain string sort would invert them);
+// missing runs sort first, full ties fall back to
+// localeCompare.
+//
+// Used by:
+//   - NewActivityPage (below) — subtheme dropdown ordering
+// -----------------------------------------------------------
 
 function compareCodes(a, b) {
   const A = codeToNums(a);
@@ -20,9 +78,45 @@ function compareCodes(a, b) {
   return String(a).localeCompare(String(b));
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header — read fresh
+// per request rather than kept in state, so a role switch in
+// the header is picked up immediately.
+//
+// Used by:
+//   - NewActivityPage (below) — both API calls
+// -----------------------------------------------------------
+
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// NewActivityPage (default export)
+// -----------------------------------------------------------
+//
+// Loads the theme tree once on mount and preselects the first
+// theme + its first subtheme. Title and description are
+// required in the UI (the backend only requires the title).
+//
+// Used by:
+//   - App.jsx — route /employee/new
+// -----------------------------------------------------------
 
 export default function NewActivityPage() {
 
@@ -38,11 +132,14 @@ export default function NewActivityPage() {
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState("");
 
-  // force-remount file input
+  // Clearing a file input needs both a value reset and a
+  // remount (the key) to work across browsers
   const [fileInputKey, setFileInputKey] = useState(0);
   const fileInputRef = useRef(null);
 
-  // load themes + subthemes
+
+  // Load the theme tree once; preselect the first theme and
+  // its first subtheme so the form starts valid
   useEffect(() => {
     const loadThemes = async () => {
       setLoadingThemes(true);
@@ -73,12 +170,16 @@ export default function NewActivityPage() {
     loadThemes();
   }, []);
 
+
   const currentTheme = themes.find((t) => String(t.id) === selectedThemeId);
-  const subthemes = [...(currentTheme?.subthemes || [])].sort((a, b) => 
+  const subthemes = [...(currentTheme?.subthemes || [])].sort((a, b) =>
     compareCodes(a.code, b.code)
   );
   const currentSubtheme = subthemes.find((s) => String(s.id) === selectedSubthemeId);
 
+
+  // Multipart submit — see the header on why the codes are
+  // appended before the file
   const onSubmit = async (e) => {
     e.preventDefault();
     setMsg("");
@@ -102,7 +203,6 @@ export default function NewActivityPage() {
       formData.append("subtheme_id", selectedSubthemeId);
       formData.append("title", activityName);
       formData.append("description", activityDescription || "");
-      // for file prefix
       formData.append("theme_code", currentTheme?.code || "");
       formData.append("subtheme_code", currentSubtheme?.code || "");
       if (file) {
@@ -122,12 +222,13 @@ export default function NewActivityPage() {
         throw new Error(data?.error || `${res.status} ${res.statusText}`);
       }
 
-      // reset form
+      // Reset the text fields and file, keep the selection —
+      // registering several activities in a row usually stays
+      // within one theme
       setActivityName("");
       setActivityDescription("");
       setFile(null);
 
-      // force file input
       setFileInputKey((k) => k + 1);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -140,6 +241,7 @@ export default function NewActivityPage() {
       setSubmitting(false);
     }
   };
+
 
   return (
     <div className="page">
@@ -156,7 +258,9 @@ export default function NewActivityPage() {
         <section className="card employee-card">
           <div className="card-body">
             <form onSubmit={onSubmit} className="employee-form">
-              {/* theme */}
+
+              {/* Theme picker — changing it re-sorts and
+                  preselects the new theme's first subtheme */}
               <div className="field">
                 <label className="field-label">
                   Pasirinkite temą <span className="required-mark">*</span>
@@ -185,7 +289,7 @@ export default function NewActivityPage() {
                 )}
               </div>
 
-              {/* subtheme */}
+              {/* Subtheme picker */}
               <div className="field">
                 <label className="field-label">
                   Pasirinkite potemę <span className="required-mark">*</span>
@@ -202,7 +306,7 @@ export default function NewActivityPage() {
                 />
               </div>
 
-              {/* desc */}
+              {/* The chosen subtheme's description, read-only */}
               <div className="field">
                 <label className="field-label">
                   Pasirinktos potemės aprašymas
@@ -218,7 +322,7 @@ export default function NewActivityPage() {
                 </div>
               </div>
 
-              {/* title */}
+              {/* Activity title */}
               <div className="field">
                 <label className="field-label">
                   Registuojamos veiklos pavadinimas{" "}
@@ -233,7 +337,7 @@ export default function NewActivityPage() {
                 />
               </div>
 
-              {/* desc */}
+              {/* Activity description */}
               <div className="field">
                 <label className="field-label">
                   Registuojamos veiklos aprašymas{" "}
@@ -247,7 +351,7 @@ export default function NewActivityPage() {
                 />
               </div>
 
-              {/* attach */}
+              {/* Optional attachment */}
               <div className="field">
                 <label className="field-label">
                   Pridėkite failą (jei reikia)
@@ -277,6 +381,7 @@ export default function NewActivityPage() {
                   {submitting ? "Pateikiama…" : "Pateikti veiklą"}
                 </button>
               </div>
+
             </form>
           </div>
         </section>

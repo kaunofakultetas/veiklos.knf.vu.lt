@@ -1,4 +1,28 @@
+// -----------------------------------------------------------
+//  [*] Manager — workspace home
+//
+//  The static welcome card at /manager: what the manager can
+//  do here and the support email. No data fetching.
+// -----------------------------------------------------------
+
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ManagerPage (default export)
+// -----------------------------------------------------------
+//
+// Pure static content — the real functionality lives in the
+// nav pages (roles / review / export / themes).
+//
+// Used by:
+//   - App.jsx — index route of /manager
+// -----------------------------------------------------------
 
 export default function ManagerPage() {
   return (

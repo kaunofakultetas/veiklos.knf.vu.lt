@@ -1,9 +1,76 @@
+// -----------------------------------------------------------
+//  [*] Committee — point value & bonus calculator
+//
+//  /committee/calculate, two panels:
+//
+//  Left — per-theme score totals, and the calculator: pick a
+//  theme, see its budget (total_sum) and its uncapped score
+//  sum, then "Skaičiuoti" computes 1 point's value as
+//  budget / score-sum (2 decimals) and SAVES it to the theme
+//  via PATCH /api/themes/:id/pointvalue in the same click.
+//
+//  Right — pick an employee (searchable dropdown of everyone
+//  with ĮVERTINTA work) and see their per-subtheme score
+//  sums. Each row's result is score × the theme's SAVED point
+//  value, capped by the subtheme's limit when one is set
+//  (cap 0 or null = no cap); "Iš viso" sums the capped
+//  results. Rows with a zero result show "—" and don't count.
+//
+//  So the flow is: save the point value on the left first —
+//  the right panel reads the stored theme_pointvalue, not the
+//  freshly displayed one.
+//
+//  Split into (root component last):
+//
+//    getActiveRole — activeRole from localStorage
+//    CalculatePage — both panels (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useState } from "react";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header, read fresh
+// per request.
+//
+// Used by:
+//   - CalculatePage (below) — every API call
+// -----------------------------------------------------------
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// CalculatePage (default export)
+// -----------------------------------------------------------
+//
+// Theme totals and the employee list load together on mount;
+// the selected employee's subtheme sums load on selection.
+// The "1 balo vertė" result box only fills after a successful
+// save (hasCalculated), and picking another theme blanks it
+// again. This page styles its panels inline (the style
+// objects near the return) instead of via employee.css — the
+// only page that does.
+//
+// Used by:
+//   - App.jsx — route /committee/calculate
+// -----------------------------------------------------------
 
 export default function CalculatePage() {
 
@@ -17,6 +84,8 @@ export default function CalculatePage() {
   const [employeeSubthemes, setEmployeeSubthemes] = useState([]);
   const [subthemesLoading, setSubthemesLoading] = useState(false);
 
+  // The employee dropdown is hand-rolled here (with search)
+  // rather than using AppSelect
   const [employeeDropdownOpen, setEmployeeDropdownOpen] = useState(false);
   const [employeeSearchTerm, setEmployeeSearchTerm] = useState("");
 
@@ -24,6 +93,8 @@ export default function CalculatePage() {
   const [savingPoint, setSavingPoint] = useState(false);
   const [hasCalculated, setHasCalculated] = useState(false);
 
+
+  // Theme totals and employees load in parallel on mount
   useEffect(() => {
     const load = async () => {
       setThemesLoading(true);
@@ -73,12 +144,14 @@ export default function CalculatePage() {
     load();
   }, []);
 
-  // reset calculator on theme change
+
+  // Switching themes invalidates the shown point value
   useEffect(() => {
     setHasCalculated(false);
   }, [selectedThemeId]);
 
-  // load subtheme totals
+
+  // The selected employee's per-subtheme sums
   useEffect(() => {
     const loadSubthemes = async () => {
       if (!selectedEmployeeOid) {
@@ -118,6 +191,7 @@ export default function CalculatePage() {
     loadSubthemes();
   }, [selectedEmployeeOid]);
 
+
   const selectedTheme = themeTotals.find(
     (t) => String(t.theme_id) === String(selectedThemeId)
   );
@@ -130,13 +204,16 @@ export default function CalculatePage() {
     ? Number(selectedTheme.theme_total_sum) || 0
     : 0;
 
-  // pointvalue
+  // Euros per point; null when either side is 0/missing —
+  // that also disables the save button
   const valuePerScore =
     selectedThemeScoreSum > 0 && selectedThemeTotalSum > 0
       ? selectedThemeTotalSum / selectedThemeScoreSum
       : null;
 
-  // total sum of Rezultatas
+
+  // Grand total of the right panel: the same score × point,
+  // cap-clamped math as the rows themselves
   const totalRezultatas = employeeSubthemes.reduce((sum, row) => {
     const score = Number(row.total_score) || 0;
     const point = Number(row.theme_pointvalue) || 0;
@@ -156,6 +233,8 @@ export default function CalculatePage() {
     return sum + resultValue;
   }, 0);
 
+
+  // "Skaičiuoti" both computes AND persists the point value
   const handleSavePointValue = async () => {
     if (!selectedTheme) {
       setMsg("Pasirinkite temą.");
@@ -209,7 +288,7 @@ export default function CalculatePage() {
     }
   };
 
-  // employees dropdown
+
   const employeeOptions = employees.map((e) => ({
     id: e.oid,
     label: e.full_name || e.email || e.oid,
@@ -222,12 +301,17 @@ export default function CalculatePage() {
   const selectedEmployeeLabel =
     employeeOptions.find((o) => o.id === selectedEmployeeOid)?.label ||
     "(nepasirinktas)";
-    
-    const themeOptions = themeTotals.map((t) => ({
-      value: String(t.theme_id),
-      label: `${t.theme_code} — ${t.theme_title}`,
-    }));
 
+  // Dead code — nothing renders these; the theme <select>
+  // below builds its options from themeTotals directly
+  const themeOptions = themeTotals.map((t) => ({
+    value: String(t.theme_id),
+    label: `${t.theme_code} — ${t.theme_title}`,
+  }));
+
+
+  // Inline style objects for the two panels — this page skips
+  // employee.css for its layout
   const layout = {
     display: "flex",
     gap: 16,
@@ -260,6 +344,7 @@ export default function CalculatePage() {
     textAlign: "left",
   };
 
+
   return (
     <div className="page">
       <header className="page-header">
@@ -272,7 +357,9 @@ export default function CalculatePage() {
         <section className="card">
           <div className="card-body">
             <div style={layout}>
-              {/* LEFT SIDE */}
+
+              {/* Left panel — theme totals + the point-value
+                  calculator */}
               <div style={panel}>
                 <h3>Temų balų suvestinė</h3>
 
@@ -395,7 +482,7 @@ export default function CalculatePage() {
                 </div>
               </div>
 
-              {/* RIGHT SIDE */}
+              {/* Right panel — one employee's capped results */}
               <div style={panel}>
                 <h3>Darbuotojo veiklos pagal temas ir potemes</h3>
 
@@ -500,6 +587,9 @@ export default function CalculatePage() {
                               </tr>
                             </thead>
                             <tbody>
+                              {/* Per row: result = score × stored
+                                  point value, clamped to the
+                                  subtheme cap when cap > 0 */}
                               {employeeSubthemes.map((row, idx) => {
                                 const score = Number(row.total_score) || 0;
                                 const point =
@@ -517,7 +607,7 @@ export default function CalculatePage() {
 
                                 let resultValue = hasRaw ? rawValue : 0;
                                 if (
-                                  cap !== null && 
+                                  cap !== null &&
                                   Number.isFinite(cap) &&
                                   cap > 0
                                 ) {

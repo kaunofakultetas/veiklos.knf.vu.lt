@@ -1,9 +1,70 @@
+// -----------------------------------------------------------
+//  [*] Committee — evaluate approved activities
+//
+//  /committee/evaluate: the PATVIRTINTA queue. Each row can
+//  be returned to the manager (back to PATEIKTA) or opened in
+//  the review modal and scored.
+//
+//  The score is not typed directly: the member enters how
+//  many people carried the activity out and the score becomes
+//  1/n rounded to 2 decimals (0 people → score 0). Scoring
+//  sets the status to ĮVERTINTA and the row moves to the
+//  results page.
+//
+//  Auth rides in the session cookie; only the X-Active-Role
+//  header travels with each request.
+//
+//  Split into (root component last):
+//
+//    getActiveRole — activeRole from localStorage
+//    statusClass   — status → pill css class
+//    formatDate    — ISO → lt-LT date-time
+//    EvaluatePage  — queue + modal (default export)
+// -----------------------------------------------------------
+
 import { useEffect, useState } from "react";
 import "../../components/employee.css";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// getActiveRole
+// -----------------------------------------------------------
+//
+// The active role for the X-Active-Role header, read fresh
+// per request so a role switch in the header is picked up
+// immediately.
+//
+// Used by:
+//   - EvaluatePage (below) — every API call
+// -----------------------------------------------------------
 
 function getActiveRole() {
   return localStorage.getItem("activeRole") || "";
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// statusClass
+// -----------------------------------------------------------
+//
+// Activity status → status-pill modifier class. This copy has
+// no TIKSLINTI case (the other pages' copies do) — a
+// TIKSLINTI pill here would render unstyled, though only
+// PATVIRTINTA rows normally reach this page.
+//
+// Used by:
+//   - EvaluatePage (below) — table and modal
+// -----------------------------------------------------------
 
 function statusClass(status) {
   switch (status) {
@@ -20,6 +81,23 @@ function statusClass(status) {
   }
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// formatDate
+// -----------------------------------------------------------
+//
+// ISO timestamp → "YYYY-MM-DD HH:MM" in the lt-LT locale;
+// empty input renders as an empty string.
+//
+// Used by:
+//   - EvaluatePage (below) — the modal's Sukurta line
+// -----------------------------------------------------------
+
 function formatDate(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -32,6 +110,26 @@ function formatDate(iso) {
   });
 }
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// EvaluatePage (default export)
+// -----------------------------------------------------------
+//
+// Owns the queue and all state; verdicts go through
+// callCommitteeAction (PATCH /api/activities/:id/committee).
+// A response whose status left PATVIRTINTA drops out of the
+// queue — both scoring and returning do. The modal is an
+// inline render helper (renderModal) sharing this state.
+//
+// Used by:
+//   - App.jsx — route /committee/evaluate
+// -----------------------------------------------------------
+
 export default function EvaluatePage() {
 
   const [items, setItems] = useState([]);
@@ -41,6 +139,8 @@ export default function EvaluatePage() {
   const [downloadingId, setDownloadingId] = useState(null);
 
 
+  // Modal + scoring state: editingScore arms the input, the
+  // people count derives the read-only score preview
   const [selectedActivity, setSelectedActivity] = useState(null);
   const [editingScore, setEditingScore] = useState(false);
   const [editScore, setEditScore] = useState("");
@@ -48,6 +148,8 @@ export default function EvaluatePage() {
   const [editCommitteeComments, setEditCommitteeComments] = useState("");
   const [peopleNum, setPeopleNum] = useState("");
 
+
+  // Load the PATVIRTINTA queue on mount
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -77,6 +179,9 @@ export default function EvaluatePage() {
     load();
   }, []);
 
+
+  // Attachment download via fetch + blob so the X-Active-Role
+  // header can travel along
   const handleDownload = async (act) => {
     if (!act.attachment_path) return;
     try {
@@ -97,7 +202,7 @@ export default function EvaluatePage() {
           const data = await res.json();
           if (data?.error) errText = data.error;
         } catch {
-          // ignore
+          // ignore — keep the HTTP status text
         }
         throw new Error(errText);
       }
@@ -118,6 +223,9 @@ export default function EvaluatePage() {
     }
   };
 
+
+  // The one PATCH funnel: a status change drops the row from
+  // this queue, otherwise it is patched in place
   const callCommitteeAction = async (id, body) => {
     setActingId(id);
     setMsg("");
@@ -138,7 +246,6 @@ export default function EvaluatePage() {
         throw new Error(data?.error || `${res.status} ${res.statusText}`);
       }
 
-      // remove from view
       if (data.status !== "PATVIRTINTA") {
         setItems((prev) => prev.filter((x) => x.id !== id));
       } else {
@@ -154,6 +261,9 @@ export default function EvaluatePage() {
     }
   };
 
+
+  // Opening a row seeds the scoring fields from it, in view
+  // mode
   const openModal = (act) => {
     setSelectedActivity(act);
     setEditingScore(false);
@@ -170,15 +280,20 @@ export default function EvaluatePage() {
     setSavingScore(false);
   };
 
+
   const handleReturnToManager = async (act) => {
     if (!window.confirm("Grąžinti veiklą vadybininkei?")) return;
     try {
       await callCommitteeAction(act.id, { action: "return" });
     } catch {
-      // ignore
+      // ignore — callCommitteeAction already surfaced the error
     }
   };
 
+
+  // First click arms scoring mode; second click validates the
+  // people count, derives score = 1/n and saves. (The empty-
+  // count message below is a shipped truncated sentence.)
   const handleEvaluateClick = async () => {
     if (!selectedActivity) return;
 
@@ -218,16 +333,22 @@ export default function EvaluatePage() {
         setEditingScore(false);
         setMsg("Įvertinimas išsaugotas.");
 
+        // Scoring always leaves PATVIRTINTA, so this closes
+        // the modal on success
         if (updated.status !== "PATVIRTINTA") {
           closeModal();
         }
       } catch {
-        // ignore
+        // ignore — callCommitteeAction already surfaced the error
       } finally {
         setSavingScore(false);
       }
     };
 
+
+  // Inline render helper for the review/scoring modal — kept
+  // inside the component because it reads nearly all of the
+  // state above
   const renderModal = () => {
     const act = selectedActivity;
     if (!act) return null;
@@ -246,7 +367,7 @@ export default function EvaluatePage() {
           </div>
 
           <div className="employee-modal-grid">
-            {/* theme */}
+            {/* The activity itself — all read-only here */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Tema</div>
               <div className="employee-modal-value">
@@ -254,7 +375,6 @@ export default function EvaluatePage() {
               </div>
             </div>
 
-            {/* subtheme */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Potemė</div>
               <div className="employee-modal-value">
@@ -262,7 +382,6 @@ export default function EvaluatePage() {
               </div>
             </div>
 
-            {/* title */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Veiklos pavadinimas
@@ -270,7 +389,6 @@ export default function EvaluatePage() {
               <div className="employee-modal-value">{act.title}</div>
             </div>
 
-            {/* desc */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Veiklos aprašymas
@@ -284,7 +402,6 @@ export default function EvaluatePage() {
               )}
             </div>
 
-            {/* state */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Būsena</div>
               <div className="employee-modal-value">
@@ -294,7 +411,6 @@ export default function EvaluatePage() {
               </div>
             </div>
 
-            {/* attach */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">Priedas</div>
               {act.attachment_path ? (
@@ -313,7 +429,6 @@ export default function EvaluatePage() {
               )}
             </div>
 
-            {/* managers comms */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Vadybininkės komentarai
@@ -327,7 +442,8 @@ export default function EvaluatePage() {
               )}
             </div>
 
-            {/* committee comms */}
+            {/* Committee comments — writable only in scoring
+                mode */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Komisijos nario komentarai
@@ -342,7 +458,7 @@ export default function EvaluatePage() {
               />
             </div>
 
-            {/* peopleNum */}
+            {/* People count → live 1/n score preview */}
             {editingScore && (
               <div className="employee-modal-field">
                 <div className="employee-modal-label">
@@ -371,7 +487,7 @@ export default function EvaluatePage() {
               </div>
             )}
 
-            {/* score */}
+            {/* The derived score — never typed directly */}
             <div className="employee-modal-field">
               <div className="employee-modal-label">
                 Įvertinimas
@@ -423,6 +539,7 @@ export default function EvaluatePage() {
       </div>
     );
   };
+
 
   return (
     <div className="page">
