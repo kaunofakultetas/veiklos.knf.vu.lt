@@ -79,8 +79,10 @@ services:
       PGDATA: /var/lib/postgresql/data
     tmpfs:
       - /var/run/postgresql:uid=1000,gid=1000
+      - /tmp:uid=1000,gid=1000
     volumes:
       - /etc/localtime:/etc/localtime:ro
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - ./_DATA/postgres:/var/lib/postgresql/data
     networks:
       - isolated
