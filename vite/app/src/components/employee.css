@@ -5,41 +5,6 @@
   background-color: var(--color-page-bg);
 }
 
-/* header / navbar */
-.employee-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-lg);
-  padding: 12px var(--space-xl);
-  border-bottom: 1px solid var(--color-border-subtle);
-  background-color: var(--color-surface);
-}
-
-.employee-header-left {
-  display: flex;
-  align-items: center;
-  gap: var(--space-lg);
-}
-
-.employee-logo {
-  height: 32px;
-  width: auto;
-  display: block;
-}
-
-.employee-brand {
-  font-weight: 600;
-  font-size: var(--font-size-lg);
-  color: var(--color-primary);
-}
-
-.employee-nav {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
 .employee-nav-link {
   position: relative;
   padding: 8px 10px;
@@ -73,72 +38,9 @@
   background-color: var(--color-primary);
 }
 
-.employee-header-right {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  font-size: var(--font-size-sm);
-}
-
-.employee-role-block,
-.employee-user-block {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.employee-role-label,
-.employee-user-label {
-  color: var(--color-text-muted);
-}
-
-.employee-role-select {
-  padding: 6px 8px;
-  border-radius: var(--border-radius-sm);
-  border: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-sm);
-  background-color: var(--color-white);
-}
-
-.employee-role-select:focus {
-  outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 1px rgba(120, 0, 63, 0.15);
-}
-
-.employee-role-value {
-  font-weight: 500;
-}
-
-.employee-user-name {
-  font-weight: 600;
-}
-
-.employee-signout {
-  padding: 6px 10px;
-  font-size: var(--font-size-sm);
-}
-
 .employee-main {
   flex: 1;
   padding: var(--space-lg) var(--space-xl);
-}
-
-@media (max-width: 900px) {
-  .employee-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-sm);
-  }
-
-  .employee-header-left,
-  .employee-header-right {
-    flex-wrap: wrap;
-  }
-
-  .employee-nav {
-    flex-wrap: wrap;
-  }
 }
 
 /* forms / cards */
@@ -675,25 +577,6 @@
 
 .themes-form-grid .field {
   margin-bottom: 0;
-}
-
-.calculate-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: var(--space-lg);
-  align-items: flex-start;
-}
-
-.calculator-column {
-  flex: 1 1 360px;
-  min-width: 0;
-}
-
-.calculator-summary-total {
-  margin-top: var(--space-sm);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  text-align: right;
 }
 
 .calc-theme-select {

@@ -112,24 +112,6 @@
   gap: var(--space-xs);
 }
 
-/* profile */
-
-.profile-line {
-  margin: 0 0 var(--space-xs);
-  font-size: var(--font-size-sm);
-}
-
-.profile-label {
-  font-weight: 500;
-  color: var(--color-text-muted);
-}
-
-.profile-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-}
-
 /* role error card */
 
 .role-error .card-body {

@@ -57,9 +57,8 @@ export async function attachRoles(req, res, next) {
     const employeeRoleId = roleRes.rows[0].id;
 
     // Auto-grant "Darbuotojas" on every request; ON CONFLICT
-    // makes it a no-op after the first time. The result is
-    // never inspected
-    const insertRes = await pool.query(
+    // makes it a no-op after the first time
+    await pool.query(
       `
       INSERT INTO user_roles (user_oid, role_id)
       VALUES ($1, $2)

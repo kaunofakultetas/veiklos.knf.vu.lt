@@ -1,19 +1,16 @@
 // -----------------------------------------------------------
 //  [*] Regression — auth middlewares (real implementations)
 //
-//  Unit-tests the five middlewares in src/auth/ with fake
+//  Unit-tests the four middlewares in src/auth/ with fake
 //  req/res objects — no module mocks here, these are the real
 //  functions. verifySamlSession is the live gate since the
-//  VU SSO (SAML) migration; verifyJwt is dead code but kept,
-//  so its offline paths stay pinned (a VALID token would need
-//  Microsoft's live JWKS). attachRoles runs against the fake
+//  VU SSO (SAML) migration. attachRoles runs against the fake
 //  pool.
 // -----------------------------------------------------------
 
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { verifySamlSession } from "../src/auth/verifySamlSession.js";
-import { verifyJwt } from "../src/auth/verifyJwt.js";
 import { authorize } from "../src/auth/authorize.js";
 import { requireActiveRoleIn } from "../src/auth/requireActiveRole.js";
 import { attachRoles } from "../src/auth/attachRoles.js";
@@ -31,7 +28,7 @@ import { resetDb, onQuery, queryLog } from "./helpers/db.js";
 //
 // Minimal express-res stand-in: records status/json and
 // resolves a promise when json() fires, so async middlewares
-// (verifyJwt's jwt.verify callback) can be awaited.
+// (attachRoles' pool query) can be awaited.
 //
 // Used by:
 //   - every test in this file
@@ -145,85 +142,6 @@ test("verifySamlSession: friendly names and partial names", async () => {
   verifySamlSession(req, fakeRes(), () => {});
 
   assert.deepEqual(req.user, { oid: "kitas", email: "kitas@vu.lt", name: "Kazlauskaitė" });
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// verifyJwt — missing header
-// -----------------------------------------------------------
-//
-// No header at all: the guard answers synchronously, before
-// any key lookup could happen. (verifyJwt is dead code since
-// the SAML migration, but kept — so its offline paths stay
-// pinned.)
-// -----------------------------------------------------------
-
-test("verifyJwt: no Authorization header → 401", async () => {
-  const req = { headers: {} };
-  const res = fakeRes();
-
-  verifyJwt(req, res, () => res.resolveNext());
-
-  assert.equal(await res.done, "json");
-  assert.equal(res.statusCode, 401);
-  assert.deepEqual(res.body, { error: "Missing Authorization: Bearer <token>" });
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// verifyJwt — wrong scheme
-// -----------------------------------------------------------
-//
-// A Basic credential is not a Bearer token — the
-// startsWith parse rejects it like a missing header.
-// -----------------------------------------------------------
-
-test("verifyJwt: non-Bearer scheme → 401 (token must start with 'Bearer ')", async () => {
-  const req = { headers: { authorization: "Basic abc" } };
-  const res = fakeRes();
-
-  verifyJwt(req, res, () => res.resolveNext());
-
-  assert.equal(await res.done, "json");
-  assert.equal(res.statusCode, 401);
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// verifyJwt — malformed token
-// -----------------------------------------------------------
-//
-// jwt.verify fails at decode, before any JWKS network
-// call — offline-safe; the verify error text leaking
-// into `details` is pinned too.
-// -----------------------------------------------------------
-
-test("verifyJwt: malformed Bearer token → 401 Invalid token, with details", async () => {
-  const req = { headers: { authorization: "Bearer not-a-jwt" } };
-  const res = fakeRes();
-
-  verifyJwt(req, res, () => res.resolveNext());
-
-  assert.equal(await res.done, "json");
-  assert.equal(res.statusCode, 401);
-  assert.equal(res.body.error, "Invalid token");
-  // The verify error message leaks to the client — pinned
-  assert.ok(typeof res.body.details === "string" && res.body.details.length > 0);
 });
 
 

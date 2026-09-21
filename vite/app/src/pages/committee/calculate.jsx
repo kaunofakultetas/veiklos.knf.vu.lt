@@ -742,15 +742,6 @@ export default function CalculatePage() {
   };
 
 
-  // Dead code — nothing renders these; the theme <select> in
-  // PointValueCalculator builds its options from themeTotals
-  // directly
-  const themeOptions = themeTotals.map((t) => ({
-    value: String(t.theme_id),
-    label: `${t.theme_code} — ${t.theme_title}`,
-  }));
-
-
   return (
     <div className="page">
       <header className="page-header">

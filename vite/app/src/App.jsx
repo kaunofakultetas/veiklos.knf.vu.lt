@@ -74,7 +74,7 @@ import CalculatePage from "./pages/committee/calculate.jsx";
 //   - HomeGate, Profile, RoleRoute (below)
 // -----------------------------------------------------------
 
-export const AuthContext = createContext(null);
+const AuthContext = createContext(null);
 
 
 
