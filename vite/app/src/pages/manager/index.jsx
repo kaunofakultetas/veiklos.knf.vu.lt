@@ -5,7 +5,7 @@
 //  do here and the support email. No data fetching.
 // -----------------------------------------------------------
 
-import "../../components/employee.css";
+import "@/components/employee.css";
 
 
 

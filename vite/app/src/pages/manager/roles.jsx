@@ -18,7 +18,7 @@
 // -----------------------------------------------------------
 
 import { useState, useEffect } from "react";
-import "../../components/employee.css";
+import "@/components/employee.css";
 
 
 

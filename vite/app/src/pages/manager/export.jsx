@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
-import "../../components/employee.css";
+import "@/components/employee.css";
 
 
 

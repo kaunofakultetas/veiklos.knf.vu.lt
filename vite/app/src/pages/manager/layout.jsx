@@ -7,8 +7,8 @@
 // -----------------------------------------------------------
 
 import { NavLink, Outlet } from "react-router-dom";
-import AppHeader from "../../components/appHeader.jsx";
-import "../../components/employee.css";
+import AppHeader from "@/components/appHeader.jsx";
+import "@/components/employee.css";
 
 
 

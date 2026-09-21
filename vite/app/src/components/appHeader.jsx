@@ -23,7 +23,7 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import vuLogo from "../assets/VU.png";
+import vuLogo from "@/assets/VU.png";
 import "./appHeader.css";
 
 

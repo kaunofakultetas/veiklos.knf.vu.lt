@@ -21,8 +21,8 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState, useRef } from "react";
-import { AppSelect } from "../../components/appCommon.jsx";
-import "../../components/employee.css";
+import { AppSelect } from "@/components/appCommon.jsx";
+import "@/components/employee.css";
 
 
 

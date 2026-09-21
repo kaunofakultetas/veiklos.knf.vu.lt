@@ -6,7 +6,7 @@
 //  fetching.
 // -----------------------------------------------------------
 
-import "../../components/employee.css";
+import "@/components/employee.css";
 
 
 

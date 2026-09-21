@@ -23,7 +23,7 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
-import "../../components/employee.css";
+import "@/components/employee.css";
 
 
 
