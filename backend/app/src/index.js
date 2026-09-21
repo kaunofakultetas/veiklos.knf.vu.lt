@@ -1,0 +1,168 @@
+// -----------------------------------------------------------
+//  [*] Backend — API entry point
+//
+//  Boots the Express app and mounts every router. Listens on
+//  $PORT (4000 in docker-compose); the vite SPA reaches it
+//  through the Caddy ingress.
+//
+//  Endpoint index (each router documents its own routes):
+//
+//    GET  /api/health       — liveness probe, no auth
+//    GET  /api/me           — caller's profile + ALL roles
+//         /api/users        — routes/users.js
+//         /api/session      — routes/session.js
+//         /api/roles        — routes/roles.js
+//         /api/user-roles   — routes/userRoles.js
+//         /api/themes       — routes/themes.js
+//         /api/activities   — routes/activities.js
+//         /auth/saml        — routes/saml.js (login flow)
+//         /uploads/*        — uploaded attachments (static)
+//
+//  Auth model since the Keycloak/SAML migration: the SAML
+//  /assert callback stores the login in an express-session
+//  cookie (secure, 8 h); verifySamlSession reads it back and
+//  attachRoles loads the caller's DB roles. Booting BLOCKS on
+//  fetching Keycloak's IdP metadata (createSamlSetup) — no
+//  Keycloak, no backend.
+//
+//  Gotcha: the /uploads mount serves every uploaded file
+//  WITHOUT auth, and it is mounted BEFORE the session
+//  middleware. The frontend never links to it — downloads go
+//  through GET /api/activities/:id/attachment, which does
+//  check ownership/role — but anyone who can reach the
+//  backend and guess a filename can fetch a file.
+// -----------------------------------------------------------
+
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import path from 'path';
+import session from 'express-session';
+
+// Routers, one per resource
+import usersRouter from './routes/users.js';
+import rolesRouter from './routes/roles.js';
+import userRolesRouter from "./routes/userRoles.js";
+import sessionRouter from './routes/session.js';
+import themesRouter from "./routes/themes.js";
+import activitiesRouter from "./routes/activities.js";
+import { createSamlSetup } from './utils/saml.js';
+import createSamlRouter from './routes/saml.js';
+
+// Auth middleware
+import { verifySamlSession } from './auth/verifySamlSession.js';
+import { attachRoles } from './auth/attachRoles.js';
+
+
+// dotenv only matters outside docker — in the container all
+// config arrives as real environment variables
+dotenv.config();
+
+const APP_BASE_URL = process.env.APP_BASE_URL;
+const app = express();
+
+// Behind the Caddy ingress — trust its X-Forwarded-* headers
+// so secure cookies work over the proxied HTTPS
+app.set('trust proxy', 1);
+
+
+// Debug leftover: logs EVERY request to stdout. Kept because
+// it is currently the only request log the backend has
+app.use((req, _res, next) => {
+  console.log("BACKEND RECEIVED:", req.method, req.url);
+  next();
+});
+
+app.use(cors());
+app.use(express.json());
+
+// Raw attachment files — see the auth gotcha in the header
+const uploadDir = path.join(process.cwd(), "uploads");
+app.use("/uploads", express.static(uploadDir));
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/health
+// -----------------------------------------------------------
+//
+// Liveness probe — no auth, no DB touch, mounted before the
+// session middleware.
+//
+// Used by:
+//   - nothing calls this at the moment (no healthcheck is
+//     wired to it in docker-compose)
+// -----------------------------------------------------------
+
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+
+// urlencoded parsing is for the SAML POST /assert callback;
+// the session cookie is the whole auth state (8 hours,
+// secure + httpOnly, sameSite lax so the IdP redirect back
+// still carries it)
+app.use(express.urlencoded({ extended: false }));
+app.use(session({
+  secret: process.env.SESSION_SECRET ?? 'replace-me',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: true,
+    sameSite: 'lax',
+    httpOnly: true,
+    maxAge: 8 * 60 * 60 * 1000, // 8 hours
+  },
+}));
+
+// Blocks until Keycloak's SAML metadata is fetched — the
+// backend cannot boot without the IdP
+const samlSetup = await createSamlSetup(APP_BASE_URL);
+app.use('/auth/saml', createSamlRouter({ sp: samlSetup.sp, idp: samlSetup.idp }));
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/me
+// -----------------------------------------------------------
+//
+// The caller's identity as the frontend sees it: name, email,
+// oid and ALL roles they own (attachRoles also auto-grants
+// "Darbuotojas" on the way). The frontend picks its active
+// role from this list and sends it back as X-Active-Role.
+//
+// Used by:
+//   - appHeader.jsx — role switcher in the top bar
+//   - manager/roles.jsx — to guard the role admin page
+// -----------------------------------------------------------
+
+app.get("/api/me", verifySamlSession, attachRoles, (req, res) => {
+  const { name, email, oid } = req.user;
+  const roles = req.user.roles || [];
+  res.json({ name, email, oid, roles });
+});
+
+
+// Mount the routers. /api/users gets only the session gate
+// (no role check — see routes/users.js); /api/user-roles gets
+// session + roles here because its own managerOnly guard
+// needs req.user.roles filled
+app.use('/api/users', verifySamlSession, usersRouter);
+app.use('/api/session', sessionRouter);
+app.use('/api/roles', rolesRouter);
+app.use("/api/user-roles", verifySamlSession, attachRoles, userRolesRouter);
+app.use("/api/themes", themesRouter);
+app.use("/api/activities", activitiesRouter);
+
+
+const port = process.env.PORT || 4000;
+app.listen(port, "0.0.0.0", () => {
+  console.log(`API listening on port ${port}`);
+});

@@ -10,3 +10,4 @@ dist-ssr
 .env
 .env.*
 !.env.example
+uploads

@@ -1,17 +1,70 @@
+// -----------------------------------------------------------
+//  [*] Routes — /api/themes
+//
+//    GET    /api/themes                       — tree of themes + subthemes
+//    POST   /api/themes                       — create theme        (manager)
+//    PATCH  /api/themes/:id                   — edit code/title     (manager)
+//    POST   /api/themes/:themeId/subthemes    — create subtheme     (manager)
+//    PATCH  /api/themes/subthemes/:id         — edit subtheme       (manager)
+//    PATCH  /api/themes/subthemes/:id/cap     — set subtheme limit  (committee)
+//    PATCH  /api/themes/:id/total-sum         — set theme budget    (committee)
+//    PATCH  /api/themes/:id/pointvalue        — set point value     (committee)
+//    DELETE /api/themes/:id                   — delete theme + subthemes (manager)
+//    DELETE /api/themes/subthemes/:id         — delete subtheme     (manager)
+//
+//  The theme/subtheme catalog. Managers own the structure
+//  (codes, titles); the committee owns the numbers (caps,
+//  budgets, point values). Reading is open to any signed-in
+//  user regardless of active role.
+//
+//  The /subthemes/... paths live under this router (not a
+//  separate /api/subthemes) — they never collide with the
+//  ":id" theme patterns because the segment counts differ.
+//
+//  Used by:
+//    - manager/themes.jsx — structure CRUD
+//    - committee/limits.jsx — caps and total sums
+//    - committee/calculate.jsx — point values
+//    - every page that renders theme dropdowns (see GET /)
+// -----------------------------------------------------------
+
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { verifySamlSession } from "../auth/verifySamlSession.js";
 import { attachRoles } from "../auth/attachRoles.js";
 import { requireActiveRoleIn } from "../auth/requireActiveRole.js";
 
+
 const router = Router();
 
-// guards
+// Guard chains: reading only needs a valid JWT; writes are
+// split by active role between manager and committee
 const readGuard = [verifySamlSession, attachRoles];
 const manageGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Vadybininkas"])];
 const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Komisijos narys"])];
 
-// GET /api/themes  employee + manager + committee
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/themes
+// -----------------------------------------------------------
+//
+// The whole catalog as a tree: each theme (with total_sum and
+// pointvalue) carrying its subthemes (with cap), both sorted
+// by code. Assembled in JS from two flat queries.
+//
+// Used by:
+//   - employee/newActivity.jsx, employee/myActivities.jsx,
+//     employee/export.jsx — theme/subtheme dropdowns
+//   - manager/themes.jsx, manager/review.jsx,
+//     manager/export.jsx
+//   - committee/limits.jsx, committee/results.jsx
+// -----------------------------------------------------------
+
 router.get("/", readGuard, async (_req, res) => {
   try {
     const th = await pool.query(
@@ -33,7 +86,23 @@ router.get("/", readGuard, async (_req, res) => {
   }
 });
 
-// POST /api/themes  manager only
+
+
+
+
+
+
+// -----------------------------------------------------------
+// POST /api/themes
+// -----------------------------------------------------------
+//
+// Body: { code, title }, both trimmed. 409 on a duplicate
+// code (unique violation 23505).
+//
+// Used by:
+//   - manager/themes.jsx — "Pridėti temą" form
+// -----------------------------------------------------------
+
 router.post("/", manageGuard, async (req, res) => {
   try {
     const { code, title } = req.body || {};
@@ -53,7 +122,24 @@ router.post("/", manageGuard, async (req, res) => {
   }
 });
 
-// PATCH /api/themes/:id  manager only
+
+
+
+
+
+
+// -----------------------------------------------------------
+// PATCH /api/themes/:id
+// -----------------------------------------------------------
+//
+// Partial update of code/title — other body keys are silently
+// ignored, an update with none of the allowed keys is a 400.
+//
+// Used by:
+//   - nothing calls this at the moment — the themes admin
+//     page only creates and deletes
+// -----------------------------------------------------------
+
 router.patch("/:id", manageGuard, async (req, res) => {
   try {
     const { id } = req.params;
@@ -84,7 +170,23 @@ router.patch("/:id", manageGuard, async (req, res) => {
   }
 });
 
-// POST /api/themes/:themeId/subthemes  manager only
+
+
+
+
+
+
+// -----------------------------------------------------------
+// POST /api/themes/:themeId/subthemes
+// -----------------------------------------------------------
+//
+// Body: { code, title, description? }. 409 on a duplicate
+// subtheme code.
+//
+// Used by:
+//   - manager/themes.jsx — "Pridėti potemę" form
+// -----------------------------------------------------------
+
 router.post("/:themeId/subthemes", manageGuard, async (req, res) => {
   try {
     const { themeId } = req.params;
@@ -105,7 +207,24 @@ router.post("/:themeId/subthemes", manageGuard, async (req, res) => {
   }
 });
 
-// PATCH /api/themes/subthemes/:id  manager only
+
+
+
+
+
+
+// -----------------------------------------------------------
+// PATCH /api/themes/subthemes/:id
+// -----------------------------------------------------------
+//
+// Partial update of a subtheme's code/title/description —
+// same shape as the theme PATCH above.
+//
+// Used by:
+//   - nothing calls this at the moment — the themes admin
+//     page only creates and deletes
+// -----------------------------------------------------------
+
 router.patch("/subthemes/:id", manageGuard, async (req, res) => {
   try {
     const { id } = req.params;
@@ -136,7 +255,24 @@ router.patch("/subthemes/:id", manageGuard, async (req, res) => {
   }
 });
 
-// PATCH /api/themes/subthemes/:id/cap  committee only
+
+
+
+
+
+
+// -----------------------------------------------------------
+// PATCH /api/themes/subthemes/:id/cap
+// -----------------------------------------------------------
+//
+// Body: { cap } — the committee's score limit for one
+// subtheme; must be a non-negative number. Zero is allowed
+// and means "no points can count here".
+//
+// Used by:
+//   - committee/limits.jsx — the cap column
+// -----------------------------------------------------------
+
 router.patch("/subthemes/:id/cap", committeeGuard, async (req, res) => {
   try {
     const { id } = req.params;
@@ -170,7 +306,24 @@ router.patch("/subthemes/:id/cap", committeeGuard, async (req, res) => {
   }
 });
 
-// PATCH /api/themes/:id/total-sum  committee only
+
+
+
+
+
+
+// -----------------------------------------------------------
+// PATCH /api/themes/:id/total-sum
+// -----------------------------------------------------------
+//
+// Body: { total_sum } — the money budget allocated to a
+// theme; non-negative number. Feeds the point-value math on
+// the committee's calculate page.
+//
+// Used by:
+//   - committee/limits.jsx — the total-sum column
+// -----------------------------------------------------------
+
 router.patch("/:id/total-sum", committeeGuard, async (req, res) => {
   try {
     const { id } = req.params;
@@ -204,7 +357,25 @@ router.patch("/:id/total-sum", committeeGuard, async (req, res) => {
   }
 });
 
-// PATCH /api/themes/:id/pointvalue  committee only
+
+
+
+
+
+
+// -----------------------------------------------------------
+// PATCH /api/themes/:id/pointvalue
+// -----------------------------------------------------------
+//
+// Body: { pointvalue } — euros per point for a theme;
+// non-negative number. The calculate page computes it
+// (total_sum / capped points) and stores it here so results
+// pages can reuse it.
+//
+// Used by:
+//   - committee/calculate.jsx — "Išsaugoti balo vertę"
+// -----------------------------------------------------------
+
 router.patch("/:id/pointvalue", committeeGuard, async (req, res) => {
   try {
     const { id } = req.params;
@@ -238,10 +409,36 @@ router.patch("/:id/pointvalue", committeeGuard, async (req, res) => {
   }
 });
 
-// DELETE /api/themes/:id  manager only
+
+
+
+
+
+
+// -----------------------------------------------------------
+// DELETE /api/themes/:id
+// -----------------------------------------------------------
+//
+// Deletes a theme and its subthemes. A theme with activities
+// still attached refuses with a 409 up front — friendlier
+// than the FK error the delete would otherwise hit. The
+// cascade itself is manual, two statements not wrapped in a
+// transaction, so a failure between them can leave the theme
+// without its subthemes.
+//
+// Used by:
+//   - manager/themes.jsx — theme delete button
+// -----------------------------------------------------------
+
 router.delete("/:id", manageGuard, async (req, res) => {
   try {
     const { id } = req.params;
+    const linked = await pool.query(
+      `SELECT 1 FROM activities WHERE theme_id = $1 LIMIT 1`,
+      [id]
+    );
+    if (linked.rowCount > 0)
+      return res.status(409).json({ error: "Klaida: negalima ištrinti temos, nes yra su ja susietų veiklų." });
     await pool.query(`DELETE FROM subthemes WHERE theme_id = $1`, [id]);
     const del = await pool.query(`DELETE FROM themes WHERE id = $1`, [id]);
     if (del.rowCount === 0) return res.status(404).json({ error: "not found" });
@@ -252,7 +449,23 @@ router.delete("/:id", manageGuard, async (req, res) => {
   }
 });
 
-// DELETE /api/themes/subthemes/:id  manager only
+
+
+
+
+
+
+// -----------------------------------------------------------
+// DELETE /api/themes/subthemes/:id
+// -----------------------------------------------------------
+//
+// Deletes one subtheme; fails on the FK if activities still
+// reference it.
+//
+// Used by:
+//   - manager/themes.jsx — subtheme delete button
+// -----------------------------------------------------------
+
 router.delete("/subthemes/:id", manageGuard, async (req, res) => {
   try {
     const { id } = req.params;
@@ -264,5 +477,6 @@ router.delete("/subthemes/:id", manageGuard, async (req, res) => {
     res.status(500).json({ error: "internal error" });
   }
 });
+
 
 export default router;

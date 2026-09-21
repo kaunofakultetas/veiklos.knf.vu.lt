@@ -1,3 +1,41 @@
+// -----------------------------------------------------------
+//  [*] Routes — /api/activities
+//
+//    POST   /api/activities                  — create           (employee)
+//    GET    /api/activities/my               — own activities   (employee)
+//    GET    /api/activities/all              — every activity   (manager)
+//    GET    /api/activities/committee        — PATVIRTINTA list (committee)
+//    GET    /api/activities/evaluated        — ĮVERTINTA list   (committee)
+//    GET    /api/activities/evaluated/theme-totals
+//                                            — score sums per theme
+//    GET    /api/activities/evaluated/employees
+//                                            — who has evaluated work
+//    GET    /api/activities/evaluated/employee/:oid/subthemes
+//                                            — one employee's per-subtheme sums
+//    GET    /api/activities/pending          — PATEIKTA queue   (manager)
+//    PATCH  /api/activities/:id/manager      — approve/deny/return
+//    PATCH  /api/activities/:id/committee    — score/return
+//    GET    /api/activities/:id/attachment   — download attachment
+//    PATCH  /api/activities/:id              — employee edit
+//    DELETE /api/activities/:id              — employee delete
+//    POST   /api/activities/:id/resubmit     — resubmit TIKSLINTI
+//
+//  The core of the system: an activity walks the status
+//  chain PATEIKTA → (manager) PATVIRTINTA / ATMESTA /
+//  TIKSLINTI → (committee) ĮVERTINTA, and the committee can
+//  push it back to PATEIKTA. Status values are Lithuanian
+//  UPPERCASE strings compared verbatim in SQL — including
+//  the Į in ĮVERTINTA.
+//
+//  Route order matters here: the literal GET paths (/my,
+//  /all, /committee, /evaluated...) are registered before the
+//  ":id" patterns, so Express never swallows them as ids.
+//
+//  Attachments are stored on disk under uploads/ with a
+//  sanitized theme-subtheme-user-timestamp name; the original
+//  name survives in attachment_original_name for downloads.
+// -----------------------------------------------------------
+
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { verifySamlSession } from "../auth/verifySamlSession.js";
@@ -9,15 +47,36 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 
+
 const router = Router();
 
-// upload folder exists
+// The docker volume mounts ./_DATA/uploads here; created on
+// boot for the no-volume dev case
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// middleware prefix file names
+
+
+
+
+
+
+// -----------------------------------------------------------
+// loadUserFullName
+// -----------------------------------------------------------
+//
+// Middleware that resolves the caller's full name from the DB
+// so multer's filename callback (which runs before any route
+// code) can prefix uploads with it. Falls back to
+// "unknown_user" for users somehow missing from the table.
+//
+// Used by:
+//   - POST  /api/activities (below)
+//   - PATCH /api/activities/:id (below)
+// -----------------------------------------------------------
+
 async function loadUserFullName(req, res, next) {
   try {
     const oid = req.user?.oid || req.user?.sub;
@@ -38,7 +97,25 @@ async function loadUserFullName(req, res, next) {
   }
 }
 
-// remove weird chars names etc
+
+
+
+
+
+
+// -----------------------------------------------------------
+// cleanSegment
+// -----------------------------------------------------------
+//
+// Makes a value safe for a filename: lowercased, spaces to
+// underscores, everything outside [a-z0-9_.-] dropped. Note
+// Lithuanian letters are dropped too, so "Ž. Kazlauskaitė"
+// becomes ".kazlauskait".
+//
+// Used by:
+//   - the multer storage filename callback (below)
+// -----------------------------------------------------------
+
 function cleanSegment(value, fallback) {
   return (value || fallback)
     .toString()
@@ -48,7 +125,30 @@ function cleanSegment(value, fallback) {
     .replace(/[^a-z0-9_.-]/g, "");
 }
 
-// multer prefix in filename
+
+
+
+
+
+
+// -----------------------------------------------------------
+// storage / upload — multer disk storage
+// -----------------------------------------------------------
+//
+// Saves into uploadDir as
+//   <theme>-<subtheme>-<fullname>-<timestamp>-<rand><ext>.
+// The originalname arrives latin1-mangled from multer, so it
+// is re-decoded as UTF-8 before taking the extension. The
+// theme/subtheme codes come from req.body, which multer has
+// only parsed by the time the FILE field follows the text
+// fields in the FormData — the frontend appends attachment
+// last for exactly that reason.
+//
+// Used by:
+//   - POST  /api/activities (below)
+//   - PATCH /api/activities/:id (below)
+// -----------------------------------------------------------
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
@@ -71,12 +171,30 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// guards
+// Guard chains by active role (X-Active-Role header)
 const guard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Darbuotojas"])];
 const managerGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Vadybininkas"])];
 const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Komisijos narys"])];
 
-// POST /api/activities  – create new activity
+
+
+
+
+
+
+// -----------------------------------------------------------
+// POST /api/activities
+// -----------------------------------------------------------
+//
+// Create an activity (multipart form: theme_id, subtheme_id,
+// title, description, optional attachment file plus
+// theme_code/subtheme_code for the filename). Starts in the
+// DB-default status PATEIKTA.
+//
+// Used by:
+//   - employee/newActivity.jsx — the submission form
+// -----------------------------------------------------------
+
 router.post("/", guard, loadUserFullName, upload.single("attachment"), async (req, res) => {
     try {
       const oid = req.user?.oid || req.user?.sub;
@@ -95,6 +213,8 @@ router.post("/", guard, loadUserFullName, upload.single("attachment"), async (re
           .json({ error: "Klaida: Tema, potemė ir pavadinimas yra privalomi" });
       }
 
+      // Same latin1→utf8 re-decode as the storage callback,
+      // so Lithuanian filenames download intact
       const attachmentPath = req.file ? req.file.filename : null;
       const attachmentOriginalName = req.file ? Buffer.from(req.file.originalname, "latin1").toString("utf8") : null;
 
@@ -142,7 +262,24 @@ router.post("/", guard, loadUserFullName, upload.single("attachment"), async (re
   }
 );
 
-// GET /api/activities/my - employee activities
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/activities/my
+// -----------------------------------------------------------
+//
+// The caller's own activities, newest first, with theme and
+// subtheme codes/titles joined in.
+//
+// Used by:
+//   - employee/myActivities.jsx — the main list
+//   - employee/export.jsx — the XLSX export source
+// -----------------------------------------------------------
+
 router.get("/my", guard, async (req, res) => {
   try {
     const oid = req.user?.oid || req.user?.sub;
@@ -185,7 +322,23 @@ router.get("/my", guard, async (req, res) => {
   }
 });
 
-// GET /api/activities/all – all activities for manager
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/activities/all
+// -----------------------------------------------------------
+//
+// Every activity in every status, with the employee's name —
+// the manager's full overview / export source.
+//
+// Used by:
+//   - manager/export.jsx — the XLSX export source
+// -----------------------------------------------------------
+
 router.get("/all", managerGuard, async (req, res) => {
   try {
     const q = await pool.query(
@@ -227,7 +380,23 @@ router.get("/all", managerGuard, async (req, res) => {
   }
 });
 
-// GET /api/activities/committee – PATVIRTINTA activities for committee
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/activities/committee
+// -----------------------------------------------------------
+//
+// The committee's work queue: activities a manager has
+// approved (status PATVIRTINTA), waiting for a score.
+//
+// Used by:
+//   - committee/evaluate.jsx — the evaluation queue
+// -----------------------------------------------------------
+
 router.get("/committee", committeeGuard, async (req, res) => {
   try {
     const q = await pool.query(
@@ -269,7 +438,23 @@ router.get("/committee", committeeGuard, async (req, res) => {
   }
 });
 
-// GET api/activities/evaluated - IVERTINTA activities for committee
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/activities/evaluated
+// -----------------------------------------------------------
+//
+// Already-scored activities (ĮVERTINTA), most recently
+// touched first — the committee's review/correction list.
+//
+// Used by:
+//   - committee/results.jsx — the results table
+// -----------------------------------------------------------
+
 router.get("/evaluated", committeeGuard, async (req, res) => {
   try {
     const q = await pool.query(
@@ -308,7 +493,26 @@ router.get("/evaluated", committeeGuard, async (req, res) => {
   }
 });
 
-// GET /api/activities/evaluated/theme-totals for committee calc
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/activities/evaluated/theme-totals
+// -----------------------------------------------------------
+//
+// One row per theme: its budget (total_sum), stored point
+// value, and the raw sum of ĮVERTINTA scores. LEFT JOIN, so
+// themes with no evaluated work appear with total_score 0.
+// Note the sum is UNcapped — subtheme caps are applied
+// client-side on the calculate page.
+//
+// Used by:
+//   - committee/calculate.jsx — the theme table
+// -----------------------------------------------------------
+
 router.get("/evaluated/theme-totals", committeeGuard, async (req, res) => {
   try {
     const q = await pool.query(
@@ -334,7 +538,24 @@ router.get("/evaluated/theme-totals", committeeGuard, async (req, res) => {
   }
 });
 
-// GET /api/activities/evaluated/employees for committee employee bonus list
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/activities/evaluated/employees
+// -----------------------------------------------------------
+//
+// The distinct employees who have at least one ĮVERTINTA
+// activity — populates the employee picker on the calculate
+// page.
+//
+// Used by:
+//   - committee/calculate.jsx — employee dropdown
+// -----------------------------------------------------------
+
 router.get("/evaluated/employees", committeeGuard, async (req, res) => {
   try {
     const q = await pool.query(
@@ -355,7 +576,24 @@ router.get("/evaluated/employees", committeeGuard, async (req, res) => {
   }
 });
 
-// GET /api/activities/evaluated/employee/:oid/subthemes for committee employee bonus list
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/activities/evaluated/employee/:oid/subthemes
+// -----------------------------------------------------------
+//
+// One employee's ĮVERTINTA scores grouped per subtheme, with
+// the subtheme cap and theme point value alongside — all the
+// inputs the calculate page needs to figure a bonus.
+//
+// Used by:
+//   - committee/calculate.jsx — after picking an employee
+// -----------------------------------------------------------
+
 router.get("/evaluated/employee/:oid/subthemes", committeeGuard, async (req, res) => {
   try {
     const { oid } = req.params;
@@ -396,7 +634,23 @@ router.get("/evaluated/employee/:oid/subthemes", committeeGuard, async (req, res
   }
 });
 
-// GET /api/activities/pending – PATEIKTA activities for managers
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/activities/pending
+// -----------------------------------------------------------
+//
+// The manager's inbox: PATEIKTA activities, oldest first so
+// the queue is worked in submission order.
+//
+// Used by:
+//   - manager/review.jsx — the review queue
+// -----------------------------------------------------------
+
 router.get("/pending", managerGuard, async (req, res) => {
   try {
     const q = await pool.query(
@@ -436,13 +690,43 @@ router.get("/pending", managerGuard, async (req, res) => {
   }
 });
 
-// PATCH /api/activities/:id/manager – approve / deny / return / edit manager comments
+
+
+
+
+
+
+// -----------------------------------------------------------
+// PATCH /api/activities/:id/manager
+// -----------------------------------------------------------
+//
+// The manager's verdict on one PATEIKTA activity. Body:
+//   action: "approve" → PATVIRTINTA (clears rejection_comment)
+//           "deny"    → ATMESTA   (comment required)
+//           "return"  → TIKSLINTI (comment required)
+//           absent    → plain edit of the fields below
+//   manager_comments, theme_id, subtheme_id — optional edits.
+//
+// Only PATEIKTA activities can be touched — everything else
+// is a 400. On deny/return an email goes to the employee,
+// fire-and-forget: a failed send is only logged, the status
+// change stands.
+//
+// Note the "Paketiimai" typo in the no-fields error is
+// user-facing and shipped; left as-is here.
+//
+// Used by:
+//   - manager/review.jsx — approve/deny/return buttons and
+//     the edit dialog
+// -----------------------------------------------------------
+
 router.patch("/:id/manager", managerGuard, async (req, res) => {
   try {
     const { id } = req.params;
     const { action, manager_comments, rejection_comment, theme_id, subtheme_id } = req.body || {};
 
-    // load current status
+    // Status gate first — the verdict below only applies to
+    // PATEIKTA rows
     const cur = await pool.query(
       `SELECT status
          FROM activities
@@ -461,11 +745,11 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       });
     }
 
+    // Dynamic SET list — only the fields actually sent
     const fields = [];
     const vals = [];
     let i = 1;
 
-    // change theme / subtheme
     if (theme_id !== undefined) {
       const tid = parseInt(theme_id, 10);
       if (!Number.isNaN(tid)) {
@@ -482,11 +766,11 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       }
     }
 
-    // approve / deny / return changes status
     if (action === "approve") {
       fields.push(`status = $${i++}`);
       vals.push("PATVIRTINTA");
-      // clear rejection comm
+      // A leftover rejection comment from an earlier round
+      // would confuse the employee — clear it
       fields.push(`rejection_comment = $${i++}`);
       vals.push(null);
     } else if (action === "deny") {
@@ -497,7 +781,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       vals.push("ATMESTA");
       fields.push(`rejection_comment = $${i++}`);
       vals.push(rejection_comment.trim());
-    } else if (action === "return") { 
+    } else if (action === "return") {
       if (!rejection_comment || !rejection_comment.trim()) {
         return res.status(400).json({ error: "Klaida: Tikslinimui privalomas komentaras." });
       }
@@ -507,7 +791,6 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       vals.push(rejection_comment.trim());
     }
 
-    // adjust comments in edit
     if (manager_comments !== undefined) {
       fields.push(`manager_comments = $${i++}`);
       vals.push(manager_comments.trim());
@@ -527,9 +810,11 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       vals
     );
 
+    // Notify the employee about deny/return — reading the
+    // comment back from the DB so the mail matches what was
+    // stored
     if (action === "deny" || action === "return") {
       try {
-        // fetch user email + activity info
         const infoSql = `
           SELECT a.title,
                  a.rejection_comment,
@@ -553,6 +838,8 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
           const fn =
             action === "deny" ? sendRejectionEmail : sendReturnEmail;
 
+          // Fire-and-forget: a dead SMTP server must not fail
+          // the PATCH
           fn(payload).catch((err) => {
             console.error(
               action === "deny"
@@ -567,7 +854,6 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       }
     }
 
-    // return updated row
     const q = await pool.query(
       `SELECT
          a.id,
@@ -600,13 +886,34 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
   }
 });
 
-// PATCH /api/activities/:id/committee – approve / return for committee
+
+
+
+
+
+
+// -----------------------------------------------------------
+// PATCH /api/activities/:id/committee
+// -----------------------------------------------------------
+//
+// The committee's verdict. Body:
+//   action: "score"  → sets score, status ĮVERTINTA
+//           "return" → back to PATEIKTA, score cleared
+//   committee_comments, theme_id, subtheme_id — optional.
+//
+// Works on PATVIRTINTA and ĮVERTINTA rows, so an existing
+// score can be corrected later from the results page.
+//
+// Used by:
+//   - committee/evaluate.jsx — first scoring
+//   - committee/results.jsx — corrections
+// -----------------------------------------------------------
+
 router.patch("/:id/committee", committeeGuard, async (req, res) => {
   try {
     const { id } = req.params;
     const { action, score, committee_comments, theme_id, subtheme_id } = req.body || {};
 
-    // PATVIRTINTA
     const cur = await pool.query(
       `SELECT status
          FROM activities
@@ -660,7 +967,8 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
       vals.push("ĮVERTINTA");
 
     } else if (action === "return") {
-      // return
+      // Straight back to the manager's queue — the score is
+      // wiped so a re-approval starts clean
       fields.push(`status = $${i++}`);
       vals.push("PATEIKTA");
       fields.push(`score = $${i++}`);
@@ -723,7 +1031,29 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
   }
 });
 
-// GET /api/activities/:id/attachment – download attachment
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/activities/:id/attachment
+// -----------------------------------------------------------
+//
+// Streams the stored attachment with its ORIGINAL filename.
+// Guarded by ownership, not active role: the owner may always
+// download, and anyone who merely OWNS the manager or
+// committee role may download any attachment — no
+// X-Active-Role header needed, which is why every role's
+// pages can call it directly.
+//
+// Used by:
+//   - employee/myActivities.jsx, manager/review.jsx,
+//     committee/evaluate.jsx, committee/results.jsx —
+//     the attachment download links
+// -----------------------------------------------------------
+
 router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) => {
   try {
     const { id } = req.params;
@@ -743,7 +1073,6 @@ router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) =
     const roles = req.user?.roles || [];
     const isPrivileged = roles.includes("Vadybininkas") || roles.includes("Komisijos narys");
 
-    // restriction
     if (row.employee_oid !== oid && !isPrivileged) {
       return res.status(403).json({ error: "Klaida: Draudžiama" });
     }
@@ -762,14 +1091,37 @@ router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) =
   }
 });
 
-// PATCH /api/activities/:id – edit theme, subtheme, title, description
+
+
+
+
+
+
+// -----------------------------------------------------------
+// PATCH /api/activities/:id
+// -----------------------------------------------------------
+//
+// The employee editing their own activity (multipart, same
+// form as POST). Only the owner, and only in PATEIKTA or
+// TIKSLINTI status. A new attachment replaces the old file on
+// disk (best-effort unlink, ENOENT ignored).
+//
+// Bug, documented not fixed: the replacement file's
+// attachment_original_name is stored RAW here — without the
+// latin1→utf8 re-decode POST / does — so a re-uploaded
+// Lithuanian filename downloads mangled.
+//
+// Used by:
+//   - employee/myActivities.jsx — the edit dialog
+// -----------------------------------------------------------
+
 router.patch("/:id", guard, loadUserFullName, upload.single("attachment"), async (req, res) => {
   try {
     const { id } = req.params;
     const oid = req.user?.oid || req.user?.sub;
     const { theme_id, subtheme_id, title, description } = req.body || {};
 
-    // check ownership
+    // Ownership + status gate before touching anything
     const cur = await pool.query(
       `SELECT employee_oid, status, attachment_path
          FROM activities
@@ -818,6 +1170,7 @@ router.patch("/:id", guard, loadUserFullName, upload.single("attachment"), async
       fields.push(`attachment_path = $${i++}`);
       vals.push(req.file.filename);
 
+      // Missing the latin1→utf8 re-decode — see the banner
       fields.push(`attachment_original_name = $${i++}`);
       vals.push(req.file.originalname);
     }
@@ -836,6 +1189,7 @@ router.patch("/:id", guard, loadUserFullName, upload.single("attachment"), async
       vals
     );
 
+    // The old file is orphaned once the row points elsewhere
     const oldPath = cur.rows[0].attachment_path;
     if (req.file && oldPath && oldPath !== req.file.filename) {
       const fullOldPath = path.join(uploadDir, oldPath);
@@ -846,7 +1200,6 @@ router.patch("/:id", guard, loadUserFullName, upload.single("attachment"), async
       });
     }
 
-    // return updated rows
     const q = await pool.query(
       `SELECT
          a.id,
@@ -880,7 +1233,25 @@ router.patch("/:id", guard, loadUserFullName, upload.single("attachment"), async
   }
 });
 
-// DELETE /api/activities/:id – employee delete activity
+
+
+
+
+
+
+// -----------------------------------------------------------
+// DELETE /api/activities/:id
+// -----------------------------------------------------------
+//
+// The employee deleting their own activity — owner only,
+// PATEIKTA or TIKSLINTI only (the error text mentions just
+// PATEIKTA, but TIKSLINTI is accepted too). The attachment
+// file is NOT removed from disk — deletes orphan it.
+//
+// Used by:
+//   - employee/myActivities.jsx — the delete button
+// -----------------------------------------------------------
+
 router.delete("/:id", guard, async (req, res) => {
   try {
     const { id } = req.params;
@@ -915,13 +1286,29 @@ router.delete("/:id", guard, async (req, res) => {
   }
 });
 
-// POST /api/activities/:id/resubmit – employee resubmit TIKSLINTI
+
+
+
+
+
+
+// -----------------------------------------------------------
+// POST /api/activities/:id/resubmit
+// -----------------------------------------------------------
+//
+// After fixing a TIKSLINTI activity the employee sends it
+// back to the manager: status → PATEIKTA, the manager's
+// return comment cleared. Owner only, TIKSLINTI only.
+//
+// Used by:
+//   - employee/myActivities.jsx — "Pateikti iš naujo"
+// -----------------------------------------------------------
+
 router.post("/:id/resubmit", guard, async (req, res) => {
   try {
     const { id } = req.params;
     const oid = req.user?.oid || req.user?.sub;
 
-    // check ownership
     const cur = await pool.query(
       `SELECT employee_oid, status
          FROM activities
@@ -945,7 +1332,6 @@ router.post("/:id/resubmit", guard, async (req, res) => {
       });
     }
 
-    // change status to PATEIKTA
     await pool.query(
       `UPDATE activities
           SET status = 'PATEIKTA',
@@ -955,7 +1341,6 @@ router.post("/:id/resubmit", guard, async (req, res) => {
       [id]
     );
 
-    // return updated rows
     const q = await pool.query(
       `SELECT
          a.id,
@@ -988,5 +1373,6 @@ router.post("/:id/resubmit", guard, async (req, res) => {
     res.status(500).json({ error: "internal error" });
   }
 });
+
 
 export default router;

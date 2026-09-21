@@ -4,10 +4,10 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package*.json ./
+COPY app/package*.json ./
 RUN npm ci --omit=dev
 
-COPY . .
+COPY app .
 
 EXPOSE 4000
 

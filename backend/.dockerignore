@@ -18,3 +18,7 @@ Dockerfile
 
 README.md
 LICENSE
+
+app/node_modules
+app/dist
+app/uploads

@@ -1,12 +1,51 @@
+// -----------------------------------------------------------
+//  [*] Routes — /api/user-roles
+//
+//    GET  /api/user-roles?email=...   — a user's roles + catalog
+//    POST /api/user-roles/assign      — grant a role by email
+//    POST /api/user-roles/remove      — revoke a role by email
+//
+//  The role administration API behind the manager's roles
+//  page. Users are looked up by email, case-insensitively.
+//
+//  Auth: index.js mounts the router behind verifySamlSession
+//  + attachRoles, and every route adds managerOnly — the
+//  caller must OWN the Vadybininkas role; the X-Active-Role
+//  header plays no part here, unlike the other routers.
+//
+//  Used by:
+//    - manager/roles.jsx — the whole page
+// -----------------------------------------------------------
+
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { authorize } from "../auth/authorize.js";
 
+
 const router = Router();
 
+// Ownership of the manager role is enough — attachRoles has
+// already filled req.user.roles by the time this runs
 const managerOnly = authorize(["Vadybininkas"]);
 
-// GET /api/user-roles?email=...
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GET /api/user-roles
+// -----------------------------------------------------------
+//
+// ?email=... → { user, roles, allRoles }: the user (oid
+// aliased as id), the roles they own, and the full catalog so
+// the UI can render assign buttons for the rest.
+//
+// Used by:
+//   - manager/roles.jsx — user search
+// -----------------------------------------------------------
+
 router.get("/", managerOnly, async (req, res) => {
   try {
     const email = (req.query.email || "").trim();
@@ -42,7 +81,24 @@ router.get("/", managerOnly, async (req, res) => {
   }
 });
 
-// POST /api/user-roles/assign { email, role }
+
+
+
+
+
+
+// -----------------------------------------------------------
+// POST /api/user-roles/assign
+// -----------------------------------------------------------
+//
+// Body: { email, role }. Grants the role; re-granting is a
+// no-op (ON CONFLICT DO NOTHING). 404 unknown user, 400
+// unknown role.
+//
+// Used by:
+//   - manager/roles.jsx — the "Priskirti" buttons
+// -----------------------------------------------------------
+
 router.post("/assign", managerOnly, async (req, res) => {
   try {
     const { email, role } = req.body || {};
@@ -73,7 +129,25 @@ router.post("/assign", managerOnly, async (req, res) => {
   }
 });
 
-// POST /api/user-roles/remove { email, role }
+
+
+
+
+
+
+// -----------------------------------------------------------
+// POST /api/user-roles/remove
+// -----------------------------------------------------------
+//
+// Body: { email, role }. Revokes the role; an unknown role
+// name is treated as already-removed (204), only an unknown
+// user is a 404. Note "Darbuotojas" comes back on the user's
+// next request — attachRoles re-grants it automatically.
+//
+// Used by:
+//   - manager/roles.jsx — the "Pašalinti" buttons
+// -----------------------------------------------------------
+
 router.post("/remove", managerOnly, async (req, res) => {
   try {
     const { email, role } = req.body || {};
@@ -102,5 +176,6 @@ router.post("/remove", managerOnly, async (req, res) => {
     res.status(500).json({ error: "internal error" });
   }
 });
+
 
 export default router;
