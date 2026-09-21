@@ -14,7 +14,7 @@
 //
 //  Auth rides in the session cookie — the /api/user-roles
 //  endpoints are manager-only on the backend since the
-//  Keycloak/SAML migration.
+//  VU SSO (SAML) migration.
 // -----------------------------------------------------------
 
 import { useState, useEffect } from "react";

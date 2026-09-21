@@ -1,12 +1,14 @@
 // -----------------------------------------------------------
 //  [*] Auth — SAML session gate
 //
-//  The live authentication check since the Keycloak/SAML
+//  The live authentication check since the VU SSO (SAML)
 //  migration: the SAML /assert callback stored the IdP's
 //  attributes in the express-session cookie, and this
 //  middleware turns them back into req.user on every request.
 //  No tokens, no headers — just the session cookie.
 // -----------------------------------------------------------
+
+import { mapSamlAttributes } from "../utils/saml.js";
 
 
 
@@ -20,8 +22,9 @@
 //
 // 401 Neprisijungta when the session has no SAML login;
 // otherwise req.user = { oid, email, name } mapped from the
-// IdP attributes (preferred_username beats email, the name is
-// firstName + lastName with missing parts dropped).
+// raw IdP attributes by mapSamlAttributes — VU SSO's OIDs or their
+// friendly names alike (name is firstName + lastName with
+// missing parts dropped, "" when both are missing).
 //
 // Used by:
 //   - index.js — /api/me, the /api/users and /api/user-roles
@@ -31,13 +34,13 @@
 // -----------------------------------------------------------
 
 export function verifySamlSession(req, res, next) {
-const samlUser = req.session?.samlUser;
+  const samlUser = req.session?.samlUser;
   if (!samlUser) return res.status(401).json({ error: 'Neprisijungta' });
-  const attrs = samlUser.attributes;
+  const { oid, email, name } = mapSamlAttributes(samlUser.attributes);
   req.user = {
-    oid:   attrs.oid,
-    email: attrs.preferred_username || attrs.email,
-    name:  [attrs.firstName, attrs.lastName].filter(Boolean).join(' '),
+    oid,
+    email,
+    name: name ?? '',
   };
   next();
 }

@@ -2,7 +2,7 @@
 //  [*] Regression — routes /api/user-roles
 //
 //  The role admin API behind manager/roles.jsx. The old
-//  no-auth hole is FIXED since the Keycloak/SAML migration:
+//  no-auth hole is FIXED since the VU SSO (SAML) migration:
 //  index.js mounts the router behind verifySamlSession +
 //  attachRoles, and every route adds authorize(
 //  ["Vadybininkas"]) — role OWNERSHIP, no X-Active-Role

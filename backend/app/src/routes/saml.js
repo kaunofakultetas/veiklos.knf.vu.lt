@@ -2,31 +2,37 @@
 //  [*] Routes — /auth/saml (the login flow)
 //
 //    GET  /auth/saml/metadata          — the SP's own metadata
-//    GET  /auth/saml/login             — redirect to Keycloak
-//    POST /auth/saml/assert            — Keycloak's callback
+//    GET  /auth/saml/login             — redirect to VU SSO
+//    POST /auth/saml/assert            — VU SSO's callback
 //    GET  /auth/saml/logout            — single logout via IdP
 //    GET  /auth/saml/logout/callback   — IdP's logout return
 //
 //  The whole browser-facing SAML flow. Unlike the other route
 //  files this one exports a FACTORY — index.js builds the
-//  samlify SP/IdP pair at boot (utils/saml.js) and passes it
-//  in, so the routes close over it; per-route notes are plain
-//  comments inside, banners stay at top level.
+//  SAML setup at boot (utils/saml.js) and passes it in, so
+//  the routes close over it; per-route notes are plain
+//  comments inside, banners stay at top level. The SP used
+//  for a request is the one for the origin it arrived on, so
+//  the app works under any domain name.
 //
 //  /assert is where a user is BORN in this system: it upserts
 //  the users row from the IdP attributes and auto-grants
 //  "Darbuotojas" on first sign-in — the work the old
-//  /api/session/init did in the Microsoft era.
+//  /api/session/init did in the Microsoft era. Attributes are
+//  read through mapSamlAttributes, so VU SSO's OIDs (or their
+//  friendly names) both work. The assert handler is also
+//  exposed as router.assert, for mounting at a non-default
+//  ACS path (SP_ACS_URL).
 //
 //  Used by:
-//    - the browser — App.jsx redirects to /login, Keycloak
+//    - the browser — App.jsx redirects to /login, VU SSO
 //      POSTs back to /assert; nothing calls these via fetch
 // -----------------------------------------------------------
 
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { TBL_USERS, TBL_ROLES, TBL_USER_ROLES } from "../db/tables.js";
-import { enrichSpMetadata } from "../utils/saml.js";
+import { enrichSpMetadata, mapSamlAttributes } from "../utils/saml.js";
 
 
 
@@ -38,28 +44,35 @@ import { enrichSpMetadata } from "../utils/saml.js";
 // createSamlRouter (default export)
 // -----------------------------------------------------------
 //
-// createSamlRouter({ sp, idp }) → an express Router with the
-// five routes above closed over the samlify pair.
+// createSamlRouter({ setup }) → an express Router with the
+// five routes above closed over the SAML setup, plus
+// router.assert — the bare /assert handler.
 //
 // Used by:
 //   - index.js — mounted at /auth/saml
 // -----------------------------------------------------------
 
-export default function createSamlRouter({ sp, idp }) {
+export default function createSamlRouter({ setup }) {
+    const { idp, spFor } = setup;
     const samlRouter = Router();
 
+    // The SP for the origin this request arrived on. Behind
+    // the Caddy ingress req.protocol honours X-Forwarded-Proto
+    // (index.js trusts the proxy) and Host passes through
+    const spOf = (req) => spFor(`${req.protocol}://${req.get("host")}`);
+
     // GET /metadata — the SP metadata (enriched with the
-    // LitNET FEDI blocks) that Keycloak / the federation
+    // LitNET FEDI blocks) that VU SSO / the federation
     // registers; public on purpose
-    samlRouter.get("/metadata", (_req, res) => {
-        res.type("application/xml").send(enrichSpMetadata(sp.getMetadata()));
+    samlRouter.get("/metadata", (req, res) => {
+        res.type("application/xml").send(enrichSpMetadata(spOf(req).getMetadata()));
     });
 
     // GET /login — build a (possibly signed) AuthnRequest and
-    // bounce the browser to Keycloak's SSO endpoint
-    samlRouter.get("/login", async (_req, res) => {
+    // bounce the browser to the IdP's SSO endpoint
+    samlRouter.get("/login", async (req, res) => {
         try {
-            const { context } = await sp.createLoginRequest(idp, "redirect");
+            const { context } = await spOf(req).createLoginRequest(idp, "redirect");
             res.redirect(context);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -67,17 +80,14 @@ export default function createSamlRouter({ sp, idp }) {
         }
     });
 
-    // POST /assert — Keycloak posts the signed assertion here.
+    // POST /assert — the IdP posts the signed assertion here.
     // Validates it, upserts the user, auto-grants Darbuotojas
     // on first sign-in, stores the login in the session and
     // sends the browser home
-    samlRouter.post("/assert", async (req, res) => {
+    const assert = async (req, res) => {
         try {
-            const { extract } = await sp.parseLoginResponse(idp, "post", req);
-            const attrs = extract.attributes;
-            const oid = attrs.oid;
-            const email = attrs.preferred_username || attrs.email || null;
-            const fullName = [attrs.firstName, attrs.lastName].filter(Boolean).join(" ") || null;
+            const { extract } = await spOf(req).parseLoginResponse(idp, "post", req);
+            const { oid, email, name: fullName } = mapSamlAttributes(extract.attributes);
 
             if (!oid || !email) {
                 return res.status(400).send("SAML assertion missing oid or email attributes");
@@ -118,7 +128,8 @@ export default function createSamlRouter({ sp, idp }) {
             }
 
             // nameID + sessionIndex are kept for single
-            // logout; attributes feed verifySamlSession
+            // logout; the RAW attributes feed verifySamlSession,
+            // which maps them the same way
             req.session.samlUser = {
                 nameID:       extract.nameID,
                 sessionIndex: extract.sessionIndex,
@@ -136,7 +147,9 @@ res.redirect("/");
             const message = error instanceof Error ? error.message : String(error);
             res.status(401).send(`SAML assertion parsing failed: ${message}`);
         }
-    });
+    };
+    samlRouter.post("/assert", assert);
+    samlRouter.assert = assert;
 
     // GET /logout — drop the local session FIRST, then try to
     // log the IdP session out too; any IdP failure still ends
@@ -152,7 +165,7 @@ res.redirect("/");
 
         try {
             const sessionIndex = samlUser.sessionIndex?.sessionIndex ?? samlUser.sessionIndex;
-            const { context } = await sp.createLogoutRequest(idp, "redirect", {
+            const { context } = await spOf(req).createLogoutRequest(idp, "redirect", {
                 logoutNameID: samlUser.nameID,
                 sessionIndex,
             });
@@ -163,7 +176,7 @@ res.redirect("/");
         }
     });
 
-    // GET /logout/callback — Keycloak's return leg; the local
+    // GET /logout/callback — the IdP's return leg; the local
     // session is already gone, this just makes sure
     samlRouter.get("/logout/callback", (req, res) => {
         req.session.destroy(() => {

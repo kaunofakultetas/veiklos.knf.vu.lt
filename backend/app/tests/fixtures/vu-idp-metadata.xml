@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" xmlns:mdattr="urn:oasis:names:tc:SAML:metadata:attribute" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:mdrpi="urn:oasis:names:tc:SAML:metadata:rpi" xmlns:mdui="urn:oasis:names:tc:SAML:metadata:ui" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" entityID="https://sso.vu.lt/SSO/saml2/idp/metadata.php">
+  <md:Extensions>
+    <mdattr:EntityAttributes xmlns:mdattr="urn:oasis:names:tc:SAML:metadata:attribute">
+      <saml:Attribute xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" Name="http://macedir.org/entity-category-support" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri">
+        <saml:AttributeValue xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xsi:type="xs:string">http://refeds.org/category/research-and-scholarship</saml:AttributeValue>
+        <saml:AttributeValue xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xsi:type="xs:string">http://www.geant.net/uri/dataprotection-code-of-conduct/v1</saml:AttributeValue>
+      </saml:Attribute>
+      <saml:Attribute xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" Name="urn:oasis:names:tc:SAML:attribute:assurance-certification" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri">
+        <saml:AttributeValue xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xs="http://www.w3.org/2001/XMLSchema" xsi:type="xs:string">https://refeds.org/sirtfi</saml:AttributeValue>
+      </saml:Attribute>
+    </mdattr:EntityAttributes>
+    <mdrpi:RegistrationInfo xmlns:mdrpi="urn:oasis:names:tc:SAML:metadata:rpi" registrationAuthority="https://fedi.litnet.lt" registrationInstant="2010-09-07T12:00:00Z">
+      <mdrpi:RegistrationPolicy xml:lang="en">http://fedi.litnet.lt/index.php/en/policy</mdrpi:RegistrationPolicy>
+      <mdrpi:RegistrationPolicy xml:lang="lt">http://fedi.litnet.lt/index.php/lt/informacija/tvarka</mdrpi:RegistrationPolicy>
+    </mdrpi:RegistrationInfo>
+  </md:Extensions>
+  <md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:Extensions>
+      <mdui:UIInfo xmlns:mdui="urn:oasis:names:tc:SAML:metadata:ui">
+        <mdui:DisplayName xml:lang="en">Vilnius University</mdui:DisplayName>
+        <mdui:DisplayName xml:lang="lt">Vilniaus universitetas</mdui:DisplayName>
+        <mdui:Description xml:lang="en">VU Single Sign On</mdui:Description>
+        <mdui:Description xml:lang="lt">VU bendro prisijungimo sistema</mdui:Description>
+        <mdui:InformationURL xml:lang="en">http://www.vu.lt</mdui:InformationURL>
+        <mdui:InformationURL xml:lang="lt">http://www.vu.lt</mdui:InformationURL>
+        <mdui:Keywords xml:lang="en">Vilnius Vilnius+University</mdui:Keywords>
+        <mdui:Keywords xml:lang="lt">Vilnius Vilniaus+universitetas</mdui:Keywords>
+        <mdui:Logo width="90" height="100">https://sso.vu.lt/SSO/module.php/themevu/vulogo.png</mdui:Logo>
+      </mdui:UIInfo>
+    </md:Extensions>
+    <md:KeyDescriptor use="signing">
+      <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+        <ds:X509Data>
+          <ds:X509Certificate>MIIFBTCCA22gAwIBAgIUc0elnYjYzb4vHmOrs5jQWz8hUykwDQYJKoZIhvcNAQELBQAwgZExCzAJBgNVBAYTAkxUMRAwDgYDVQQIDAdWaWxuaXVzMRAwDgYDVQQHDAdWaWxuaXVzMRswGQYDVQQKDBJWaWxuaXVzIFVuaXZlcnNpdHkxDTALBgNVBAsMBElUUEMxEjAQBgNVBAMMCXNzby52dS5sdDEeMBwGCSqGSIb3DQEJARYPc3NvLWFkbWluQHZ1Lmx0MB4XDTI0MDgzMDEwMjM1OVoXDTM0MDgzMDEwMjM1OVowgZExCzAJBgNVBAYTAkxUMRAwDgYDVQQIDAdWaWxuaXVzMRAwDgYDVQQHDAdWaWxuaXVzMRswGQYDVQQKDBJWaWxuaXVzIFVuaXZlcnNpdHkxDTALBgNVBAsMBElUUEMxEjAQBgNVBAMMCXNzby52dS5sdDEeMBwGCSqGSIb3DQEJARYPc3NvLWFkbWluQHZ1Lmx0MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA5I6+KYpeHGZsaN4bXrprc9kquIh4KCEm76VXQhfJeJqlAr0nkR4eb1Fyl2pa36uvNKBcFyf8VKDDM8PvKvrawB86ZERwIvAgTP9I7kC+UH0D8bfhP5cVJ+Q/ZVc1mXl8Ph7AFrLMWHoO+2hrcIMRxsyNqdoOsxGH5eIA2UZNzMl0fK1xiiqPVDSC9m6dJN05TebC9elkZ7OtY3BnFtaLCvYj5DJu6BjA2ilReuKiQGR9n5G3WC2um9mV1m5GHKtBMOWz5DXJPqEksiTLh00vGvDuMIKthSL0GzVMJopUhqNpRyOejsYOaYtnt17ubfJ04mdYIVd/iezVqQu5m2TNIjtbYPQlzk5t4GNEK53t7qsrSp3WSzpxFif99Dc2/QYkqDS/uYvtLgRLIXPX8I+T+iJiJdZlveGG5FZApqt58BWFS2nBAlMNcZCrFKSYMI4Cr3R4c+tl4VzUDfYHqb2q16keCrhh+DP3le0DTHjWgCAWEirk9bORGBkx+e0IyRqvAgMBAAGjUzBRMB0GA1UdDgQWBBRNXohiXMtBXhTuUs+J1MxR7gXrzjAfBgNVHSMEGDAWgBRNXohiXMtBXhTuUs+J1MxR7gXrzjAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBgQAA1j25Ga8KRM66uEPu5PThvzZluu3rQUWM/+HJLQL9jApISzeIZlj+aJNz4jKCIRZWmPtfGx3sGY88x8zd0/jo0tJfQRD26kjwu4YRaCowYf56gNaFEwxdf9WSpWOL0AjmA57U99ZRsxTrmLD72uFzY99cdjVISAmqBbEbLUYx7XDyUN+xl9sbWlx0shHvGckYsnoUOKCTkWOYV73aGj2edEyYo7KISKVLSEVc52ZjdeutnpeMfy7Xw5hqSdq+T8yk5V4ud1B8Plp+mdK7HTk6nzMi+1kp/W9nQzr01TppnT7cyVePkuXXR3UzYiYWBkuA8e7k4RcGcXRLmDGw+zZ4QlFYZk0SuM7cpG8tHZv9ASvMXm4scYC2Ol3s2iIrir3JEoXAP9OlYQpyRMx4l1VzrRCjhPMjZeu+F9gzfFjNFrOoYcyKjjnEN2RbWo5mE/NEY1rg6RxbsrXCEV5pjldHYRMXaaOItwGY0G+TiSPmdC7SStnCK+PPcW0gV19avXk=</ds:X509Certificate>
+        </ds:X509Data>
+      </ds:KeyInfo>
+    </md:KeyDescriptor>
+    <md:KeyDescriptor use="encryption">
+      <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+        <ds:X509Data>
+          <ds:X509Certificate>MIIFBTCCA22gAwIBAgIUc0elnYjYzb4vHmOrs5jQWz8hUykwDQYJKoZIhvcNAQELBQAwgZExCzAJBgNVBAYTAkxUMRAwDgYDVQQIDAdWaWxuaXVzMRAwDgYDVQQHDAdWaWxuaXVzMRswGQYDVQQKDBJWaWxuaXVzIFVuaXZlcnNpdHkxDTALBgNVBAsMBElUUEMxEjAQBgNVBAMMCXNzby52dS5sdDEeMBwGCSqGSIb3DQEJARYPc3NvLWFkbWluQHZ1Lmx0MB4XDTI0MDgzMDEwMjM1OVoXDTM0MDgzMDEwMjM1OVowgZExCzAJBgNVBAYTAkxUMRAwDgYDVQQIDAdWaWxuaXVzMRAwDgYDVQQHDAdWaWxuaXVzMRswGQYDVQQKDBJWaWxuaXVzIFVuaXZlcnNpdHkxDTALBgNVBAsMBElUUEMxEjAQBgNVBAMMCXNzby52dS5sdDEeMBwGCSqGSIb3DQEJARYPc3NvLWFkbWluQHZ1Lmx0MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA5I6+KYpeHGZsaN4bXrprc9kquIh4KCEm76VXQhfJeJqlAr0nkR4eb1Fyl2pa36uvNKBcFyf8VKDDM8PvKvrawB86ZERwIvAgTP9I7kC+UH0D8bfhP5cVJ+Q/ZVc1mXl8Ph7AFrLMWHoO+2hrcIMRxsyNqdoOsxGH5eIA2UZNzMl0fK1xiiqPVDSC9m6dJN05TebC9elkZ7OtY3BnFtaLCvYj5DJu6BjA2ilReuKiQGR9n5G3WC2um9mV1m5GHKtBMOWz5DXJPqEksiTLh00vGvDuMIKthSL0GzVMJopUhqNpRyOejsYOaYtnt17ubfJ04mdYIVd/iezVqQu5m2TNIjtbYPQlzk5t4GNEK53t7qsrSp3WSzpxFif99Dc2/QYkqDS/uYvtLgRLIXPX8I+T+iJiJdZlveGG5FZApqt58BWFS2nBAlMNcZCrFKSYMI4Cr3R4c+tl4VzUDfYHqb2q16keCrhh+DP3le0DTHjWgCAWEirk9bORGBkx+e0IyRqvAgMBAAGjUzBRMB0GA1UdDgQWBBRNXohiXMtBXhTuUs+J1MxR7gXrzjAfBgNVHSMEGDAWgBRNXohiXMtBXhTuUs+J1MxR7gXrzjAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBgQAA1j25Ga8KRM66uEPu5PThvzZluu3rQUWM/+HJLQL9jApISzeIZlj+aJNz4jKCIRZWmPtfGx3sGY88x8zd0/jo0tJfQRD26kjwu4YRaCowYf56gNaFEwxdf9WSpWOL0AjmA57U99ZRsxTrmLD72uFzY99cdjVISAmqBbEbLUYx7XDyUN+xl9sbWlx0shHvGckYsnoUOKCTkWOYV73aGj2edEyYo7KISKVLSEVc52ZjdeutnpeMfy7Xw5hqSdq+T8yk5V4ud1B8Plp+mdK7HTk6nzMi+1kp/W9nQzr01TppnT7cyVePkuXXR3UzYiYWBkuA8e7k4RcGcXRLmDGw+zZ4QlFYZk0SuM7cpG8tHZv9ASvMXm4scYC2Ol3s2iIrir3JEoXAP9OlYQpyRMx4l1VzrRCjhPMjZeu+F9gzfFjNFrOoYcyKjjnEN2RbWo5mE/NEY1rg6RxbsrXCEV5pjldHYRMXaaOItwGY0G+TiSPmdC7SStnCK+PPcW0gV19avXk=</ds:X509Certificate>
+        </ds:X509Data>
+      </ds:KeyInfo>
+    </md:KeyDescriptor>
+    <md:KeyDescriptor use="signing">
+      <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+        <ds:X509Data>
+          <ds:X509Certificate>MIID5zCCAs+gAwIBAgIJAOXB1LH43Dw1MA0GCSqGSIb3DQEBBQUAMIGJMQswCQYDVQQGEwJMVDEQMA4GA1UECAwHVmlsbml1czEQMA4GA1UEBwwHVmlsbml1czEkMCIGA1UECgwbVmlsbml1cyBVbml2ZXJzaXR5IC8gTElUTkVUMRAwDgYDVQQDDAdBcm1pbmFzMR4wHAYJKoZIhvcNAQkBFg9zc28tYWRtaW5AdnUubHQwHhcNMTQwODI5MTE0NTAxWhcNMjQwODI4MTE0NTAxWjCBiTELMAkGA1UEBhMCTFQxEDAOBgNVBAgMB1ZpbG5pdXMxEDAOBgNVBAcMB1ZpbG5pdXMxJDAiBgNVBAoMG1ZpbG5pdXMgVW5pdmVyc2l0eSAvIExJVE5FVDEQMA4GA1UEAwwHQXJtaW5hczEeMBwGCSqGSIb3DQEJARYPc3NvLWFkbWluQHZ1Lmx0MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1GmvMRKfSzqMuE+VmmkJswqKyFuALLRnYFeXUnkzK2W0ASATmp72hgphCg974bWsU/Vv9Mko1MEb9uvDLPhlnaNywClnQf/lwKAVcVz+fJALUjKVR5hhqQaeeUvikqXcklrgB1cLRtRxdXvHkhnbEwciR8QVqL/RdxfZ/U8QTeYnAQ1y5RsBYdhc5Sfk1PyVtylliDen0RJc1IOO98GxXZ2kHAeqyfNFj+69iC3DPFoqMOyS0ShJtMsZKonI25ieDPaCwnZsjotzu7S2umkhykJ1mH1PbCXJDnHuiO7cD/pD5XfpZMyDZHEcS/GGiEQm15vCUuyTV6z/RQZuhCxD2wIDAQABo1AwTjAdBgNVHQ4EFgQUkTQvHIDtX6Xr9zZgPFDvJ9OAAvwwHwYDVR0jBBgwFoAUkTQvHIDtX6Xr9zZgPFDvJ9OAAvwwDAYDVR0TBAUwAwEB/zANBgkqhkiG9w0BAQUFAAOCAQEACiNtCh1swzMUbf6DG5DoTQuzvtwaUw8T/8lBfb2ncyiilFZ0pwfOh5W3FxQDHWQ+Be40WHWCO7Om8Mw0OVFyYN9DLfT4Wne/3BTt+8SGDEaWlMl7G5fYtNc++U7lCzg+8HPTo4lBwMP4f+mbf5uYxwQXCoLs0b46tiNv61wXfncCReykBfYk6xXu4Toh1BmUn5hrNq11DjsaIpbCtczINnuj0ojlJOz7+J41MHf7QuwLCUdx66rbegfSV7t1QaTvgtGTFnl2hInXtrRmgC/tkmo4hiLxypUW4JChUxDyAuRqBVkP2pGiL6cf3vru8eEPdS+3QTBqmmbEZ1uVqw8VjQ==</ds:X509Certificate>
+        </ds:X509Data>
+      </ds:KeyInfo>
+    </md:KeyDescriptor>
+    <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://sso.vu.lt/SSO/saml2/idp/SingleLogoutService.php"/>
+    <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:transient</md:NameIDFormat>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://sso.vu.lt/SSO/saml2/idp/SSOService.php"/>
+  </md:IDPSSODescriptor>
+  <md:Organization>
+    <md:OrganizationName xml:lang="en">Vilnius University</md:OrganizationName>
+    <md:OrganizationName xml:lang="lt">Vilniaus universitetas</md:OrganizationName>
+    <md:OrganizationDisplayName xml:lang="en">Vilnius University</md:OrganizationDisplayName>
+    <md:OrganizationDisplayName xml:lang="lt">Vilniaus universitetas</md:OrganizationDisplayName>
+    <md:OrganizationURL xml:lang="en">http://www.vu.lt</md:OrganizationURL>
+    <md:OrganizationURL xml:lang="lt">http://www.vu.lt</md:OrganizationURL>
+  </md:Organization>
+  <md:ContactPerson contactType="technical">
+    <md:GivenName>VU SSO admin</md:GivenName>
+    <md:EmailAddress>mailto:sso-admin@vu.lt</md:EmailAddress>
+  </md:ContactPerson>
+</md:EntityDescriptor>

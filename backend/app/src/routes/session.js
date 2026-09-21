@@ -3,7 +3,7 @@
 //
 //    GET /api/session/check   — the SPA's "am I signed in"
 //
-//  Since the Keycloak/SAML migration this router only probes
+//  Since the VU SSO (SAML) migration this router only probes
 //  the session. The user upsert and Darbuotojas auto-grant
 //  that the old /init did now live in the SAML /assert
 //  callback (routes/saml.js).

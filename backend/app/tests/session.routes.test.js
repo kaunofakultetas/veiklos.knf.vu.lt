@@ -1,7 +1,7 @@
 // -----------------------------------------------------------
 //  [*] Regression — routes /api/session
 //
-//  Since the Keycloak/SAML migration this router only has
+//  Since the VU SSO (SAML) migration this router only has
 //  GET /check: the SPA's "am I signed in" probe. The user
 //  upsert and Darbuotojas auto-grant that /init used to do
 //  now live in the SAML /assert callback (routes/saml.js).

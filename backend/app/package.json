@@ -2,7 +2,8 @@
   "name": "backend",
   "type": "module",
   "scripts": {
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "test": "node --experimental-test-module-mocks --test tests/"
   },
   "dependencies": {
     "@authenio/samlify-node-xmllint": "^2.0.0",

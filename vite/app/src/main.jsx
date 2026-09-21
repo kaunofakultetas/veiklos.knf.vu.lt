@@ -2,7 +2,7 @@
 //  [*] Entry — React bootstrap
 //
 //  Mounts the app into #root inside StrictMode. Since the
-//  Keycloak/SAML migration there is no auth provider here —
+//  VU SSO (SAML) migration there is no auth provider here —
 //  the session lives in a cookie, so App talks to the backend
 //  with plain fetch.
 // -----------------------------------------------------------

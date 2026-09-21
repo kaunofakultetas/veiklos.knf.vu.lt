@@ -1,7 +1,7 @@
 // -----------------------------------------------------------
 //  [*] App — routing and sign-in flow
 //
-//  The SPA's root: Keycloak/SAML sign-in, the role-based
+//  The SPA's root: VU SSO (SAML) sign-in, the role-based
 //  route tree, and the first-visit flow that picks the active
 //  role.
 //
@@ -115,7 +115,7 @@ const roleToPath = (role) => {
 //
 // The unauthenticated landing card: VU logo + a button that
 // hard-navigates to /auth/saml/login, where the backend
-// bounces the browser to Keycloak.
+// bounces the browser to VU SSO (sso.vu.lt).
 //
 // Used by:
 //   - HomeGate (below)

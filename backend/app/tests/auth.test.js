@@ -4,7 +4,7 @@
 //  Unit-tests the five middlewares in src/auth/ with fake
 //  req/res objects — no module mocks here, these are the real
 //  functions. verifySamlSession is the live gate since the
-//  Keycloak/SAML migration; verifyJwt is dead code but kept,
+//  VU SSO (SAML) migration; verifyJwt is dead code but kept,
 //  so its offline paths stay pinned (a VALID token would need
 //  Microsoft's live JWKS). attachRoles runs against the fake
 //  pool.
@@ -94,20 +94,19 @@ test("verifySamlSession: no session → 401 Neprisijungta", async () => {
 // verifySamlSession — attribute mapping
 // -----------------------------------------------------------
 //
-// preferred_username beats email, and the name is the
-// firstName/lastName pair joined with missing parts dropped.
+// VU SSO's OID attributes (uid, mail, givenName, sn) become
+// req.user; the name is the givenName/sn pair joined.
 // -----------------------------------------------------------
 
-test("verifySamlSession: maps SAML attributes onto req.user", async () => {
+test("verifySamlSession: maps VU SSO attributes onto req.user", async () => {
   const req = {
     session: {
       samlUser: {
         attributes: {
-          oid: "oid-1",
-          preferred_username: "jonas@vu.lt",
-          email: "ignored@vu.lt",
-          firstName: "Jonas",
-          lastName: "Jonaitis",
+          "urn:oid:0.9.2342.19200300.100.1.1": "jonas.jonaitis",
+          "urn:oid:0.9.2342.19200300.100.1.3": ["jonas.jonaitis@knf.vu.lt"],
+          "urn:oid:2.5.4.42": "Jonas",
+          "urn:oid:2.5.4.4": "Jonaitis",
         },
       },
     },
@@ -117,7 +116,7 @@ test("verifySamlSession: maps SAML attributes onto req.user", async () => {
   verifySamlSession(req, fakeRes(), () => (called = true));
 
   assert.equal(called, true);
-  assert.deepEqual(req.user, { oid: "oid-1", email: "jonas@vu.lt", name: "Jonas Jonaitis" });
+  assert.deepEqual(req.user, { oid: "jonas.jonaitis", email: "jonas.jonaitis@knf.vu.lt", name: "Jonas Jonaitis" });
 });
 
 
@@ -130,22 +129,22 @@ test("verifySamlSession: maps SAML attributes onto req.user", async () => {
 // verifySamlSession — fallbacks
 // -----------------------------------------------------------
 //
-// Without preferred_username the email attribute serves, and
-// a lone lastName doesn't leave a stray space in the name.
+// Friendly attribute names serve too, and a lone sn doesn't
+// leave a stray space in the name.
 // -----------------------------------------------------------
 
-test("verifySamlSession: email fallback and partial names", async () => {
+test("verifySamlSession: friendly names and partial names", async () => {
   const req = {
     session: {
       samlUser: {
-        attributes: { oid: "oid-2", email: "kitas@vu.lt", lastName: "Kazlauskaitė" },
+        attributes: { uid: "kitas", mail: "kitas@vu.lt", sn: "Kazlauskaitė" },
       },
     },
   };
 
   verifySamlSession(req, fakeRes(), () => {});
 
-  assert.deepEqual(req.user, { oid: "oid-2", email: "kitas@vu.lt", name: "Kazlauskaitė" });
+  assert.deepEqual(req.user, { oid: "kitas", email: "kitas@vu.lt", name: "Kazlauskaitė" });
 });
 
 

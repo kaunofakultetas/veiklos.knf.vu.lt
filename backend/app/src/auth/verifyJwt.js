@@ -70,7 +70,7 @@ function getKey(header, callback) {
 // preferred_username, ...) for the rest of the chain.
 //
 // Used by:
-//   - nothing calls this since the Keycloak/SAML migration —
+//   - nothing calls this since the VU SSO (SAML) migration —
 //     every guard now uses auth/verifySamlSession.js instead;
 //     kept as the Microsoft-era verifier
 // -----------------------------------------------------------

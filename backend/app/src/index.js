@@ -18,12 +18,12 @@
 //         /auth/saml        — routes/saml.js (login flow)
 //         /uploads/*        — uploaded attachments (static)
 //
-//  Auth model since the Keycloak/SAML migration: the SAML
+//  Auth model since the VU SSO (SAML) migration: the SAML
 //  /assert callback stores the login in an express-session
 //  cookie (secure, 8 h); verifySamlSession reads it back and
 //  attachRoles loads the caller's DB roles. Booting BLOCKS on
-//  fetching Keycloak's IdP metadata (createSamlSetup) — no
-//  Keycloak, no backend.
+//  loading the VU SSO IdP metadata (createSamlSetup) from
+//  _SAML/ — no IdP metadata, no backend.
 //
 //  Gotcha: the /uploads mount serves every uploaded file
 //  WITHOUT auth, and it is mounted BEFORE the session
@@ -46,7 +46,7 @@ import userRolesRouter from "./routes/userRoles.js";
 import sessionRouter from './routes/session.js';
 import themesRouter from "./routes/themes.js";
 import activitiesRouter from "./routes/activities.js";
-import { createSamlSetup } from './utils/saml.js';
+import { createSamlSetup, SAML_BASE_PATH } from './utils/saml.js';
 import createSamlRouter from './routes/saml.js';
 
 // Auth middleware
@@ -58,7 +58,6 @@ import { attachRoles } from './auth/attachRoles.js';
 // config arrives as real environment variables
 dotenv.config();
 
-const APP_BASE_URL = process.env.APP_BASE_URL;
 const app = express();
 
 // Behind the Caddy ingress — trust its X-Forwarded-* headers
@@ -118,10 +117,20 @@ app.use(session({
   },
 }));
 
-// Blocks until Keycloak's SAML metadata is fetched — the
-// backend cannot boot without the IdP
-const samlSetup = await createSamlSetup(APP_BASE_URL);
-app.use('/auth/saml', createSamlRouter({ sp: samlSetup.sp, idp: samlSetup.idp }));
+// Blocks until the IdP metadata is loaded (the VU SSO descriptor
+// in _SAML/, or a URL) — the backend cannot
+// boot without it
+const samlSetup = await createSamlSetup();
+console.log(`SAML IdP ${samlSetup.idpEntityId} from ${samlSetup.idpSource}; SP identity ${samlSetup.spEntityIdOverride ?? "derived from the request host"}`);
+const samlRouter = createSamlRouter({ setup: samlSetup });
+app.use(SAML_BASE_PATH, samlRouter);
+
+// SP_ACS_URL points the registered ACS somewhere other than
+// /auth/saml/assert (reusing lab.knf.vu.lt's registration) —
+// serve the same handler there too
+if (samlSetup.acsPath !== samlSetup.defaultAcsPath) {
+  app.post(samlSetup.acsPath, samlRouter.assert);
+}
 
 
 
