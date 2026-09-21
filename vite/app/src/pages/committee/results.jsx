@@ -13,12 +13,18 @@
 //
 //  Split into (root component last):
 //
-//    getActiveRole — activeRole from localStorage
-//    codeToNums    — "1.2.3" → [1,2,3]
-//    compareCodes  — numeric-aware code ordering
-//    statusClass   — status → pill css class
-//    formatDate    — ISO → lt-LT date-time
-//    ResultsPage   — table + modal (default export)
+//    getActiveRole       — activeRole from localStorage
+//    codeToNums          — "1.2.3" → [1,2,3]
+//    compareCodes        — numeric-aware code ordering
+//    sortedSubthemes     — a theme's subthemes, code-ordered
+//    statusClass         — status → pill css class
+//    formatDate          — ISO → lt-LT date-time
+//    ResultsTable        — the ĮVERTINTA rows with scores
+//    ThemeSubthemeFields — theme/subtheme, editable while
+//                          re-scoring
+//    ActivityDetails     — the modal's read-only fields
+//    ResultsModal        — review + re-scoring modal
+//    ResultsPage         — list state, requests (default)
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
@@ -82,7 +88,7 @@ function codeToNums(code) {
 // sort would invert them); ties fall back to localeCompare.
 //
 // Used by:
-//   - ResultsPage (below) — subtheme dropdown ordering
+//   - sortedSubthemes (below)
 // -----------------------------------------------------------
 
 function compareCodes(a, b) {
@@ -106,6 +112,30 @@ function compareCodes(a, b) {
 
 
 // -----------------------------------------------------------
+// sortedSubthemes
+// -----------------------------------------------------------
+//
+// A theme's subthemes as a new array in compareCodes order;
+// a missing theme (or one without subthemes) gives [].
+//
+// Used by:
+//   - ThemeSubthemeFields (below) — the subtheme dropdown
+//     and the first-subtheme preselect on theme change
+// -----------------------------------------------------------
+
+function sortedSubthemes(theme) {
+  return [...(theme?.subthemes || [])].sort((a, b) =>
+    compareCodes(a.code, b.code)
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // statusClass
 // -----------------------------------------------------------
 //
@@ -114,7 +144,7 @@ function compareCodes(a, b) {
 // never shows here anyway.
 //
 // Used by:
-//   - ResultsPage (below) — table and modal
+//   - ResultsTable, ActivityDetails (below)
 // -----------------------------------------------------------
 
 function statusClass(status) {
@@ -146,7 +176,7 @@ function statusClass(status) {
 // empty input renders as an empty string.
 //
 // Used by:
-//   - ResultsPage (below) — the modal's Sukurta line
+//   - ResultsModal (below) — the Sukurta line
 // -----------------------------------------------------------
 
 function formatDate(iso) {
@@ -168,14 +198,510 @@ function formatDate(iso) {
 
 
 // -----------------------------------------------------------
+// ResultsTable
+// -----------------------------------------------------------
+//
+// Every ĮVERTINTA activity with its score ("(nėra)" when
+// null) and a "Peržiūrėti" button that opens the modal.
+// Loading and empty states are early returns.
+//
+// Used by:
+//   - ResultsPage (below)
+// -----------------------------------------------------------
+
+function ResultsTable({ items, loading, onOpen }) {
+  if (loading) {
+    return <div className="employee-muted">Kraunama…</div>;
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="employee-empty">
+        (Šiuo metu nėra įvertintų veiklų.)
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-wrapper">
+      <table className="table my-activities-table">
+        <thead>
+          <tr>
+            <th>Darbuotojas</th>
+            <th>Tema</th>
+            <th>Potemė</th>
+            <th>Veiklos pavadinimas</th>
+            <th>Būsena</th>
+            <th>Įvertinimas</th>
+            <th>Veiksmai</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((act) => (
+            <tr key={act.id}>
+              <td>{act.full_name}</td>
+              <td>
+                {act.theme_code} — {act.theme_title}
+              </td>
+              <td>
+                {act.subtheme_code} — {act.subtheme_title}
+              </td>
+              <td>{act.title}</td>
+              <td>
+                <span className={statusClass(act.status)}>
+                  {act.status}
+                </span>
+              </td>
+              <td>
+                {act.score !== null &&
+                act.score !== undefined ? (
+                  act.score
+                ) : (
+                  <span className="table-muted">(nėra)</span>
+                )}
+              </td>
+              <td>
+                <div className="my-activities-actions">
+                  <button
+                    type="button"
+                    onClick={() => onOpen(act)}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    Peržiūrėti
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ThemeSubthemeFields
+// -----------------------------------------------------------
+//
+// The modal's Tema / Potemė fields: the activity's current
+// pair as text in view mode, two AppSelects while re-scoring.
+// Picking a new theme preselects its first (code-ordered)
+// subtheme, or "" when it has none — then the subtheme field
+// shows "(potemių nėra)".
+//
+// Used by:
+//   - ResultsModal (below)
+// -----------------------------------------------------------
+
+function ThemeSubthemeFields({
+  act,
+  editing,
+  themes,
+  themeId,
+  subthemeId,
+  onThemeChange,
+  onSubthemeChange,
+}) {
+
+  const currentTheme = themes.find((t) => String(t.id) === String(themeId));
+  const subthemes = sortedSubthemes(currentTheme);
+
+
+  const handleThemeChange = (val) => {
+    onThemeChange(val);
+    const t = themes.find((tt) => String(tt.id) === String(val));
+    const firstSub = sortedSubthemes(t)[0];
+    onSubthemeChange(firstSub ? String(firstSub.id) : "");
+  };
+
+
+  return (
+    <>
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">Tema</div>
+        {!editing ? (
+          <div className="employee-modal-value">
+            {act.theme_code} — {act.theme_title}
+          </div>
+        ) : (
+          <AppSelect
+            value={themeId}
+            onChange={handleThemeChange}
+            options={themes}
+            getLabel={(t) => `${t.code} — ${t.title}`}
+            placeholder="Pasirinkite temą"
+          />
+        )}
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">Potemė</div>
+        {!editing ? (
+          <div className="employee-modal-value">
+            {act.subtheme_code} — {act.subtheme_title}
+          </div>
+        ) : subthemes.length === 0 ? (
+          <div className="employee-modal-muted">(potemių nėra)</div>
+        ) : (
+          <AppSelect
+            value={subthemeId}
+            onChange={(val) => onSubthemeChange(val)}
+            options={subthemes}
+            getLabel={(s) => `${s.code} — ${s.title}`}
+            placeholder="Pasirinkite potemę"
+          />
+        )}
+      </div>
+    </>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ActivityDetails
+// -----------------------------------------------------------
+//
+// The modal's read-only fields: title, description, status
+// pill, the attachment download button (relabelled while
+// `downloading`) and the manager's comments. Missing
+// optional values render as muted placeholders.
+//
+// Used by:
+//   - ResultsModal (below)
+// -----------------------------------------------------------
+
+function ActivityDetails({ act, downloading, onDownload }) {
+  return (
+    <>
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">
+          Veiklos pavadinimas
+        </div>
+        <div className="employee-modal-value">{act.title}</div>
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">
+          Veiklos aprašymas
+        </div>
+        {act.description ? (
+          <div className="employee-modal-value">
+            {act.description}
+          </div>
+        ) : (
+          <div className="employee-modal-muted">(nenurodyta)</div>
+        )}
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">Būsena</div>
+        <div className="employee-modal-value">
+          <span className={statusClass(act.status)}>
+            {act.status}
+          </span>
+        </div>
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">Priedas</div>
+        {act.attachment_path ? (
+          <button
+            type="button"
+            onClick={() => onDownload(act)}
+            className="btn btn-secondary btn-sm"
+            disabled={downloading}
+          >
+            {downloading
+              ? "Atsisiunčiama…"
+              : act.attachment_original_name || "Atsisiųsti"}
+          </button>
+        ) : (
+          <div className="employee-modal-muted">(nėra priedo)</div>
+        )}
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">
+          Vadybininkės komentarai
+        </div>
+        {act.manager_comments ? (
+          <div className="employee-modal-value">
+            {act.manager_comments}
+          </div>
+        ) : (
+          <div className="employee-modal-muted">(nėra)</div>
+        )}
+      </div>
+    </>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ResultsModal
+// -----------------------------------------------------------
+//
+// The review/re-scoring modal for one activity. It owns the
+// edit state — mounted fresh per opened row, so the fields
+// seed from the row: theme/subtheme ids, committee comments,
+// the people count (blank) and the score preview.
+// "Pervertinti" arms re-scoring; "Išsaugoti įvertinimą"
+// validates the people count, derives score = 1/n (2
+// decimals, 0 people → 0) and hands { action: "score", …,
+// theme_id, subtheme_id } to onRescore, which resolves with
+// the updated activity or throws. Re-scoring keeps ĮVERTINTA,
+// so the modal stays open showing the saved values. Status
+// text goes up through onMessage — including the shipped
+// truncated "Veiklos vykdytojų kiekis" for an empty count.
+//
+// Used by:
+//   - ResultsPage (below) — while an activity is selected
+// -----------------------------------------------------------
+
+function ResultsModal({ activity, themes, downloading, onDownload, onRescore, onClose, onMessage }) {
+
+  const act = activity;
+
+  // editingScore arms the inputs, the people count derives
+  // the read-only score preview
+  const [editingScore, setEditingScore] = useState(false);
+  const [editScore, setEditScore] = useState(
+    act.score !== null && act.score !== undefined ? String(act.score) : ""
+  );
+  const [savingScore, setSavingScore] = useState(false);
+  const [editCommitteeComments, setEditCommitteeComments] = useState(
+    act.committee_comments || ""
+  );
+  const [peopleNum, setPeopleNum] = useState("");
+
+  // Theme reassignment
+  const [editThemeId, setEditThemeId] = useState(String(act.theme_id));
+  const [editSubthemeId, setEditSubthemeId] = useState(String(act.subtheme_id));
+
+
+  // Typing a count previews 1/n live; a bad count blanks it
+  const handlePeopleNumChange = (e) => {
+    const val = e.target.value;
+    setPeopleNum(val);
+
+    const n = Number(val);
+    if (Number.isFinite(n) && n >= 0) {
+      const s = n === 0 ? 0 : Number((1 / n).toFixed(2));
+      setEditScore(String(s));
+    } else {
+      setEditScore("");
+    }
+  };
+
+
+  // First click arms re-scoring; second click validates the
+  // people count, derives score = 1/n and saves with the
+  // theme/subtheme too
+  const handleReevaluateClick = async () => {
+    if (!editingScore) {
+      setEditingScore(true);
+      return;
+    }
+
+    if (!peopleNum.trim()) {
+      onMessage("Veiklos vykdytojų kiekis");
+      return;
+    }
+
+    const n = Number(peopleNum);
+    if (!Number.isFinite(n) || n < 0) {
+      onMessage("Veiklos vykdytojų kiekis turi būti 0 arba teigiamas skaičius.");
+      return;
+    }
+
+    const num = n === 0 ? 0 : Number((1 / n).toFixed(2));
+    setEditScore(String(num));
+
+    try {
+      setSavingScore(true);
+      const data = await onRescore({
+        action: "score",
+        score: num,
+        committee_comments: editCommitteeComments,
+        theme_id: editThemeId ? parseInt(editThemeId, 10) : null,
+        subtheme_id: editSubthemeId ? parseInt(editSubthemeId, 10) : null,
+      });
+
+      // Re-scoring keeps ĮVERTINTA — refresh the fields from
+      // the saved row and drop back to view mode
+      setEditThemeId(String(data.theme_id ?? ""));
+      setEditSubthemeId(String(data.subtheme_id ?? ""));
+      setEditScore(
+        data.score !== null && data.score !== undefined
+          ? String(data.score)
+          : ""
+      );
+      setEditCommitteeComments(data.committee_comments || "");
+      setEditingScore(false);
+      onMessage("Įvertinimas atnaujintas.");
+    } catch (e) {
+      onMessage(`Klaida: ${e.message}`);
+    } finally {
+      setSavingScore(false);
+    }
+  };
+
+
+  return (
+    <div className="employee-modal-backdrop" onClick={onClose}>
+      <div
+        className="employee-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="employee-modal-title">
+          Įvertintos veiklos rezultatas
+        </h3>
+
+        <div className="employee-modal-meta">
+          Darbuotojas: <strong>{act.full_name}</strong>
+          <br />
+          Sukurta: {formatDate(act.created_at)}
+        </div>
+
+        <div className="employee-modal-grid">
+          {/* Theme/subtheme — editable in re-scoring mode */}
+          <ThemeSubthemeFields
+            act={act}
+            editing={editingScore}
+            themes={themes}
+            themeId={editThemeId}
+            subthemeId={editSubthemeId}
+            onThemeChange={setEditThemeId}
+            onSubthemeChange={setEditSubthemeId}
+          />
+
+          {/* The activity itself — read-only */}
+          <ActivityDetails
+            act={act}
+            downloading={downloading}
+            onDownload={onDownload}
+          />
+
+          {/* Committee comments — writable only while
+              re-scoring */}
+          <div className="employee-modal-field">
+            <div className="employee-modal-label">
+              Komisijos nario komentarai
+            </div>
+            <textarea
+              className="field-textarea"
+              value={editCommitteeComments}
+              onChange={(e) =>
+                setEditCommitteeComments(e.target.value)
+              }
+              readOnly={!editingScore}
+            />
+          </div>
+
+          {/* People count → live 1/n score preview */}
+          {editingScore && (
+            <div className="employee-modal-field">
+              <div className="employee-modal-label">
+                Veiklos vykdytojų kiekis
+              </div>
+              <input
+                className="field-input"
+                type="number"
+                min="0"
+                step="1"
+                value={peopleNum}
+                onChange={handlePeopleNumChange}
+                style={{ maxWidth: "140px" }}
+              />
+            </div>
+          )}
+
+          {/* The derived score — never typed directly */}
+          <div className="employee-modal-field">
+            <div className="employee-modal-label">
+              Įvertinimas
+            </div>
+            {!editingScore ? (
+              <div className="employee-modal-value">
+                {act.score !== null && act.score !== undefined ? (
+                  act.score
+                ) : (
+                  <span className="employee-modal-muted">(nėra)</span>
+                )}
+              </div>
+            ) : (
+              <input
+                className="field-input"
+                type="number"
+                value={editScore}
+                readOnly
+                style={{ maxWidth: "140px" }}
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="employee-modal-footer">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn btn-secondary btn-sm"
+            disabled={savingScore}
+          >
+            Uždaryti
+          </button>
+
+          <button
+            type="button"
+            onClick={handleReevaluateClick}
+            className="btn btn-primary btn-sm"
+            disabled={savingScore}
+          >
+            {editingScore
+              ? savingScore
+                ? "Saugoma…"
+                : "Išsaugoti įvertinimą"
+              : "Pervertinti"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // ResultsPage (default export)
 // -----------------------------------------------------------
 //
-// Loads /api/activities/evaluated and the theme tree in
-// parallel on mount. Re-scoring PATCHes
+// Owns the list, the theme tree, the selected activity and
+// every request: /api/activities/evaluated and /api/themes
+// load in parallel on mount; re-scoring PATCHes
 // /api/activities/:id/committee with action "score" plus the
-// (possibly reassigned) theme/subtheme ids. The modal is an
-// inline render helper (renderModal) sharing this state.
+// (possibly reassigned) theme/subtheme ids and patches the
+// row and the open modal in place. One error/status line
+// (msg) serves the table and the modal.
 //
 // Used by:
 //   - App.jsx — route /committee/results
@@ -187,19 +713,8 @@ export default function ResultsPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [downloadingId, setDownloadingId] = useState(null);
-
-  // Modal + re-scoring state
   const [selectedActivity, setSelectedActivity] = useState(null);
-  const [editingScore, setEditingScore] = useState(false);
-  const [editScore, setEditScore] = useState("");
-  const [savingScore, setSavingScore] = useState(false);
-  const [editCommitteeComments, setEditCommitteeComments] = useState("");
-  const [peopleNum, setPeopleNum] = useState("");
-
-  // Theme reassignment state
   const [themes, setThemes] = useState([]);
-  const [editThemeId, setEditThemeId] = useState("");
-  const [editSubthemeId, setEditSubthemeId] = useState("");
 
 
   // Evaluated activities and themes load in parallel on mount
@@ -290,336 +805,39 @@ export default function ResultsPage() {
   };
 
 
-  // Opening a row seeds every edit field from it, in view
-  // mode
+  // Opening a row also clears the status line
   const openModal = (act) => {
     setSelectedActivity(act);
-    setEditingScore(false);
-    setEditScore( act.score !== null && act.score !== undefined ? String(act.score) : "");
-    setEditCommitteeComments(act.committee_comments || "");
-    setPeopleNum("");
     setMsg("");
-    setEditThemeId(String(act.theme_id));
-    setEditSubthemeId(String(act.subtheme_id));
-  };
-
-  const closeModal = () => {
-    setSelectedActivity(null);
-    setEditingScore(false);
-    setSavingScore(false);
   };
 
 
-  // First click arms re-scoring; second click validates the
-  // people count, derives score = 1/n and PATCHes with the
-  // theme/subtheme too. (The empty-count message is a shipped
-  // truncated sentence, same as on the evaluate page.)
-  const handleReevaluateClick = async () => {
-    if (!selectedActivity) return;
+  // The modal's save: PATCH, then patch the row and the open
+  // modal in place (re-scoring keeps ĮVERTINTA). Throws on a
+  // failed response — the modal shows the message
+  const handleRescore = async (body) => {
+    const activeRole = getActiveRole();
 
-    if (!editingScore) {
-      setEditingScore(true);
-      return;
-    }
-
-    if (!peopleNum.trim()) {
-      setMsg("Veiklos vykdytojų kiekis");
-      return;
-    }
-
-    const n = Number(peopleNum);
-    if (!Number.isFinite(n) || n < 0) {
-      setMsg("Veiklos vykdytojų kiekis turi būti 0 arba teigiamas skaičius.");
-      return;
-    }
-
-    const num = n === 0 ? 0 : Number((1 / n).toFixed(2));
-    setEditScore(String(num));
-
-    try {
-      setSavingScore(true);
-      const activeRole = getActiveRole();
-
-      const res = await fetch(
-        `/api/activities/${selectedActivity.id}/committee`,
-        {
-          method: "PATCH",
-          headers: {
-            "X-Active-Role": activeRole,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            action: "score",
-            score: num,
-            committee_comments: editCommitteeComments,
-            theme_id: editThemeId ? parseInt(editThemeId, 10) : null,
-            subtheme_id: editSubthemeId ? parseInt(editSubthemeId, 10) : null,
-          }),
-        }
-      );
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || `${res.status} ${res.statusText}`);
+    const res = await fetch(
+      `/api/activities/${selectedActivity.id}/committee`,
+      {
+        method: "PATCH",
+        headers: {
+          "X-Active-Role": activeRole,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
       }
+    );
 
-      // Re-scoring keeps ĮVERTINTA — patch the row and the
-      // open modal in place
-      setItems((prev) => prev.map((x) => (x.id === data.id ? data : x)));
-      setSelectedActivity(data);
-      setEditThemeId(String(data.theme_id ?? ""));
-      setEditSubthemeId(String(data.subtheme_id ?? ""));
-      setEditScore(
-        data.score !== null && data.score !== undefined
-          ? String(data.score)
-          : ""
-      );
-      setEditCommitteeComments(data.committee_comments || "");
-      setEditingScore(false);
-      setMsg("Įvertinimas atnaujintas.");
-    } catch (e) {
-      setMsg(`Klaida: ${e.message}`);
-    } finally {
-      setSavingScore(false);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || `${res.status} ${res.statusText}`);
     }
-  };
 
-
-  // Inline render helper for the review/re-scoring modal —
-  // kept inside the component because it reads nearly all of
-  // the state above
-  const renderModal = () => {
-    const act = selectedActivity;
-    if (!act) return null;
-
-    const currentTheme = themes.find((t) => String(t.id) === String(editThemeId));
-    const modalSubthemes = [...(currentTheme?.subthemes || [])].sort((a, b) =>
-      compareCodes(a.code, b.code)
-    );
-
-    return (
-      <div className="employee-modal-backdrop" onClick={closeModal}>
-        <div
-          className="employee-modal"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <h3 className="employee-modal-title">
-            Įvertintos veiklos rezultatas
-          </h3>
-
-          <div className="employee-modal-meta">
-            Darbuotojas: <strong>{act.full_name}</strong>
-            <br />
-            Sukurta: {formatDate(act.created_at)}
-          </div>
-
-          <div className="employee-modal-grid">
-            {/* Theme — editable in re-scoring mode; picking a
-                new one preselects its first subtheme */}
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">Tema</div>
-              {!editingScore ? (
-                <div className="employee-modal-value">
-                  {act.theme_code} — {act.theme_title}
-                </div>
-              ) : (
-                <AppSelect
-                  value={editThemeId}
-                  onChange={(val) => {
-                    setEditThemeId(val);
-                    const t = themes.find((tt) => String(tt.id) === String(val));
-                    const sorted = [...(t?.subthemes || [])].sort((a, b) =>
-                      compareCodes(a.code, b.code)
-                    );
-                    const firstSub = sorted[0];
-                    setEditSubthemeId(firstSub ? String(firstSub.id) : "");
-                  }}
-                  options={themes}
-                  getLabel={(t) => `${t.code} — ${t.title}`}
-                  placeholder="Pasirinkite temą"
-                />
-              )}
-            </div>
-
-            {/* Subtheme */}
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">Potemė</div>
-              {!editingScore ? (
-                <div className="employee-modal-value">
-                  {act.subtheme_code} — {act.subtheme_title}
-                </div>
-              ) : modalSubthemes.length === 0 ? (
-                <div className="employee-modal-muted">(potemių nėra)</div>
-              ) : (
-                <AppSelect
-                  value={editSubthemeId}
-                  onChange={(val) => setEditSubthemeId(val)}
-                  options={modalSubthemes}
-                  getLabel={(s) => `${s.code} — ${s.title}`}
-                  placeholder="Pasirinkite potemę"
-                />
-              )}
-            </div>
-
-
-            {/* The activity itself — read-only */}
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Veiklos pavadinimas
-              </div>
-              <div className="employee-modal-value">{act.title}</div>
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Veiklos aprašymas
-              </div>
-              {act.description ? (
-                <div className="employee-modal-value">
-                  {act.description}
-                </div>
-              ) : (
-                <div className="employee-modal-muted">(nenurodyta)</div>
-              )}
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">Būsena</div>
-              <div className="employee-modal-value">
-                <span className={statusClass(act.status)}>
-                  {act.status}
-                </span>
-              </div>
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">Priedas</div>
-              {act.attachment_path ? (
-                <button
-                  type="button"
-                  onClick={() => handleDownload(act)}
-                  className="btn btn-secondary btn-sm"
-                  disabled={downloadingId === act.id}
-                >
-                  {downloadingId === act.id
-                    ? "Atsisiunčiama…"
-                    : act.attachment_original_name || "Atsisiųsti"}
-                </button>
-              ) : (
-                <div className="employee-modal-muted">(nėra priedo)</div>
-              )}
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Vadybininkės komentarai
-              </div>
-              {act.manager_comments ? (
-                <div className="employee-modal-value">
-                  {act.manager_comments}
-                </div>
-              ) : (
-                <div className="employee-modal-muted">(nėra)</div>
-              )}
-            </div>
-
-            {/* Committee comments — writable only while
-                re-scoring */}
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Komisijos nario komentarai
-              </div>
-              <textarea
-                className="field-textarea"
-                value={editCommitteeComments}
-                onChange={(e) =>
-                  setEditCommitteeComments(e.target.value)
-                }
-                readOnly={!editingScore}
-              />
-            </div>
-
-            {/* People count → live 1/n score preview */}
-            {editingScore && (
-              <div className="employee-modal-field">
-                <div className="employee-modal-label">
-                  Veiklos vykdytojų kiekis
-                </div>
-                <input
-                  className="field-input"
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={peopleNum}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setPeopleNum(val);
-
-                    const n = Number(val);
-                    if (Number.isFinite(n) && n >= 0) {
-                      const s = n === 0 ? 0 : Number((1 / n).toFixed(2));
-                      setEditScore(String(s));
-                    } else {
-                      setEditScore("");
-                    }
-                  }}
-                  style={{ maxWidth: "140px" }}
-                />
-              </div>
-            )}
-
-            {/* The derived score — never typed directly */}
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Įvertinimas
-              </div>
-              {!editingScore ? (
-                <div className="employee-modal-value">
-                  {act.score !== null && act.score !== undefined ? (
-                    act.score
-                  ) : (
-                    <span className="employee-modal-muted">(nėra)</span>
-                  )}
-                </div>
-              ) : (
-                <input
-                  className="field-input"
-                  type="number"
-                  value={editScore}
-                  readOnly
-                  style={{ maxWidth: "140px" }}
-                />
-              )}
-            </div>
-
-          </div>
-
-          <div className="employee-modal-footer">
-            <button
-              type="button"
-              onClick={closeModal}
-              className="btn btn-secondary btn-sm"
-              disabled={savingScore}
-            >
-              Uždaryti
-            </button>
-
-            <button
-              type="button"
-              onClick={handleReevaluateClick}
-              className="btn btn-primary btn-sm"
-              disabled={savingScore}
-            >
-              {editingScore
-                ? savingScore
-                  ? "Saugoma…"
-                  : "Išsaugoti įvertinimą"
-                : "Pervertinti"}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    setItems((prev) => prev.map((x) => (x.id === data.id ? data : x)));
+    setSelectedActivity(data);
+    return data;
   };
 
 
@@ -634,67 +852,11 @@ export default function ResultsPage() {
       <main className="page-content">
         <section className="card my-activities-card">
           <div className="card-body">
-            {loading ? (
-              <div className="employee-muted">Kraunama…</div>
-            ) : items.length === 0 ? (
-              <div className="employee-empty">
-                (Šiuo metu nėra įvertintų veiklų.)
-              </div>
-            ) : (
-              <div className="table-wrapper">
-                <table className="table my-activities-table">
-                  <thead>
-                    <tr>
-                      <th>Darbuotojas</th>
-                      <th>Tema</th>
-                      <th>Potemė</th>
-                      <th>Veiklos pavadinimas</th>
-                      <th>Būsena</th>
-                      <th>Įvertinimas</th>
-                      <th>Veiksmai</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((act) => (
-                      <tr key={act.id}>
-                        <td>{act.full_name}</td>
-                        <td>
-                          {act.theme_code} — {act.theme_title}
-                        </td>
-                        <td>
-                          {act.subtheme_code} — {act.subtheme_title}
-                        </td>
-                        <td>{act.title}</td>
-                        <td>
-                          <span className={statusClass(act.status)}>
-                            {act.status}
-                          </span>
-                        </td>
-                        <td>
-                          {act.score !== null &&
-                          act.score !== undefined ? (
-                            act.score
-                          ) : (
-                            <span className="table-muted">(nėra)</span>
-                          )}
-                        </td>
-                        <td>
-                          <div className="my-activities-actions">
-                            <button
-                              type="button"
-                              onClick={() => openModal(act)}
-                              className="btn btn-secondary btn-sm"
-                            >
-                              Peržiūrėti
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <ResultsTable
+              items={items}
+              loading={loading}
+              onOpen={openModal}
+            />
 
             {msg && (
               <div className="form-status form-status--error">
@@ -705,7 +867,19 @@ export default function ResultsPage() {
         </section>
       </main>
 
-      {renderModal()}
+      {/* Mounted fresh per opened row — the modal seeds its
+          edit fields from the activity on mount */}
+      {selectedActivity && (
+        <ResultsModal
+          activity={selectedActivity}
+          themes={themes}
+          downloading={downloadingId === selectedActivity.id}
+          onDownload={handleDownload}
+          onRescore={handleRescore}
+          onClose={() => setSelectedActivity(null)}
+          onMessage={setMsg}
+        />
+      )}
     </div>
   );
 }

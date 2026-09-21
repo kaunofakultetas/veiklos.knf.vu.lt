@@ -22,12 +22,56 @@
 //
 //  Split into (root component last):
 //
-//    getActiveRole — activeRole from localStorage
-//    CalculatePage — both panels (default export)
+//    LAYOUT / PANEL / TABLE_STYLE / TH_STYLE / TD_STYLE
+//                         — inline styles of the two panels
+//    getActiveRole        — activeRole from localStorage
+//    rowResult            — one subtheme row's capped result
+//    ThemeTotalsTable     — left: per-theme score sums
+//    PointValueCalculator — left: theme picker + Skaičiuoti
+//    EmployeePicker       — right: searchable employee dropdown
+//    EmployeeResultsTable — right: capped rows + Iš viso
+//    CalculatePage        — state, loads, save (default export)
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
 import "@/components/employee.css";
+
+
+// Inline style objects for the two panels — this page skips
+// employee.css for its layout, the only page that does
+const LAYOUT = {
+  display: "flex",
+  gap: 16,
+  alignItems: "flex-start",
+  flexWrap: "nowrap",
+};
+
+const PANEL = {
+  flex: "0 0 50%",
+  minWidth: 0,
+  border: "1px solid #e5e7eb",
+  borderRadius: 10,
+  padding: 16,
+};
+
+const TABLE_STYLE = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: 13,
+};
+
+const TH_STYLE = {
+  borderBottom: "1px solid #e5e7eb",
+  padding: "6px 6px",
+  textAlign: "left",
+  fontWeight: 600,
+};
+
+const TD_STYLE = {
+  borderBottom: "1px solid #e5e7eb",
+  padding: "6px 6px",
+  textAlign: "left",
+};
 
 
 
@@ -57,16 +101,452 @@ function getActiveRole() {
 
 
 // -----------------------------------------------------------
+// rowResult
+// -----------------------------------------------------------
+//
+// One employee subtheme row → { score, point, hasRaw,
+// resultValue }: result = score × the theme's SAVED point
+// value, clamped to the subtheme cap when cap > 0 (cap 0 or
+// null = no cap). hasRaw is false when the raw product is 0
+// or not finite — such rows display "—" and add nothing to
+// "Iš viso".
+//
+// Used by:
+//   - EmployeeResultsTable (below) — every row and the total
+// -----------------------------------------------------------
+
+function rowResult(row) {
+  const score = Number(row.total_score) || 0;
+  const point = Number(row.theme_pointvalue) || 0;
+  const cap =
+    row.subtheme_cap !== null && row.subtheme_cap !== undefined
+      ? Number(row.subtheme_cap)
+      : null;
+
+  const rawValue = score * point;
+  const hasRaw = Number.isFinite(rawValue) && rawValue > 0;
+
+  let resultValue = hasRaw ? rawValue : 0;
+  if (cap !== null && Number.isFinite(cap) && cap > 0) {
+    resultValue = Math.min(rawValue, cap);
+  }
+
+  return { score, point, hasRaw, resultValue };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ThemeTotalsTable
+// -----------------------------------------------------------
+//
+// The left panel's top table: every theme with its uncapped
+// ĮVERTINTA score sum (total_score, 0 when null). Loading and
+// empty states are early returns.
+//
+// Used by:
+//   - CalculatePage (below) — left panel
+// -----------------------------------------------------------
+
+function ThemeTotalsTable({ themeTotals, loading }) {
+  if (loading) {
+    return (
+      <div className="employee-muted">
+        Kraunama temų informacija…
+      </div>
+    );
+  }
+
+  if (themeTotals.length === 0) {
+    return (
+      <div className="employee-empty">
+        Šiuo metu nėra įvertintų temų.
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-wrapper">
+      <table style={TABLE_STYLE}>
+        <thead>
+          <tr>
+            <th style={TH_STYLE}>Tema</th>
+            <th style={TH_STYLE}>Pavadinimas</th>
+            <th style={TH_STYLE}>Bendra balų suma</th>
+          </tr>
+        </thead>
+        <tbody>
+          {themeTotals.map((t) => (
+            <tr key={t.theme_id}>
+              <td style={TD_STYLE}>{t.theme_code}</td>
+              <td style={TD_STYLE}>{t.theme_title}</td>
+              <td style={TD_STYLE}>{t.total_score ?? 0}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// PointValueCalculator
+// -----------------------------------------------------------
+//
+// The left panel's "Skaičiuoklė" block: theme <select>, the
+// theme's budget and score sum as read-only inputs (blank
+// until a theme is picked), the "Skaičiuoti" button and the
+// "1 balo vertė" result box. The button is disabled without
+// a theme, when valuePerScore is null/non-finite, or while
+// saving; the box shows the value only after a successful
+// save (hasCalculated).
+//
+// Used by:
+//   - CalculatePage (below) — left panel
+// -----------------------------------------------------------
+
+function PointValueCalculator({
+  themeTotals,
+  selectedThemeId,
+  onSelectTheme,
+  totalSum,
+  scoreSum,
+  valuePerScore,
+  hasCalculated,
+  saving,
+  onSave,
+}) {
+  return (
+    <div
+      className="calc-theme-block"
+      style={{
+        marginTop: 20,
+        marginBottom: 8,
+        borderTop: "1px solid #e5e7eb",
+        paddingTop: 12,
+      }}
+    >
+      <h3>Skaičiuoklė</h3>
+
+      <div style={{ marginBottom: 10 }}>
+        <label
+          className="field-label"
+          htmlFor="calc-theme-select"
+        >
+          Pasirinkite temą
+        </label>
+        <select
+          id="calc-theme-select"
+          value={selectedThemeId}
+          onChange={(e) => onSelectTheme(e.target.value)}
+          className="field-select calc-theme-select"
+        >
+          <option value="">(nepasirinkta)</option>
+          {themeTotals.map((t) => (
+            <option key={t.theme_id} value={t.theme_id}>
+              {t.theme_code} — {t.theme_title}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <div className="employee-modal-muted">
+          Temai nustatyta bendra suma:
+        </div>
+        <input
+          type="text"
+          readOnly
+          value={selectedThemeId ? totalSum : ""}
+          placeholder="-"
+          className="field-input"
+        />
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <div className="employee-modal-muted">
+          Bendra temos balų suma:
+        </div>
+        <input
+          type="text"
+          readOnly
+          value={selectedThemeId ? scoreSum : ""}
+          placeholder="-"
+          className="field-input"
+        />
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <button
+          type="button"
+          onClick={onSave}
+          className="btn btn-primary"
+          disabled={
+            !selectedThemeId ||
+            valuePerScore === null ||
+            !Number.isFinite(valuePerScore) ||
+            saving
+          }
+        >
+          {saving ? "Saugoma…" : "Skaičiuoti"}
+        </button>
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <div className="employee-modal-muted">
+          1 balo vertė:
+        </div>
+        <div className="calc-result-box">
+          {hasCalculated && valuePerScore !== null && Number.isFinite(valuePerScore)
+            ? valuePerScore.toFixed(2)
+            : "—"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// EmployeePicker
+// -----------------------------------------------------------
+//
+// The right panel's employee dropdown — hand-rolled here
+// (with a search box) rather than using AppSelect. The
+// open/closed and search-term state is its own; picking an
+// option reports the oid up, closes the list and clears the
+// search. Loading and empty states are early returns.
+//
+// Used by:
+//   - CalculatePage (below) — right panel
+// -----------------------------------------------------------
+
+function EmployeePicker({ employees, loading, selectedOid, onSelect }) {
+
+  const [open, setOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+
+
+  const options = employees.map((e) => ({
+    id: e.oid,
+    label: e.full_name || e.email || e.oid,
+  }));
+
+  const filteredOptions = options.filter((opt) =>
+    opt.label.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const selectedLabel =
+    options.find((o) => o.id === selectedOid)?.label ||
+    "(nepasirinktas)";
+
+
+  if (loading) {
+    return (
+      <div className="employee-muted">
+        Kraunami darbuotojai…
+      </div>
+    );
+  }
+
+  if (employees.length === 0) {
+    return (
+      <div className="employee-empty">
+        Nerasta darbuotojų.
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="field-select app-select-trigger"
+        style={{
+          width: "100%",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="app-select-label">
+          {selectedLabel}
+        </span>
+        <span className="app-select-chevron">▾</span>
+      </button>
+
+      {open && (
+        <div className="app-select-dropdown">
+          <div className="multi-select-search-wrapper">
+            <input
+              type="text"
+              placeholder="Ieškoti darbuotojo..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="multi-select-search"
+            />
+          </div>
+
+          {filteredOptions.length === 0 ? (
+            <div className="multi-select-empty">
+              (nėra atitinkančių darbuotojų)
+            </div>
+          ) : (
+            filteredOptions.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                className="app-select-option"
+                onClick={() => {
+                  onSelect(opt.id);
+                  setOpen(false);
+                  setSearchTerm("");
+                }}
+              >
+                {opt.label}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// EmployeeResultsTable
+// -----------------------------------------------------------
+//
+// The selected employee's per-subtheme rows (rowResult each)
+// and the "Iš viso" line — the sum of the capped results,
+// the same math as the rows. Loading and empty states are
+// early returns.
+//
+// Used by:
+//   - CalculatePage (below) — right panel, once an employee
+//     is selected
+// -----------------------------------------------------------
+
+function EmployeeResultsTable({ rows, loading }) {
+  if (loading) {
+    return (
+      <div className="employee-muted">
+        Kraunama…
+      </div>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div className="employee-empty">
+        Šis darbuotojas neturi įvertintų veiklų.
+      </div>
+    );
+  }
+
+  const total = rows.reduce((sum, row) => {
+    const { hasRaw, resultValue } = rowResult(row);
+    return hasRaw ? sum + resultValue : sum;
+  }, 0);
+
+  return (
+    <>
+      <div className="table-wrapper">
+        <table style={TABLE_STYLE}>
+          <thead>
+            <tr>
+              <th style={TH_STYLE}>Tema</th>
+              <th style={TH_STYLE}>Potemė</th>
+              <th style={TH_STYLE}>Balų suma</th>
+              <th style={TH_STYLE}>1 balo vertė</th>
+              <th style={TH_STYLE}>Rezultatas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, idx) => {
+              const { score, point, hasRaw, resultValue } = rowResult(row);
+              return (
+                <tr key={idx}>
+                  <td style={TD_STYLE}>
+                    {row.theme_code} —{" "}
+                    {row.theme_title}
+                  </td>
+                  <td style={TD_STYLE}>
+                    {row.subtheme_code} —{" "}
+                    {row.subtheme_title}
+                  </td>
+                  <td style={TD_STYLE}>{score}</td>
+                  <td style={TD_STYLE}>
+                    {point
+                      ? point.toFixed(2)
+                      : "—"}
+                  </td>
+                  <td style={TD_STYLE}>
+                    {hasRaw
+                      ? resultValue.toFixed(2)
+                      : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div
+        style={{
+          marginTop: 12,
+          fontSize: 14,
+          fontWeight: 600,
+          textAlign: "right",
+          paddingRight: 8,
+        }}
+      >
+        Iš viso: {total.toFixed(2)}
+      </div>
+    </>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // CalculatePage (default export)
 // -----------------------------------------------------------
 //
-// Theme totals and the employee list load together on mount;
-// the selected employee's subtheme sums load on selection.
-// The "1 balo vertė" result box only fills after a successful
-// save (hasCalculated), and picking another theme blanks it
-// again. This page styles its panels inline (the style
-// objects near the return) instead of via employee.css — the
-// only page that does.
+// Owns the data and the requests: theme totals and the
+// employee list load together on mount, the selected
+// employee's subtheme sums load on selection, and
+// "Skaičiuoti" computes AND persists the point value. The
+// result box only fills after a successful save
+// (hasCalculated), and picking another theme blanks it again.
+// One error/status line (msg) serves every request.
 //
 // Used by:
 //   - App.jsx — route /committee/calculate
@@ -83,11 +563,6 @@ export default function CalculatePage() {
   const [selectedEmployeeOid, setSelectedEmployeeOid] = useState("");
   const [employeeSubthemes, setEmployeeSubthemes] = useState([]);
   const [subthemesLoading, setSubthemesLoading] = useState(false);
-
-  // The employee dropdown is hand-rolled here (with search)
-  // rather than using AppSelect
-  const [employeeDropdownOpen, setEmployeeDropdownOpen] = useState(false);
-  const [employeeSearchTerm, setEmployeeSearchTerm] = useState("");
 
   const [msg, setMsg] = useState("");
   const [savingPoint, setSavingPoint] = useState(false);
@@ -212,28 +687,6 @@ export default function CalculatePage() {
       : null;
 
 
-  // Grand total of the right panel: the same score × point,
-  // cap-clamped math as the rows themselves
-  const totalRezultatas = employeeSubthemes.reduce((sum, row) => {
-    const score = Number(row.total_score) || 0;
-    const point = Number(row.theme_pointvalue) || 0;
-    const cap =
-      row.subtheme_cap !== null && row.subtheme_cap !== undefined
-        ? Number(row.subtheme_cap)
-        : null;
-
-    const rawValue = score * point;
-    const hasRaw = Number.isFinite(rawValue) && rawValue > 0;
-    if (!hasRaw) return sum;
-
-    let resultValue = rawValue;
-    if (cap !== null && Number.isFinite(cap) && cap > 0) {
-      resultValue = Math.min(rawValue, cap);
-    }
-    return sum + resultValue;
-  }, 0);
-
-
   // "Skaičiuoti" both computes AND persists the point value
   const handleSavePointValue = async () => {
     if (!selectedTheme) {
@@ -289,60 +742,13 @@ export default function CalculatePage() {
   };
 
 
-  const employeeOptions = employees.map((e) => ({
-    id: e.oid,
-    label: e.full_name || e.email || e.oid,
-  }));
-
-  const filteredEmployeeOptions = employeeOptions.filter((opt) =>
-    opt.label.toLowerCase().includes(employeeSearchTerm.toLowerCase())
-  );
-
-  const selectedEmployeeLabel =
-    employeeOptions.find((o) => o.id === selectedEmployeeOid)?.label ||
-    "(nepasirinktas)";
-
-  // Dead code — nothing renders these; the theme <select>
-  // below builds its options from themeTotals directly
+  // Dead code — nothing renders these; the theme <select> in
+  // PointValueCalculator builds its options from themeTotals
+  // directly
   const themeOptions = themeTotals.map((t) => ({
     value: String(t.theme_id),
     label: `${t.theme_code} — ${t.theme_title}`,
   }));
-
-
-  // Inline style objects for the two panels — this page skips
-  // employee.css for its layout
-  const layout = {
-    display: "flex",
-    gap: 16,
-    alignItems: "flex-start",
-    flexWrap: "nowrap",
-  };
-
-  const panel = {
-    flex: "0 0 50%",
-    minWidth: 0,
-    border: "1px solid #e5e7eb",
-    borderRadius: 10,
-    padding: 16,
-  };
-
-  const tableStyle = {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: 13,
-  };
-  const thStyle = {
-    borderBottom: "1px solid #e5e7eb",
-    padding: "6px 6px",
-    textAlign: "left",
-    fontWeight: 600,
-  };
-  const tdStyle = {
-    borderBottom: "1px solid #e5e7eb",
-    padding: "6px 6px",
-    textAlign: "left",
-  };
 
 
   return (
@@ -356,207 +762,45 @@ export default function CalculatePage() {
       <main className="page-content">
         <section className="card">
           <div className="card-body">
-            <div style={layout}>
+            <div style={LAYOUT}>
 
               {/* Left panel — theme totals + the point-value
                   calculator */}
-              <div style={panel}>
+              <div style={PANEL}>
                 <h3>Temų balų suvestinė</h3>
 
-                {themesLoading ? (
-                  <div className="employee-muted">
-                    Kraunama temų informacija…
-                  </div>
-                ) : themeTotals.length === 0 ? (
-                  <div className="employee-empty">
-                    Šiuo metu nėra įvertintų temų.
-                  </div>
-                ) : (
-                  <div className="table-wrapper">
-                    <table style={tableStyle}>
-                      <thead>
-                        <tr>
-                          <th style={thStyle}>Tema</th>
-                          <th style={thStyle}>Pavadinimas</th>
-                          <th style={thStyle}>Bendra balų suma</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {themeTotals.map((t) => (
-                          <tr key={t.theme_id}>
-                            <td style={tdStyle}>{t.theme_code}</td>
-                            <td style={tdStyle}>{t.theme_title}</td>
-                            <td style={tdStyle}>{t.total_score ?? 0}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                <ThemeTotalsTable
+                  themeTotals={themeTotals}
+                  loading={themesLoading}
+                />
 
-                <div
-                  className="calc-theme-block"
-                  style={{
-                    marginTop: 20,
-                    marginBottom: 8,
-                    borderTop: "1px solid #e5e7eb",
-                    paddingTop: 12,
-                  }}
-                >
-                  <h3>Skaičiuoklė</h3>
-
-                  <div style={{ marginBottom: 10 }}>
-                    <label
-                      className="field-label"
-                      htmlFor="calc-theme-select"
-                    >
-                      Pasirinkite temą
-                    </label>
-                    <select
-                      id="calc-theme-select"
-                      value={selectedThemeId}
-                      onChange={(e) => setSelectedThemeId(e.target.value)}
-                      className="field-select calc-theme-select"
-                    >
-                      <option value="">(nepasirinkta)</option>
-                      {themeTotals.map((t) => (
-                        <option key={t.theme_id} value={t.theme_id}>
-                          {t.theme_code} — {t.theme_title}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div style={{ marginBottom: 10 }}>
-                    <div className="employee-modal-muted">
-                      Temai nustatyta bendra suma:
-                    </div>
-                    <input
-                      type="text"
-                      readOnly
-                      value={selectedThemeId ? selectedThemeTotalSum : ""}
-                      placeholder="-"
-                      className="field-input"
-                    />
-                  </div>
-
-                  <div style={{ marginBottom: 10 }}>
-                    <div className="employee-modal-muted">
-                      Bendra temos balų suma:
-                    </div>
-                    <input
-                      type="text"
-                      readOnly
-                      value={selectedThemeId ? selectedThemeScoreSum : ""}
-                      placeholder="-"
-                      className="field-input"
-                    />
-                  </div>
-
-                  <div style={{ marginTop: 12 }}>
-                    <button
-                      type="button"
-                      onClick={handleSavePointValue}
-                      className="btn btn-primary"
-                      disabled={
-                        !selectedThemeId ||
-                        valuePerScore === null ||
-                        !Number.isFinite(valuePerScore) ||
-                        savingPoint
-                      }
-                    >
-                      {savingPoint ? "Saugoma…" : "Skaičiuoti"}
-                    </button>
-                  </div>
-
-                  <div style={{ marginTop: 12 }}>
-                    <div className="employee-modal-muted">
-                      1 balo vertė:
-                    </div>
-                      <div className="calc-result-box">
-                        {hasCalculated && valuePerScore !== null && Number.isFinite(valuePerScore)
-                          ? valuePerScore.toFixed(2)
-                          : "—"}
-                      </div>
-                  </div>
-                </div>
+                <PointValueCalculator
+                  themeTotals={themeTotals}
+                  selectedThemeId={selectedThemeId}
+                  onSelectTheme={setSelectedThemeId}
+                  totalSum={selectedThemeTotalSum}
+                  scoreSum={selectedThemeScoreSum}
+                  valuePerScore={valuePerScore}
+                  hasCalculated={hasCalculated}
+                  saving={savingPoint}
+                  onSave={handleSavePointValue}
+                />
               </div>
 
               {/* Right panel — one employee's capped results */}
-              <div style={panel}>
+              <div style={PANEL}>
                 <h3>Darbuotojo veiklos pagal temas ir potemes</h3>
 
                 <div style={{ marginBottom: 12, position: "relative" }}>
                   <div className="employee-modal-muted">
                     Pasirinkite darbuotoją
                   </div>
-                  {employeesLoading ? (
-                    <div className="employee-muted">
-                      Kraunami darbuotojai…
-                    </div>
-                  ) : employees.length === 0 ? (
-                    <div className="employee-empty">
-                      Nerasta darbuotojų.
-                    </div>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="field-select app-select-trigger"
-                        style={{
-                          width: "100%",
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                        }}
-                        onClick={() =>
-                          setEmployeeDropdownOpen((o) => !o)
-                        }
-                      >
-                        <span className="app-select-label">
-                          {selectedEmployeeLabel}
-                        </span>
-                        <span className="app-select-chevron">▾</span>
-                      </button>
-
-                      {employeeDropdownOpen && (
-                        <div className="app-select-dropdown">
-                          <div className="multi-select-search-wrapper">
-                            <input
-                              type="text"
-                              placeholder="Ieškoti darbuotojo..."
-                              value={employeeSearchTerm}
-                              onChange={(e) =>
-                                setEmployeeSearchTerm(e.target.value)
-                              }
-                              className="multi-select-search"
-                            />
-                          </div>
-
-                          {filteredEmployeeOptions.length === 0 ? (
-                            <div className="multi-select-empty">
-                              (nėra atitinkančių darbuotojų)
-                            </div>
-                          ) : (
-                            filteredEmployeeOptions.map((opt) => (
-                              <button
-                                key={opt.id}
-                                type="button"
-                                className="app-select-option"
-                                onClick={() => {
-                                  setSelectedEmployeeOid(opt.id);
-                                  setEmployeeDropdownOpen(false);
-                                  setEmployeeSearchTerm("");
-                                }}
-                              >
-                                {opt.label}
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      )}
-                    </>
-                  )}
+                  <EmployeePicker
+                    employees={employees}
+                    loading={employeesLoading}
+                    selectedOid={selectedEmployeeOid}
+                    onSelect={setSelectedEmployeeOid}
+                  />
                 </div>
 
                 {selectedEmployeeOid && (
@@ -565,99 +809,10 @@ export default function CalculatePage() {
                       Veiklų lentelė pasirinktam darbuotojui
                     </h4>
 
-                    {subthemesLoading ? (
-                      <div className="employee-muted">
-                        Kraunama…
-                      </div>
-                    ) : employeeSubthemes.length === 0 ? (
-                      <div className="employee-empty">
-                        Šis darbuotojas neturi įvertintų veiklų.
-                      </div>
-                    ) : (
-                      <>
-                        <div className="table-wrapper">
-                          <table style={tableStyle}>
-                            <thead>
-                              <tr>
-                                <th style={thStyle}>Tema</th>
-                                <th style={thStyle}>Potemė</th>
-                                <th style={thStyle}>Balų suma</th>
-                                <th style={thStyle}>1 balo vertė</th>
-                                <th style={thStyle}>Rezultatas</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {/* Per row: result = score × stored
-                                  point value, clamped to the
-                                  subtheme cap when cap > 0 */}
-                              {employeeSubthemes.map((row, idx) => {
-                                const score = Number(row.total_score) || 0;
-                                const point =
-                                  Number(row.theme_pointvalue) || 0;
-                                const cap =
-                                  row.subtheme_cap !== null &&
-                                  row.subtheme_cap !== undefined
-                                    ? Number(row.subtheme_cap)
-                                    : null;
-
-                                const rawValue = score * point;
-                                const hasRaw =
-                                  Number.isFinite(rawValue) &&
-                                  rawValue > 0;
-
-                                let resultValue = hasRaw ? rawValue : 0;
-                                if (
-                                  cap !== null &&
-                                  Number.isFinite(cap) &&
-                                  cap > 0
-                                ) {
-                                  resultValue = Math.min(
-                                    rawValue,
-                                    cap
-                                  );
-                                }
-
-                                return (
-                                  <tr key={idx}>
-                                    <td style={tdStyle}>
-                                      {row.theme_code} —{" "}
-                                      {row.theme_title}
-                                    </td>
-                                    <td style={tdStyle}>
-                                      {row.subtheme_code} —{" "}
-                                      {row.subtheme_title}
-                                    </td>
-                                    <td style={tdStyle}>{score}</td>
-                                    <td style={tdStyle}>
-                                      {point
-                                        ? point.toFixed(2)
-                                        : "—"}
-                                    </td>
-                                    <td style={tdStyle}>
-                                      {hasRaw
-                                        ? resultValue.toFixed(2)
-                                        : "—"}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-
-                        <div
-                          style={{
-                            marginTop: 12,
-                            fontSize: 14,
-                            fontWeight: 600,
-                            textAlign: "right",
-                            paddingRight: 8,
-                          }}
-                        >
-                          Iš viso: {totalRezultatas.toFixed(2)}
-                        </div>
-                      </>
-                    )}
+                    <EmployeeResultsTable
+                      rows={employeeSubthemes}
+                      loading={subthemesLoading}
+                    />
                   </div>
                 )}
               </div>

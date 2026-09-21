@@ -16,10 +16,13 @@
 //
 //  Split into (root component last):
 //
-//    getActiveRole — activeRole from localStorage
-//    statusClass   — status → pill css class
-//    formatDate    — ISO → lt-LT date-time
-//    EvaluatePage  — queue + modal (default export)
+//    getActiveRole   — activeRole from localStorage
+//    statusClass     — status → pill css class
+//    formatDate      — ISO → lt-LT date-time
+//    QueueTable      — the PATVIRTINTA rows + row actions
+//    ActivityDetails — the modal's read-only fields
+//    EvaluateModal   — review + scoring modal (own state)
+//    EvaluatePage    — queue state, requests (default export)
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
@@ -63,7 +66,7 @@ function getActiveRole() {
 // PATVIRTINTA rows normally reach this page.
 //
 // Used by:
-//   - EvaluatePage (below) — table and modal
+//   - QueueTable, ActivityDetails (below)
 // -----------------------------------------------------------
 
 function statusClass(status) {
@@ -95,7 +98,7 @@ function statusClass(status) {
 // empty input renders as an empty string.
 //
 // Used by:
-//   - EvaluatePage (below) — the modal's Sukurta line
+//   - EvaluateModal (below) — the Sukurta line
 // -----------------------------------------------------------
 
 function formatDate(iso) {
@@ -117,14 +120,424 @@ function formatDate(iso) {
 
 
 // -----------------------------------------------------------
+// QueueTable
+// -----------------------------------------------------------
+//
+// The PATVIRTINTA queue: one row per activity with
+// "Peržiūrėti" (opens the modal) and "Grąžinti vadybininkei"
+// (disabled and relabelled while that row's PATCH is in
+// flight). Loading and empty states are early returns.
+//
+// Used by:
+//   - EvaluatePage (below)
+// -----------------------------------------------------------
+
+function QueueTable({ items, loading, actingId, onOpen, onReturn }) {
+  if (loading) {
+    return <div className="employee-muted">Kraunama…</div>;
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="employee-empty">
+        (Šiuo metu nėra patvirtintų veiklų.)
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-wrapper">
+      <table className="table my-activities-table">
+        <thead>
+          <tr>
+            <th>Darbuotojas</th>
+            <th>Tema</th>
+            <th>Potemė</th>
+            <th>Veiklos pavadinimas</th>
+            <th>Būsena</th>
+            <th>Veiksmai</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((act) => (
+            <tr key={act.id}>
+              <td>{act.full_name}</td>
+              <td>
+                {act.theme_code} — {act.theme_title}
+              </td>
+              <td>
+                {act.subtheme_code} — {act.subtheme_title}
+              </td>
+              <td>{act.title}</td>
+              <td>
+                <span className={statusClass(act.status)}>
+                  {act.status}
+                </span>
+              </td>
+              <td>
+                <div className="my-activities-actions">
+                  <button
+                    type="button"
+                    onClick={() => onOpen(act)}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    Peržiūrėti
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onReturn(act)}
+                    className="btn btn-ghost btn-sm btn-danger"
+                    disabled={actingId === act.id}
+                  >
+                    {actingId === act.id
+                      ? "Grąžinama…"
+                      : "Grąžinti vadybininkei"}
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ActivityDetails
+// -----------------------------------------------------------
+//
+// The modal's read-only half: theme, subtheme, title,
+// description, status pill, the attachment download button
+// (relabelled while `downloading`) and the manager's
+// comments. Missing optional values render as muted
+// placeholders.
+//
+// Used by:
+//   - EvaluateModal (below)
+// -----------------------------------------------------------
+
+function ActivityDetails({ act, downloading, onDownload }) {
+  return (
+    <>
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">Tema</div>
+        <div className="employee-modal-value">
+          {act.theme_code} — {act.theme_title}
+        </div>
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">Potemė</div>
+        <div className="employee-modal-value">
+          {act.subtheme_code} — {act.subtheme_title}
+        </div>
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">
+          Veiklos pavadinimas
+        </div>
+        <div className="employee-modal-value">{act.title}</div>
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">
+          Veiklos aprašymas
+        </div>
+        {act.description ? (
+          <div className="employee-modal-value">
+            {act.description}
+          </div>
+        ) : (
+          <div className="employee-modal-muted">(nenurodyta)</div>
+        )}
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">Būsena</div>
+        <div className="employee-modal-value">
+          <span className={statusClass(act.status)}>
+            {act.status}
+          </span>
+        </div>
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">Priedas</div>
+        {act.attachment_path ? (
+          <button
+            type="button"
+            onClick={() => onDownload(act)}
+            className="btn btn-secondary btn-sm"
+            disabled={downloading}
+          >
+            {downloading
+              ? "Atsisiunčiama…"
+              : act.attachment_original_name || "Atsisiųsti"}
+          </button>
+        ) : (
+          <div className="employee-modal-muted">(nėra priedo)</div>
+        )}
+      </div>
+
+      <div className="employee-modal-field">
+        <div className="employee-modal-label">
+          Vadybininkės komentarai
+        </div>
+        {act.manager_comments ? (
+          <div className="employee-modal-value">
+            {act.manager_comments}
+          </div>
+        ) : (
+          <div className="employee-modal-muted">(nėra)</div>
+        )}
+      </div>
+    </>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// EvaluateModal
+// -----------------------------------------------------------
+//
+// The review/scoring modal for one activity. It owns the
+// scoring state — mounted fresh per opened row, so the
+// fields seed from the row: committee comments, the people
+// count (blank) and the score preview. "Įvertinti" arms
+// scoring mode; "Išsaugoti įvertinimą" validates the people
+// count, derives score = 1/n (2 decimals, 0 people → 0) and
+// hands { action: "score", … } to onScore, which resolves
+// with the updated activity or throws (the page has already
+// shown the error). Scoring always leaves PATVIRTINTA, so a
+// successful save closes the modal. Status text goes up
+// through onMessage — including the shipped truncated
+// "Veiklos vykdytojų kiekis" for an empty count.
+//
+// Used by:
+//   - EvaluatePage (below) — while an activity is selected
+// -----------------------------------------------------------
+
+function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, onMessage }) {
+
+  const act = activity;
+
+  // editingScore arms the input, the people count derives the
+  // read-only score preview
+  const [editingScore, setEditingScore] = useState(false);
+  const [editScore, setEditScore] = useState(
+    act.score !== null && act.score !== undefined ? String(act.score) : ""
+  );
+  const [savingScore, setSavingScore] = useState(false);
+  const [editCommitteeComments, setEditCommitteeComments] = useState(
+    act.committee_comments || ""
+  );
+  const [peopleNum, setPeopleNum] = useState("");
+
+
+  // Typing a count previews 1/n live; a bad count blanks it
+  const handlePeopleNumChange = (e) => {
+    const val = e.target.value;
+    setPeopleNum(val);
+
+    const n = Number(val);
+    if (Number.isFinite(n) && n >= 0) {
+      const s = n === 0 ? 0 : Number((1 / n).toFixed(2));
+      setEditScore(String(s));
+    } else {
+      setEditScore("");
+    }
+  };
+
+
+  // First click arms scoring mode; second click validates the
+  // people count, derives score = 1/n and saves
+  const handleEvaluateClick = async () => {
+    if (!editingScore) {
+      setEditingScore(true);
+      return;
+    }
+
+    if (!peopleNum.trim()) {
+      onMessage("Veiklos vykdytojų kiekis");
+      return;
+    }
+
+    const n = Number(peopleNum);
+    if (!Number.isFinite(n) || n < 0) {
+      onMessage("Veiklos vykdytojų kiekis turi būti 0 arba teigiamas skaičius.");
+      return;
+    }
+    const num = n === 0 ? 0 : Number((1 / n).toFixed(2));
+    setEditScore(String(num));
+
+    try {
+      setSavingScore(true);
+      const updated = await onScore({
+        action: "score",
+        score: num,
+        committee_comments: editCommitteeComments,
+      });
+
+      setEditScore(
+        updated.score !== null && updated.score !== undefined
+          ? String(updated.score)
+          : ""
+      );
+      setEditCommitteeComments(updated.committee_comments || "");
+      setEditingScore(false);
+      onMessage("Įvertinimas išsaugotas.");
+
+      // Scoring always leaves PATVIRTINTA, so this closes
+      // the modal on success
+      if (updated.status !== "PATVIRTINTA") {
+        onClose();
+      }
+    } catch {
+      // ignore — onScore already surfaced the error
+    } finally {
+      setSavingScore(false);
+    }
+  };
+
+
+  return (
+    <div className="employee-modal-backdrop" onClick={onClose}>
+      <div
+        className="employee-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="employee-modal-title">Veiklų įvertinimas</h3>
+        <div className="employee-modal-meta">
+          Darbuotojas: <strong>{act.full_name}</strong>
+          <br />
+          Sukurta: {formatDate(act.created_at)}
+        </div>
+
+        <div className="employee-modal-grid">
+          {/* The activity itself — all read-only here */}
+          <ActivityDetails
+            act={act}
+            downloading={downloading}
+            onDownload={onDownload}
+          />
+
+          {/* Committee comments — writable only in scoring
+              mode */}
+          <div className="employee-modal-field">
+            <div className="employee-modal-label">
+              Komisijos nario komentarai
+            </div>
+            <textarea
+              className="field-textarea"
+              value={editCommitteeComments}
+              onChange={(e) =>
+                setEditCommitteeComments(e.target.value)
+              }
+              readOnly={!editingScore}
+            />
+          </div>
+
+          {/* People count → live 1/n score preview */}
+          {editingScore && (
+            <div className="employee-modal-field">
+              <div className="employee-modal-label">
+                Veiklos vykdytojų kiekis
+              </div>
+              <input
+                className="field-input"
+                type="number"
+                min="0"
+                step="1"
+                value={peopleNum}
+                onChange={handlePeopleNumChange}
+                style={{ maxWidth: "140px" }}
+              />
+            </div>
+          )}
+
+          {/* The derived score — never typed directly */}
+          <div className="employee-modal-field">
+            <div className="employee-modal-label">
+              Įvertinimas
+            </div>
+            {!editingScore ? (
+              <div className="employee-modal-value">
+                {act.score !== null && act.score !== undefined ? (
+                  act.score
+                ) : (
+                  <span className="employee-modal-muted">(nėra)</span>
+                )}
+              </div>
+            ) : (
+              <input
+                className="field-input"
+                type="number"
+                value={editScore}
+                readOnly
+                style={{ maxWidth: "140px" }}
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="employee-modal-footer">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn btn-secondary btn-sm"
+            disabled={savingScore}
+          >
+            Uždaryti
+          </button>
+
+          <button
+            type="button"
+            onClick={handleEvaluateClick}
+            className="btn btn-primary btn-sm"
+            disabled={savingScore}
+          >
+            {editingScore
+              ? savingScore
+                ? "Saugoma…"
+                : "Išsaugoti įvertinimą"
+              : "Įvertinti"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // EvaluatePage (default export)
 // -----------------------------------------------------------
 //
-// Owns the queue and all state; verdicts go through
-// callCommitteeAction (PATCH /api/activities/:id/committee).
-// A response whose status left PATVIRTINTA drops out of the
-// queue — both scoring and returning do. The modal is an
-// inline render helper (renderModal) sharing this state.
+// Owns the queue, the selected activity and every request;
+// verdicts go through callCommitteeAction (PATCH
+// /api/activities/:id/committee). A response whose status
+// left PATVIRTINTA drops out of the queue — both scoring and
+// returning do. One error/status line (msg) serves the table
+// and the modal.
 //
 // Used by:
 //   - App.jsx — route /committee/evaluate
@@ -137,16 +550,7 @@ export default function EvaluatePage() {
   const [msg, setMsg] = useState("");
   const [actingId, setActingId] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
-
-
-  // Modal + scoring state: editingScore arms the input, the
-  // people count derives the read-only score preview
   const [selectedActivity, setSelectedActivity] = useState(null);
-  const [editingScore, setEditingScore] = useState(false);
-  const [editScore, setEditScore] = useState("");
-  const [savingScore, setSavingScore] = useState(false);
-  const [editCommitteeComments, setEditCommitteeComments] = useState("");
-  const [peopleNum, setPeopleNum] = useState("");
 
 
   // Load the PATVIRTINTA queue on mount
@@ -262,25 +666,6 @@ export default function EvaluatePage() {
   };
 
 
-  // Opening a row seeds the scoring fields from it, in view
-  // mode
-  const openModal = (act) => {
-    setSelectedActivity(act);
-    setEditingScore(false);
-    setEditScore(
-      act.score !== null && act.score !== undefined ? String(act.score) : ""
-    );
-    setEditCommitteeComments(act.committee_comments || "");
-    setPeopleNum("");
-  };
-
-  const closeModal = () => {
-    setSelectedActivity(null);
-    setEditingScore(false);
-    setSavingScore(false);
-  };
-
-
   const handleReturnToManager = async (act) => {
     if (!window.confirm("Grąžinti veiklą vadybininkei?")) return;
     try {
@@ -291,253 +676,13 @@ export default function EvaluatePage() {
   };
 
 
-  // First click arms scoring mode; second click validates the
-  // people count, derives score = 1/n and saves. (The empty-
-  // count message below is a shipped truncated sentence.)
-  const handleEvaluateClick = async () => {
-    if (!selectedActivity) return;
-
-    if (!editingScore) {
-      setEditingScore(true);
-      return;
-    }
-
-    if (!peopleNum.trim()) {
-      setMsg("Veiklos vykdytojų kiekis");
-      return;
-    }
-
-      const n = Number(peopleNum);
-      if (!Number.isFinite(n) || n < 0) {
-        setMsg("Veiklos vykdytojų kiekis turi būti 0 arba teigiamas skaičius.");
-        return;
-      }
-      const num = n === 0 ? 0 : Number((1 / n).toFixed(2));
-      setEditScore(String(num));
-
-      try {
-        setSavingScore(true);
-        const updated = await callCommitteeAction(selectedActivity.id, {
-          action: "score",
-          score: num,
-          committee_comments: editCommitteeComments,
-        });
-
-        setSelectedActivity(updated);
-        setEditScore(
-          updated.score !== null && updated.score !== undefined
-            ? String(updated.score)
-            : ""
-        );
-        setEditCommitteeComments(updated.committee_comments || "");
-        setEditingScore(false);
-        setMsg("Įvertinimas išsaugotas.");
-
-        // Scoring always leaves PATVIRTINTA, so this closes
-        // the modal on success
-        if (updated.status !== "PATVIRTINTA") {
-          closeModal();
-        }
-      } catch {
-        // ignore — callCommitteeAction already surfaced the error
-      } finally {
-        setSavingScore(false);
-      }
-    };
-
-
-  // Inline render helper for the review/scoring modal — kept
-  // inside the component because it reads nearly all of the
-  // state above
-  const renderModal = () => {
-    const act = selectedActivity;
-    if (!act) return null;
-
-    return (
-      <div className="employee-modal-backdrop" onClick={closeModal}>
-        <div
-          className="employee-modal"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <h3 className="employee-modal-title">Veiklų įvertinimas</h3>
-          <div className="employee-modal-meta">
-            Darbuotojas: <strong>{act.full_name}</strong>
-            <br />
-            Sukurta: {formatDate(act.created_at)}
-          </div>
-
-          <div className="employee-modal-grid">
-            {/* The activity itself — all read-only here */}
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">Tema</div>
-              <div className="employee-modal-value">
-                {act.theme_code} — {act.theme_title}
-              </div>
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">Potemė</div>
-              <div className="employee-modal-value">
-                {act.subtheme_code} — {act.subtheme_title}
-              </div>
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Veiklos pavadinimas
-              </div>
-              <div className="employee-modal-value">{act.title}</div>
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Veiklos aprašymas
-              </div>
-              {act.description ? (
-                <div className="employee-modal-value">
-                  {act.description}
-                </div>
-              ) : (
-                <div className="employee-modal-muted">(nenurodyta)</div>
-              )}
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">Būsena</div>
-              <div className="employee-modal-value">
-                <span className={statusClass(act.status)}>
-                  {act.status}
-                </span>
-              </div>
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">Priedas</div>
-              {act.attachment_path ? (
-                <button
-                  type="button"
-                  onClick={() => handleDownload(act)}
-                  className="btn btn-secondary btn-sm"
-                  disabled={downloadingId === act.id}
-                >
-                  {downloadingId === act.id
-                    ? "Atsisiunčiama…"
-                    : act.attachment_original_name || "Atsisiųsti"}
-                </button>
-              ) : (
-                <div className="employee-modal-muted">(nėra priedo)</div>
-              )}
-            </div>
-
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Vadybininkės komentarai
-              </div>
-              {act.manager_comments ? (
-                <div className="employee-modal-value">
-                  {act.manager_comments}
-                </div>
-              ) : (
-                <div className="employee-modal-muted">(nėra)</div>
-              )}
-            </div>
-
-            {/* Committee comments — writable only in scoring
-                mode */}
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Komisijos nario komentarai
-              </div>
-              <textarea
-                className="field-textarea"
-                value={editCommitteeComments}
-                onChange={(e) =>
-                  setEditCommitteeComments(e.target.value)
-                }
-                readOnly={!editingScore}
-              />
-            </div>
-
-            {/* People count → live 1/n score preview */}
-            {editingScore && (
-              <div className="employee-modal-field">
-                <div className="employee-modal-label">
-                  Veiklos vykdytojų kiekis
-                </div>
-                <input
-                  className="field-input"
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={peopleNum}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setPeopleNum(val);
-
-                    const n = Number(val);
-                    if (Number.isFinite(n) && n >= 0) {
-                      const s = n === 0 ? 0 : Number((1 / n).toFixed(2));
-                      setEditScore(String(s));
-                    } else {
-                      setEditScore("");
-                    }
-                  }}
-                  style={{ maxWidth: "140px" }}
-                />
-              </div>
-            )}
-
-            {/* The derived score — never typed directly */}
-            <div className="employee-modal-field">
-              <div className="employee-modal-label">
-                Įvertinimas
-              </div>
-              {!editingScore ? (
-                <div className="employee-modal-value">
-                  {act.score !== null && act.score !== undefined ? (
-                    act.score
-                  ) : (
-                    <span className="employee-modal-muted">(nėra)</span>
-                  )}
-                </div>
-              ) : (
-                <input
-                  className="field-input"
-                  type="number"
-                  value={editScore}
-                  readOnly
-                  style={{ maxWidth: "140px" }}
-                />
-              )}
-            </div>
-          </div>
-
-          <div className="employee-modal-footer">
-            <button
-              type="button"
-              onClick={closeModal}
-              className="btn btn-secondary btn-sm"
-              disabled={savingScore}
-            >
-              Uždaryti
-            </button>
-
-            <button
-              type="button"
-              onClick={handleEvaluateClick}
-              className="btn btn-primary btn-sm"
-              disabled={savingScore}
-            >
-              {editingScore
-                ? savingScore
-                  ? "Saugoma…"
-                  : "Išsaugoti įvertinimą"
-                : "Įvertinti"}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+  // The modal's save: the PATCH result also replaces the
+  // selected activity, so a modal that stays open shows the
+  // saved row
+  const handleScore = async (body) => {
+    const updated = await callCommitteeAction(selectedActivity.id, body);
+    setSelectedActivity(updated);
+    return updated;
   };
 
 
@@ -552,69 +697,13 @@ export default function EvaluatePage() {
       <main className="page-content">
         <section className="card my-activities-card">
           <div className="card-body">
-            {loading ? (
-              <div className="employee-muted">Kraunama…</div>
-            ) : items.length === 0 ? (
-              <div className="employee-empty">
-                (Šiuo metu nėra patvirtintų veiklų.)
-              </div>
-            ) : (
-              <div className="table-wrapper">
-                <table className="table my-activities-table">
-                  <thead>
-                    <tr>
-                      <th>Darbuotojas</th>
-                      <th>Tema</th>
-                      <th>Potemė</th>
-                      <th>Veiklos pavadinimas</th>
-                      <th>Būsena</th>
-                      <th>Veiksmai</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((act) => (
-                      <tr key={act.id}>
-                        <td>{act.full_name}</td>
-                        <td>
-                          {act.theme_code} — {act.theme_title}
-                        </td>
-                        <td>
-                          {act.subtheme_code} — {act.subtheme_title}
-                        </td>
-                        <td>{act.title}</td>
-                        <td>
-                          <span className={statusClass(act.status)}>
-                            {act.status}
-                          </span>
-                        </td>
-                        <td>
-                          <div className="my-activities-actions">
-                            <button
-                              type="button"
-                              onClick={() => openModal(act)}
-                              className="btn btn-secondary btn-sm"
-                            >
-                              Peržiūrėti
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleReturnToManager(act)}
-                              className="btn btn-ghost btn-sm btn-danger"
-                              disabled={actingId === act.id}
-                            >
-                              {actingId === act.id
-                                ? "Grąžinama…"
-                                : "Grąžinti vadybininkei"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <QueueTable
+              items={items}
+              loading={loading}
+              actingId={actingId}
+              onOpen={setSelectedActivity}
+              onReturn={handleReturnToManager}
+            />
 
             {msg && (
               <div className="form-status form-status--error">
@@ -625,7 +714,18 @@ export default function EvaluatePage() {
         </section>
       </main>
 
-      {renderModal()}
+      {/* Mounted fresh per opened row — the modal seeds its
+          scoring fields from the activity on mount */}
+      {selectedActivity && (
+        <EvaluateModal
+          activity={selectedActivity}
+          downloading={downloadingId === selectedActivity.id}
+          onDownload={handleDownload}
+          onScore={handleScore}
+          onClose={() => setSelectedActivity(null)}
+          onMessage={setMsg}
+        />
+      )}
     </div>
   );
 }
