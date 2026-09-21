@@ -838,7 +838,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
           const fn =
             action === "deny" ? sendRejectionEmail : sendReturnEmail;
 
-          // Fire-and-forget: a dead SMTP server must not fail
+          // Fire-and-forget: a dead mail relay must not fail
           // the PATCH
           fn(payload).catch((err) => {
             console.error(

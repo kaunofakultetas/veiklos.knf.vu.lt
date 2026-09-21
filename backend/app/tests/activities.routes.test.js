@@ -678,7 +678,7 @@ test("return: → TIKSLINTI + the grąžinta email", async () => {
 // email promise is never awaited.
 // -----------------------------------------------------------
 
-test("deny: a dead SMTP server does NOT fail the PATCH (fire-and-forget)", async () => {
+test("deny: a dead mail relay does NOT fail the PATCH (fire-and-forget)", async () => {
   manager();
   stubManagerPatch();
   mailControl.reject = new Error("smtp down");

@@ -16,7 +16,7 @@ import { mock } from "node:test";
 // Everything "sent" through the fake transporter
 export const outbox = [];
 
-// createTransport configs, for pinning the SMTP settings
+// createTransport configs, for pinning the relay settings
 export const transportConfigs = [];
 
 // Set .reject to an Error to make sendMail throw it

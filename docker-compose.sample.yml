@@ -28,7 +28,7 @@ services:
     networks:
       external: {}
       isolated:
-        ipv4_address: 172.28.10.15
+        ipv4_address: 172.28.10.30
     restart: unless-stopped
   # ------------------------------------------------------------
   # ------------------------------------------------------------
@@ -99,11 +99,9 @@ services:
     environment:
         PORT: 4000
 
-        # Database
-        DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@veiklos-db:5432/${POSTGRES_DB}
-
         # APP
         SESSION_SECRET: ${SESSION_SECRET}
+        DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@veiklos-db:5432/${POSTGRES_DB}
 
         # SAML / VU SSO
         IDP_METADATA: /app/certs/vu-idp-metadata.xml
@@ -113,15 +111,14 @@ services:
         # SP_ACS_URL: https://lab.knf.vu.lt/simplesaml/module.php/saml/sp/saml2-acs.php/default-sp
 
         # Email
-        SMTP_HOST: ${SMTP_HOST}
-        SMTP_PORT: ${SMTP_PORT}
-        SMTP_USER: ${SMTP_USER}
-        SMTP_PASS: ${SMTP_PASS}
+        MAILJET_APIKEY: ${MAILJET_APIKEY}
+        MAILJET_APISECRET: ${MAILJET_APISECRET}
+        MAIL_FROM_ADDRESS: noreply@veiklos.knf.vu.lt
     volumes:
       - ./_DATA/uploads:/app/uploads
       - ./_SAML:/app/certs:ro
     extra_hosts:
-      - "smtp.gmail.com:172.28.10.15"
+      - "in-v3.mailjet.com:172.28.10.30"
     networks:
       - isolated
     restart: unless-stopped

@@ -1,11 +1,11 @@
 // -----------------------------------------------------------
 //  [*] Regression — routes/emailService.js
 //
-//  nodemailer is mocked (helpers/mailMock.js) and the SMTP
+//  nodemailer is mocked (helpers/mailMock.js) and the Mailjet
 //  env is set BEFORE the module import below, because the
 //  transporter is created at import time from process.env.
-//  Pins the transport settings and both Lithuanian message
-//  templates.
+//  Pins the Mailjet relay transport settings and both
+//  Lithuanian message templates.
 // -----------------------------------------------------------
 
 import { test, beforeEach } from "node:test";
@@ -13,10 +13,9 @@ import assert from "node:assert/strict";
 import { outbox, transportConfigs, mailControl } from "./helpers/mailMock.js";
 
 
-process.env.SMTP_HOST = "smtp.test.local";
-process.env.SMTP_PORT = "2525";
-process.env.SMTP_USER = "robot@test.local";
-process.env.SMTP_PASS = "paslaptis";
+process.env.MAILJET_APIKEY = "mj-api-key";
+process.env.MAILJET_APISECRET = "mj-api-secret";
+process.env.MAIL_FROM_ADDRESS = "noreply@test.local";
 
 const { sendRejectionEmail, sendReturnEmail } = await import("../src/routes/emailService.js");
 
@@ -36,18 +35,19 @@ beforeEach(() => {
 // transport config
 // -----------------------------------------------------------
 //
-// createTransport captured at import time: host, port,
-// and auth from the env set above; secure false means
+// createTransport captured at import time: Mailjet's relay
+// host and port are fixed in code, the auth is the API
+// key / secret from the env set above; secure false means
 // STARTTLS.
 // -----------------------------------------------------------
 
-test("one shared transporter, STARTTLS-style config from env (secure: false)", () => {
+test("one shared transporter to Mailjet's relay, API key/secret as auth (secure: false)", () => {
   assert.equal(transportConfigs.length, 1);
   assert.deepEqual(transportConfigs[0], {
-    host: "smtp.test.local",
-    port: 2525,
+    host: "in-v3.mailjet.com",
+    port: 587,
     secure: false,
-    auth: { user: "robot@test.local", pass: "paslaptis" },
+    auth: { user: "mj-api-key", pass: "mj-api-secret" },
   });
 });
 
@@ -61,8 +61,8 @@ test("one shared transporter, STARTTLS-style config from env (secure: false)", (
 // rejection — template
 // -----------------------------------------------------------
 //
-// From-name, subject prefix and every body field pinned
-// against the outbox copy.
+// From (fixed name + MAIL_FROM_ADDRESS), subject prefix and
+// every body field pinned against the outbox copy.
 // -----------------------------------------------------------
 
 test("rejection: system from-name, atmesta subject, comment as the reason", async () => {
@@ -75,7 +75,7 @@ test("rejection: system from-name, atmesta subject, comment as the reason", asyn
 
   assert.equal(outbox.length, 1);
   const msg = outbox[0];
-  assert.equal(msg.from, '"Veiklų registravimo sistema" <robot@test.local>');
+  assert.equal(msg.from, '"Veiklų registravimo sistema" <noreply@test.local>');
   assert.equal(msg.to, "jonas@vu.lt");
   assert.equal(msg.subject, "Jūsų veikla buvo atmesta: Konferencija");
   assert.ok(msg.text.includes("Sveiki, Jonas Jonaitis"));
@@ -109,7 +109,7 @@ test("rejection: missing fullName degrades to an empty greeting, no crash", asyn
 
 
 // -----------------------------------------------------------
-// rejection — SMTP failure
+// rejection — relay failure
 // -----------------------------------------------------------
 //
 // The fake transporter throws; the promise must reject
@@ -117,7 +117,7 @@ test("rejection: missing fullName degrades to an empty greeting, no crash", asyn
 // -----------------------------------------------------------
 
 test("rejection: transporter failure rejects — the CALLER must catch (activities.js does)", async () => {
-  mailControl.reject = new Error("smtp down");
+  mailControl.reject = new Error("relay down");
   await assert.rejects(() => sendRejectionEmail({ to: "x@x", title: "T", comment: "C" }));
 });
 
