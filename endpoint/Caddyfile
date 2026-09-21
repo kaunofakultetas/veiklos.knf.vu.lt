@@ -36,8 +36,8 @@
 
 
 
-    
-    
+
+
         # Keycloak IdP
         handle /keycloak* {
             reverse_proxy keycloak:8080 {
@@ -70,13 +70,13 @@
                 header_up X-Forwarded-Proto https
             }
         }
-    
-    
+
+
         # Frontend
         handle {
             reverse_proxy veiklos-vite:80
         }
-        
-        
+
+
     }
 }
