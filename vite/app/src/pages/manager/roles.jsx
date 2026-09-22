@@ -202,7 +202,7 @@ export default function RolesPage() {
                 <input
                   className="field-input"
                   type="email"
-                  placeholder="vardas.pavarde@knf.stud.vu.lt"
+                  placeholder="vardas.pavarde@knf.vu.lt"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   style={{ flex: 1 }}

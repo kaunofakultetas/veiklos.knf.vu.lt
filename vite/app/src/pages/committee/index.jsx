@@ -49,8 +49,8 @@ export default function CommitteePage() {
               <div className="info-box">
                 <span> Susidūrus su techninėmis kliūtimis parašykite el. laišką adresu:</span>
                 <br />
-                <a href="mailto:vu.veiklu.registravimas@gmail.com" style={{ fontWeight: 600 }}>
-                  vu.veiklu.registravimas@gmail.com
+                <a href="mailto:info@knf.vu.lt" style={{ fontWeight: 600 }}>
+                info@knf.vu.lt
                 </a>
               </div>
             </div>
