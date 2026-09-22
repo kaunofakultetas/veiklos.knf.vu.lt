@@ -21,7 +21,7 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState, useRef } from "react";
-import { AppSelect } from "@/components/appCommon.jsx";
+import { AppSelect, ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, ATTACHMENT_TOO_BIG } from "@/components/appCommon.jsx";
 import "@/components/employee.css";
 
 
@@ -193,6 +193,10 @@ export default function NewActivityPage() {
       setMsg("Klaida: Užpildykite visus privalomus laukus.");
       return;
     }
+    if (file && file.size > ATTACHMENT_MAX_BYTES) {
+      setMsg(ATTACHMENT_TOO_BIG);
+      return;
+    }
 
     try {
       setSubmitting(true);
@@ -359,8 +363,21 @@ export default function NewActivityPage() {
                 <input
                   key={fileInputKey}
                   type="file"
+                  accept={ATTACHMENT_ACCEPT}
                   ref={fileInputRef}
-                  onChange={(e) => setFile(e.target.files[0] || null)}
+                  onChange={(e) => {
+                    const picked = e.target.files[0] || null;
+                    // Refuse an oversized pick on the spot —
+                    // the input is cleared so nothing is sent
+                    if (picked && picked.size > ATTACHMENT_MAX_BYTES) {
+                      setMsg(ATTACHMENT_TOO_BIG);
+                      setFile(null);
+                      setFileInputKey((k) => k + 1);
+                      return;
+                    }
+                    setMsg("");
+                    setFile(picked);
+                  }}
                   className="field-input-file"
                 />
                 {file && (

@@ -1,11 +1,12 @@
 // -----------------------------------------------------------
 //  [*] Regression — routes /api/roles
 //
-//  Guarded per route by verifySamlSession alone (mocked
-//  here): any
-//  signed-in user passes, no role check. Nothing in the
-//  frontend calls these routes; the pins keep the dormant
-//  behavior from drifting.
+//  Mounted exactly like index.js does — behind the mocked
+//  verifySamlSession + attachRoles (as `pre`) — with the
+//  real authorize(["Vadybininkas"]) guard in the router: a
+//  signed-in non-manager gets a 403 on every route. Nothing
+//  in the frontend calls these routes; the pins keep the
+//  dormant behavior from drifting.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -18,7 +19,17 @@ import { startRouter, api } from "./helpers/http.js";
 let app;
 
 before(async () => {
-  app = await startRouter("/api/roles", new URL("../src/routes/roles.js", import.meta.url).href);
+  // Imported DYNAMICALLY so these resolve to the MOCKS
+  // authMock registered — passed as `pre` middleware to
+  // mirror the index.js mount
+  const { verifySamlSession } = await import("../src/auth/verifySamlSession.js");
+  const { attachRoles } = await import("../src/auth/attachRoles.js");
+
+  app = await startRouter(
+    "/api/roles",
+    new URL("../src/routes/roles.js", import.meta.url).href,
+    [verifySamlSession, attachRoles]
+  );
 });
 
 after(() => app.close());
@@ -27,6 +38,10 @@ beforeEach(() => {
   resetDb();
   signOut();
 });
+
+
+// A signed-in manager — authorize() checks OWNED roles only
+const manager = () => signInAs("u1", ["Vadybininkas"]);
 
 
 
@@ -54,22 +69,27 @@ test("both routes 401 without a token", async () => {
 
 
 // -----------------------------------------------------------
-// assign without any role
+// non-manager → 403
 // -----------------------------------------------------------
 //
-// A signed-in nobody grants a role successfully —
-// pinned evidence that this router has no role guard.
+// A signed-in employee trying to grant themselves
+// Vadybininkas (their own oid comes from /api/me) is
+// refused by authorize on both routes, before any query —
+// the privilege escalation this router used to allow.
 // -----------------------------------------------------------
 
-test("any signed-in user may assign roles — no role check (pinned as shipped)", async () => {
-  signInAs("nobody-special", []);
-  onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 7 }]);
-  onQuery(/INSERT INTO user_roles/, { rowCount: 1 });
+test("a signed-in non-manager gets authorize's 403 on every route, no queries", async () => {
+  signInAs("nobody-special", ["Darbuotojas"]);
 
-  const res = await api(app.base, "POST", "/api/roles/assign", {
-    body: { user_oid: "u1", role_name: "Vadybininkas" },
+  const grant = await api(app.base, "POST", "/api/roles/assign", {
+    body: { user_oid: "nobody-special", role_name: "Vadybininkas" },
   });
-  assert.equal(res.status, 204);
+  assert.equal(grant.status, 403);
+  assert.deepEqual(grant.body, { error: "Forbidden: insufficient role" });
+
+  const list = await api(app.base, "GET", "/api/roles");
+  assert.equal(list.status, 403);
+  assert.equal(queryLog().length, 0);
 });
 
 
@@ -87,7 +107,7 @@ test("any signed-in user may assign roles — no role check (pinned as shipped)"
 // -----------------------------------------------------------
 
 test("GET /: returns the catalog alphabetically", async () => {
-  signInAs("u1", []);
+  manager();
   onQuery(/SELECT id, name, description FROM roles ORDER BY name/, [
     { id: 1, name: "Darbuotojas", description: null },
     { id: 2, name: "Vadybininkas", description: null },
@@ -112,7 +132,7 @@ test("GET /: returns the catalog alphabetically", async () => {
 // -----------------------------------------------------------
 
 test("assign: missing fields → 400", async () => {
-  signInAs("u1", []);
+  manager();
   const res = await api(app.base, "POST", "/api/roles/assign", { body: { user_oid: "u1" } });
   assert.equal(res.status, 400);
   assert.deepEqual(res.body, { error: "Klaida: Vartotojo OID ir rolė yra privalomi" });
@@ -132,7 +152,7 @@ test("assign: missing fields → 400", async () => {
 // -----------------------------------------------------------
 
 test("assign: unknown role name → 404", async () => {
-  signInAs("u1", []);
+  manager();
   onQuery(/SELECT id FROM roles WHERE name = \$1/, []);
 
   const res = await api(app.base, "POST", "/api/roles/assign", {
@@ -157,7 +177,7 @@ test("assign: unknown role name → 404", async () => {
 // -----------------------------------------------------------
 
 test("assign: grants by (oid, role id), re-grant is a DB-side no-op → 204 either way", async () => {
-  signInAs("u1", []);
+  manager();
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 7 }]);
   onQuery(/INSERT INTO user_roles/, { rowCount: 0 });
 
@@ -169,4 +189,36 @@ test("assign: grants by (oid, role id), re-grant is a DB-side no-op → 204 eith
   const insert = queryLog().find((q) => q.sql.includes("INSERT INTO user_roles"));
   assert.ok(insert.sql.includes("ON CONFLICT DO NOTHING"));
   assert.deepEqual(insert.params, ["target-oid", 7]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// DB failure — both routes answer 500
+// -----------------------------------------------------------
+//
+// A throwing query on the catalog read or on the role
+// lookup of assign → a prompt 500 internal error, no
+// hanging request.
+// -----------------------------------------------------------
+
+test("GET / and assign: DB failure → 500 internal error", async () => {
+  manager();
+  onQuery(/FROM roles/, () => {
+    throw new Error("db down");
+  });
+
+  const list = await api(app.base, "GET", "/api/roles");
+  assert.equal(list.status, 500);
+  assert.deepEqual(list.body, { error: "internal error" });
+
+  const assign = await api(app.base, "POST", "/api/roles/assign", {
+    body: { user_oid: "target-oid", role_name: "Vadybininkas" },
+  });
+  assert.equal(assign.status, 500);
+  assert.deepEqual(assign.body, { error: "internal error" });
 });

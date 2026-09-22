@@ -10,12 +10,11 @@
 //            registration
 //
 //  Pins everything reachable without a SAML session: the
-//  health probe, the session gate on /api/me, the SP metadata
+//  health probe, the session gate on /api/me and on every
+//  guarded prefix as MOUNTED in index.js, the SP metadata
 //  endpoint, the boot line, the login redirect target, the
 //  ACS mounts, the 404 fallthrough, the debug request
-//  logging, and the
-//  unauthenticated /uploads static mount (a known hole,
-//  pinned as an expected failure).
+//  logging, and that uploads/ is NOT served as static files.
 // -----------------------------------------------------------
 
 import { test, before, after } from "node:test";
@@ -38,7 +37,7 @@ const VU_FIXTURE = new URL("./fixtures/vu-idp-metadata.xml", import.meta.url).pa
 const LAB_ENTITY = "https://lab.knf.vu.lt";
 const LAB_ACS_PATH = "/simplesaml/module.php/saml/sp/saml2-acs.php/default-sp";
 
-// The file planted in uploads/ for the static-mount probe
+// The file planted in uploads/ to prove it is not served
 const probeName = `regression-static-probe-${Date.now()}.txt`;
 const probePath = path.join(appRoot, "uploads", probeName);
 
@@ -157,6 +156,51 @@ test("GET /api/me without a session → 401 Neprisijungta", async () => {
   const res = await fetch(`${servers.plain.base}/api/me`);
   assert.equal(res.status, 401);
   assert.deepEqual(await res.json(), { error: "Neprisijungta" });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// the mount-level gates
+// -----------------------------------------------------------
+//
+// Every route that must never answer anonymously, hit on the
+// REAL server with the REAL middlewares — this pins the
+// index.js mounts (verifySamlSession, attachRoles) that the
+// per-router tests cannot see. /api/roles is here because
+// until 2026-09-22 it let any signed-in user grant roles;
+// anonymous access to it, /api/user-roles and /api/users was
+// the hole closed in the SSO migration.
+// -----------------------------------------------------------
+
+test("anonymous → 401 Neprisijungta on every guarded prefix, as mounted", async () => {
+  const { base } = servers.plain;
+  const cases = [
+    ["GET", "/api/users"],
+    ["GET", "/api/roles"],
+    ["POST", "/api/roles/assign"],
+    ["GET", "/api/user-roles?email=a@x"],
+    ["POST", "/api/user-roles/assign"],
+    ["POST", "/api/user-roles/remove"],
+    ["GET", "/api/session/check"],
+    ["GET", "/api/themes"],
+    ["GET", "/api/activities/my"],
+    ["GET", "/api/activities/pending"],
+    ["GET", "/api/activities/1/attachment"],
+  ];
+  for (const [method, p] of cases) {
+    const res = await fetch(base + p, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: method === "POST" ? "{}" : undefined,
+    });
+    assert.equal(res.status, 401, `${method} ${p}`);
+    assert.deepEqual(await res.json(), { error: "Neprisijungta" }, `${method} ${p}`);
+  }
 });
 
 
@@ -355,19 +399,16 @@ test("the debug middleware logs every request to stdout", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — open /uploads mount
+// uploads/ is not served
 // -----------------------------------------------------------
 //
-// A file planted in uploads/ is fetched with zero
-// credentials. Desired: 401/403; shipped behavior: 200 with
-// the file body.
+// A file planted in uploads/ is NOT reachable by URL — the
+// old unauthenticated static mount is gone, so the request
+// falls through to the 404. Attachments come only via the
+// guarded GET /api/activities/:id/attachment.
 // -----------------------------------------------------------
 
-test(
-  "BUG: /uploads serves attachments without any auth — should be 401/403",
-  { todo: "known hole: express.static on /uploads has no auth; downloads are supposed to go through GET /api/activities/:id/attachment" },
-  async () => {
-    const res = await fetch(`${servers.plain.base}/uploads/${probeName}`);
-    assert.ok(res.status === 401 || res.status === 403, `expected 401/403, got ${res.status}`);
-  }
-);
+test("/uploads/<file> → 404 even for a file that exists on disk", async () => {
+  const res = await fetch(`${servers.plain.base}/uploads/${probeName}`);
+  assert.equal(res.status, 404);
+});

@@ -589,11 +589,13 @@ test("DELETE /:id: linked activities → 409, no deletes at all", async () => {
 // -----------------------------------------------------------
 //
 // With no linked activities: the query log pins the
-// linked-check → subthemes → theme order; 204 on success.
+// linked-check, then BEGIN → subthemes → theme → COMMIT in
+// one transaction; 204 on success.
 // -----------------------------------------------------------
 
-test("DELETE /:id: subthemes first, then the theme → 204", async () => {
+test("DELETE /:id: subthemes first, then the theme, in a transaction → 204", async () => {
   manager();
+  onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
   onQuery(/SELECT 1 FROM activities WHERE theme_id = \$1 LIMIT 1/, []);
   onQuery(/DELETE FROM subthemes WHERE theme_id = \$1/, { rowCount: 3 });
   onQuery(/DELETE FROM themes WHERE id = \$1/, { rowCount: 1 });
@@ -602,8 +604,10 @@ test("DELETE /:id: subthemes first, then the theme → 204", async () => {
     headers: asRole("Vadybininkas"),
   });
   assert.equal(res.status, 204);
-  assert.ok(queryLog()[1].sql.includes("DELETE FROM subthemes"));
-  assert.ok(queryLog()[2].sql.includes("DELETE FROM themes"));
+  assert.deepEqual(
+    queryLog().map((q) => q.sql.split(" ").slice(0, 3).join(" ")),
+    ["SELECT 1 FROM", "BEGIN", "DELETE FROM subthemes", "DELETE FROM themes", "COMMIT"]
+  );
 });
 
 
@@ -613,15 +617,17 @@ test("DELETE /:id: subthemes first, then the theme → 204", async () => {
 
 
 // -----------------------------------------------------------
-// delete theme — 404 quirk
+// delete theme — missing theme rolls back
 // -----------------------------------------------------------
 //
-// The theme is missing → 404, yet the log shows the
-// subtheme DELETE already executed first.
+// The theme is missing → 404; the subtheme DELETE that ran
+// first inside the transaction is rolled back, so nothing
+// sticks.
 // -----------------------------------------------------------
 
-test("DELETE /:id on a missing theme: 404 — but its subtheme delete ALREADY ran (pinned quirk)", async () => {
+test("DELETE /:id on a missing theme: 404 and ROLLBACK, no COMMIT", async () => {
   manager();
+  onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
   onQuery(/SELECT 1 FROM activities WHERE theme_id = \$1 LIMIT 1/, []);
   onQuery(/DELETE FROM subthemes WHERE theme_id = \$1/, { rowCount: 0 });
   onQuery(/DELETE FROM themes WHERE id = \$1/, { rowCount: 0 });
@@ -630,8 +636,9 @@ test("DELETE /:id on a missing theme: 404 — but its subtheme delete ALREADY ra
     headers: asRole("Vadybininkas"),
   });
   assert.equal(res.status, 404);
-  // Check + both DELETEs executed even though nothing existed
-  assert.equal(queryLog().length, 3);
+  const sqls = queryLog().map((q) => q.sql);
+  assert.equal(sqls.at(-1), "ROLLBACK");
+  assert.ok(!sqls.includes("COMMIT"));
 });
 
 
@@ -641,26 +648,27 @@ test("DELETE /:id on a missing theme: 404 — but its subtheme delete ALREADY ra
 
 
 // -----------------------------------------------------------
-// BUG — no transaction
+// delete theme — failure mid-cascade rolls back
 // -----------------------------------------------------------
 //
-// Handlers for BEGIN/COMMIT stand ready; the log's
-// first entry should be BEGIN — shipped code never
-// opens a transaction.
+// The theme DELETE throws after the subtheme DELETE ran:
+// the transaction is rolled back (the subthemes survive) and
+// the catch-all answers 500.
 // -----------------------------------------------------------
 
-test(
-  "BUG: the two-statement cascade should run in a transaction",
-  { todo: "known gap: a failure between the DELETEs leaves a theme without its subthemes — no BEGIN/COMMIT is issued" },
-  async () => {
-    manager();
-    onQuery(/^BEGIN/, { rowCount: 0 });
-    onQuery(/SELECT 1 FROM activities WHERE theme_id = \$1 LIMIT 1/, []);
-    onQuery(/DELETE FROM subthemes WHERE theme_id = \$1/, { rowCount: 1 });
-    onQuery(/DELETE FROM themes WHERE id = \$1/, { rowCount: 1 });
-    onQuery(/^COMMIT/, { rowCount: 0 });
+test("DELETE /:id: a failure between the two DELETEs → ROLLBACK and 500", async () => {
+  manager();
+  onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
+  onQuery(/SELECT 1 FROM activities WHERE theme_id = \$1 LIMIT 1/, []);
+  onQuery(/DELETE FROM subthemes WHERE theme_id = \$1/, { rowCount: 2 });
+  onQuery(/DELETE FROM themes WHERE id = \$1/, () => {
+    throw new Error("db down");
+  });
 
-    await api(app.base, "DELETE", "/api/themes/1", { headers: asRole("Vadybininkas") });
-    assert.equal(queryLog()[0].sql, "BEGIN");
-  }
-);
+  const res = await api(app.base, "DELETE", "/api/themes/1", { headers: asRole("Vadybininkas") });
+  assert.equal(res.status, 500);
+  assert.deepEqual(res.body, { error: "internal error" });
+  const sqls = queryLog().map((q) => q.sql);
+  assert.equal(sqls.at(-1), "ROLLBACK");
+  assert.ok(!sqls.includes("COMMIT"));
+});

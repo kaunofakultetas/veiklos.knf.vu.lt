@@ -4,7 +4,10 @@
 //  The app funnels every query through the single exported
 //  pool object (src/db/pool.js), so the tests stub the DB by
 //  replacing pool.query with a dispatcher — no module mocking
-//  and no running Postgres needed.
+//  and no running Postgres needed. pool.connect() hands out a
+//  fake client whose query is the same dispatcher, so
+//  transactions (BEGIN/COMMIT/ROLLBACK) show up in the one
+//  log like any other statement.
 //
 //  A test registers [regex, result] handlers with onQuery();
 //  the dispatcher collapses the SQL's whitespace, takes the
@@ -31,7 +34,8 @@ let log = [];
 // -----------------------------------------------------------
 //
 // Clears handlers and the query log and (re)installs the
-// dispatcher over pool.query — call it in beforeEach.
+// dispatcher over pool.query and the fake client behind
+// pool.connect — call it in beforeEach.
 //
 // Used by:
 //   - every *.routes.test.js file, and auth.test.js
@@ -41,6 +45,7 @@ export function resetDb() {
   handlers = [];
   log = [];
   pool.query = dispatch;
+  pool.connect = async () => ({ query: dispatch, release() {} });
 }
 
 

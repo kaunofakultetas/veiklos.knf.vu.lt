@@ -29,7 +29,7 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
-import { AppSelect } from "@/components/appCommon.jsx";
+import { AppSelect, ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, ATTACHMENT_TOO_BIG } from "@/components/appCommon.jsx";
 import "@/components/employee.css";
 
 
@@ -437,7 +437,8 @@ function ThemeSubthemeFields({
 // The modal's Priedas field: the download button (or "(nėra)")
 // in view mode; in edit mode a file input whose empty state
 // keeps the current attachment, with hints naming the current
-// file and the newly picked one.
+// file and the newly picked one. onFileChange(file, input)
+// gets the input too, so an oversized pick can be cleared.
 //
 // Used by:
 //   - ActivityModal (below)
@@ -467,7 +468,8 @@ function AttachmentField({ act, editing, downloading, onDownload, file, onFileCh
       <div className="employee-modal-file">
         <input
           type="file"
-          onChange={(e) => onFileChange(e.target.files[0] || null)}
+          accept={ATTACHMENT_ACCEPT}
+          onChange={(e) => onFileChange(e.target.files[0] || null, e.target)}
           className="field-input-file"
         />
         <div className="employee-file-hint">
@@ -536,9 +538,27 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
     act.status === "TIKSLINTI";
 
 
+  // An oversized pick is refused on the spot and the input
+  // cleared, so nothing is sent
+  const handleFileChange = (picked, input) => {
+    if (picked && picked.size > ATTACHMENT_MAX_BYTES) {
+      onMessage(ATTACHMENT_TOO_BIG);
+      setEditAttachmentFile(null);
+      if (input) input.value = "";
+      return;
+    }
+    onMessage("");
+    setEditAttachmentFile(picked);
+  };
+
+
   const handleSaveEdit = async () => {
     if (!editThemeId || !editSubthemeId || !editTitle.trim()) {
       onMessage("Prašome užpildyti temą, potemę ir pavadinimą.");
+      return;
+    }
+    if (editAttachmentFile && editAttachmentFile.size > ATTACHMENT_MAX_BYTES) {
+      onMessage(ATTACHMENT_TOO_BIG);
       return;
     }
 
@@ -655,7 +675,7 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
             downloading={downloading}
             onDownload={onDownload}
             file={editAttachmentFile}
-            onFileChange={setEditAttachmentFile}
+            onFileChange={handleFileChange}
           />
         </div>
 

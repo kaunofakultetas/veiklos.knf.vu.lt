@@ -109,8 +109,8 @@ export default function RolesPage() {
         body: JSON.stringify({ email, role: assignRole }),
       });
       if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || "Nepavyko priskirti rolės.");
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || "Nepavyko priskirti rolės.");
       }
 
       const next = [...roles, assignRole].sort();
@@ -150,8 +150,8 @@ export default function RolesPage() {
         body: JSON.stringify({ email, role }),
       });
       if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || "Nepavyko pašalinti rolės.");
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || "Nepavyko pašalinti rolės.");
       }
 
       const next = roles.filter((r) => r !== role);

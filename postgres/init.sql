@@ -38,7 +38,9 @@ CREATE TABLE IF NOT EXISTS subthemes (
     code        VARCHAR NOT NULL,
     title       VARCHAR NOT NULL,
     description TEXT,
-    cap         NUMERIC
+    cap         NUMERIC,
+    -- lets activities reference the (subtheme, theme) PAIR
+    UNIQUE (id, theme_id)
 );
 
 -- Activities
@@ -57,7 +59,10 @@ CREATE TABLE IF NOT EXISTS activities (
     attachment_path          VARCHAR,
     attachment_original_name VARCHAR,
     created_at               TIMESTAMP DEFAULT NOW(),
-    updated_at               TIMESTAMP DEFAULT NOW()
+    updated_at               TIMESTAMP DEFAULT NOW(),
+    -- the subtheme must belong to the theme (the backend checks
+    -- this too, so the error stays friendly)
+    FOREIGN KEY (subtheme_id, theme_id) REFERENCES subthemes (id, theme_id)
 );
 
 -- Seed default roles

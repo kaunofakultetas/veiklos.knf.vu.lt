@@ -57,6 +57,46 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+// The attachment types an activity may carry: documents,
+// spreadsheets, slides and images. Keyed by lowercase
+// extension; the value is the magic-byte prefix the stored
+// file must start with (null = plain text, anything goes).
+// No html/svg (script carriers), no archives, no executables.
+// The frontend mirrors this list in its accept= attribute.
+const ALLOWED_ATTACHMENTS = {
+  ".pdf":  [Buffer.from("%PDF")],
+  ".doc":  [Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])],
+  ".xls":  [Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])],
+  ".ppt":  [Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])],
+  ".docx": [Buffer.from("PK\x03\x04")],
+  ".xlsx": [Buffer.from("PK\x03\x04")],
+  ".pptx": [Buffer.from("PK\x03\x04")],
+  ".odt":  [Buffer.from("PK\x03\x04")],
+  ".ods":  [Buffer.from("PK\x03\x04")],
+  ".odp":  [Buffer.from("PK\x03\x04")],
+  ".rtf":  [Buffer.from("{\\rtf")],
+  ".txt":  null,
+  ".csv":  null,
+  ".jpg":  [Buffer.from([0xff, 0xd8, 0xff])],
+  ".jpeg": [Buffer.from([0xff, 0xd8, 0xff])],
+  ".png":  [Buffer.from([0x89, 0x50, 0x4e, 0x47])],
+  ".gif":  [Buffer.from("GIF87a"), Buffer.from("GIF89a")],
+  ".webp": [Buffer.from("RIFF")],
+};
+
+// One attachment per activity, at most this big — the same
+// 100 MB the frontend checks before sending and the ingress
+// caps request bodies at (with headroom for the multipart
+// envelope), so nobody can exhaust disk or memory here
+const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+
+// The user-facing refusals — the list of allowed types is
+// spelled out so the employee knows what to convert to
+const MSG_BAD_TYPE =
+  "Klaida: neleistinas priedo tipas. Leidžiami: " +
+  Object.keys(ALLOWED_ATTACHMENTS).map((e) => e.slice(1)).join(", ");
+const MSG_TOO_BIG = "Klaida: priedas per didelis (iki 100 MB)";
+
 
 
 
@@ -132,27 +172,170 @@ function cleanSegment(value, fallback) {
 
 
 // -----------------------------------------------------------
+// subthemeMatchesTheme
+// -----------------------------------------------------------
+//
+// true when the subtheme belongs to the theme — the pairing
+// the FKs alone cannot enforce (each id is valid on its own,
+// but theme T2 with subtheme T1.1 would count the activity's
+// score in the wrong theme's total). With an activityId the
+// halves not being changed are taken from the row, so a
+// PATCH that sends only one of the two is checked against
+// the other one as stored.
+//
+// Used by:
+//   - POST /, PATCH /:id, PATCH /:id/manager,
+//     PATCH /:id/committee (below)
+// -----------------------------------------------------------
+
+async function subthemeMatchesTheme(activityId, themeId, subthemeId) {
+  const q = activityId === null
+    ? await pool.query(
+        `SELECT 1 FROM subthemes WHERE id = $1 AND theme_id = $2`,
+        [subthemeId, themeId]
+      )
+    : await pool.query(
+        `SELECT 1
+           FROM subthemes s
+           JOIN activities a ON a.id = $1
+          WHERE s.id = COALESCE($2::int, a.subtheme_id)
+            AND s.theme_id = COALESCE($3::int, a.theme_id)`,
+        [activityId, subthemeId, themeId]
+      );
+  return q.rowCount > 0;
+}
+
+const MSG_PAIR = "Klaida: potemė nepriklauso pasirinktai temai";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// answerLostRace
+// -----------------------------------------------------------
+//
+// Every state-changing route first reads the row to answer a
+// friendly 404/403/400, then WRITES CONDITIONALLY — the
+// UPDATE/DELETE repeats the ownership and status
+// preconditions in its WHERE, so two requests racing on the
+// same row (an employee editing while the manager approves)
+// cannot both win: the second one's write matches 0 rows.
+// This answers that loser: re-read the row and say why —
+// gone (404), not theirs (403), or the status moved on (409
+// naming the current status, so the UI can refresh).
+//
+// Used by:
+//   - PATCH /:id, PATCH /:id/manager, PATCH /:id/committee,
+//     DELETE /:id, POST /:id/resubmit (below) — when their
+//     conditional write reports rowCount 0
+// -----------------------------------------------------------
+
+async function answerLostRace(res, id, ownerOid = null) {
+  const q = await pool.query(
+    `SELECT employee_oid, status FROM activities WHERE id = $1`,
+    [id]
+  );
+  if (q.rowCount === 0) return res.status(404).json({ error: "Klaida: Nerasta" });
+  if (ownerOid && q.rows[0].employee_oid !== ownerOid) {
+    return res.status(403).json({ error: "Klaida: Draudžiama" });
+  }
+  return res.status(409).json({
+    error: `Klaida: veiklos būsena ką tik pasikeitė (dabar: ${q.rows[0].status}) — atnaujinkite puslapį`,
+  });
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// attachmentExtension
+// -----------------------------------------------------------
+//
+// The stored extension for an uploaded file: the ORIGINAL
+// name's extension (utf8-restored), lowercased, and only if
+// it is in ALLOWED_ATTACHMENTS — otherwise null. Only this
+// normalized extension ever reaches the disk name, so
+// "Ataskaita.PDF" is stored as .pdf and "x.pdf.exe" is
+// refused (its extension is .exe).
+//
+// Used by:
+//   - the multer fileFilter and filename callbacks (below)
+// -----------------------------------------------------------
+
+function attachmentExtension(originalNameLatin1) {
+  const nameUtf8 = Buffer.from(originalNameLatin1, "latin1").toString("utf8");
+  const ext = path.extname(nameUtf8).toLowerCase();
+  return Object.hasOwn(ALLOWED_ATTACHMENTS, ext) ? ext : null;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// hasExpectedMagic
+// -----------------------------------------------------------
+//
+// Reads the first bytes of a stored file and checks them
+// against the extension's signature(s) in
+// ALLOWED_ATTACHMENTS — so a renamed executable does not get
+// stored as a ".pdf". Text types have no signature and pass.
+//
+// Used by:
+//   - uploadAttachment (below)
+// -----------------------------------------------------------
+
+function hasExpectedMagic(filePath, ext) {
+  const signatures = ALLOWED_ATTACHMENTS[ext];
+  if (!signatures) return true;
+
+  const longest = Math.max(...signatures.map((s) => s.length));
+  const head = Buffer.alloc(longest);
+  const fd = fs.openSync(filePath, "r");
+  let read = 0;
+  try {
+    read = fs.readSync(fd, head, 0, longest, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return signatures.some((sig) => read >= sig.length && head.subarray(0, sig.length).equals(sig));
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // storage / upload — multer disk storage
 // -----------------------------------------------------------
 //
 // Saves into uploadDir as
-//   <theme>-<subtheme>-<fullname>-<timestamp>-<rand><ext>.
-// The originalname arrives latin1-mangled from multer, so it
-// is re-decoded as UTF-8 before taking the extension. The
-// theme/subtheme codes come from req.body, which multer has
-// only parsed by the time the FILE field follows the text
-// fields in the FormData — the frontend appends attachment
-// last for exactly that reason.
+//   <theme>-<subtheme>-<fullname>-<timestamp>-<rand><ext>
+// with ext from attachmentExtension. The theme/subtheme codes
+// come from req.body, which multer has only parsed by the
+// time the FILE field follows the text fields in the
+// FormData — the frontend appends attachment last for exactly
+// that reason. The fileFilter refuses any type not in
+// ALLOWED_ATTACHMENTS before a byte is written, and limits
+// cap the size and the count.
 //
 // Used by:
-//   - POST  /api/activities (below)
-//   - PATCH /api/activities/:id (below)
+//   - uploadAttachment (below)
 // -----------------------------------------------------------
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
-    const nameUtf8 = Buffer.from(file.originalname, "latin1").toString("utf8");
     const fullName = req.userFullName || "unknown_user";
     const themeCode = req.body?.theme_code || "unknown_theme_code";
     const subthemeCode = req.body?.subtheme_code || "unknown_subtheme_code";
@@ -162,14 +345,67 @@ const storage = multer.diskStorage({
     const safeFullName = cleanSegment(fullName, "unknown_user");
 
     const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = path.extname(nameUtf8);
+    const ext = attachmentExtension(file.originalname) || "";
 
     const finalName = `${safeTheme}-${safeSubtheme}-${safeFullName}-${unique}${ext}`;
     cb(null, finalName);
   },
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_ATTACHMENT_BYTES, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (attachmentExtension(file.originalname)) return cb(null, true);
+    cb(Object.assign(new Error(MSG_BAD_TYPE), { code: "BAD_ATTACHMENT_TYPE" }));
+  },
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// uploadAttachment
+// -----------------------------------------------------------
+//
+// The single-file multer middleware with its errors turned
+// into JSON 400s (a refused type, an oversized file) instead
+// of Express' HTML 500, plus the magic-byte check on the
+// stored file — a mismatch unlinks it and answers 400, so
+// nothing mislabelled stays on disk.
+//
+// Used by:
+//   - POST  /api/activities (below)
+//   - PATCH /api/activities/:id (below)
+// -----------------------------------------------------------
+
+function uploadAttachment(req, res, next) {
+  upload.single("attachment")(req, res, (err) => {
+    if (err) {
+      if (err.code === "BAD_ATTACHMENT_TYPE") return res.status(400).json({ error: MSG_BAD_TYPE });
+      if (err.code === "LIMIT_FILE_SIZE") return res.status(400).json({ error: MSG_TOO_BIG });
+      if (err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE") {
+        return res.status(400).json({ error: "Klaida: leidžiamas vienas priedas" });
+      }
+      console.error("attachment upload error:", err);
+      return res.status(400).json({ error: "Klaida: priedo įkelti nepavyko" });
+    }
+
+    if (req.file) {
+      const ext = attachmentExtension(req.file.originalname);
+      if (!hasExpectedMagic(req.file.path, ext)) {
+        fs.unlink(req.file.path, () => {});
+        req.file = undefined;
+        return res.status(400).json({ error: MSG_BAD_TYPE });
+      }
+    }
+
+    next();
+  });
+}
 
 // Guard chains by active role (X-Active-Role header)
 const guard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Darbuotojas"])];
@@ -195,7 +431,7 @@ const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Ko
 //   - employee/newActivity.jsx — the submission form
 // -----------------------------------------------------------
 
-router.post("/", guard, loadUserFullName, upload.single("attachment"), async (req, res) => {
+router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => {
     try {
       const oid = req.user?.oid || req.user?.sub;
       if (!oid) {
@@ -211,6 +447,9 @@ router.post("/", guard, loadUserFullName, upload.single("attachment"), async (re
         return res
           .status(400)
           .json({ error: "Klaida: Tema, potemė ir pavadinimas yra privalomi" });
+      }
+      if (!(await subthemeMatchesTheme(null, themeId, subthemeId))) {
+        return res.status(400).json({ error: MSG_PAIR });
       }
 
       // Same latin1→utf8 re-decode as the storage callback,
@@ -750,11 +989,14 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
     const vals = [];
     let i = 1;
 
+    let newThemeId = null;
+    let newSubthemeId = null;
     if (theme_id !== undefined) {
       const tid = parseInt(theme_id, 10);
       if (!Number.isNaN(tid)) {
         fields.push(`theme_id = $${i++}`);
         vals.push(tid);
+        newThemeId = tid;
       }
     }
 
@@ -763,6 +1005,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       if (!Number.isNaN(sid)) {
         fields.push(`subtheme_id = $${i++}`);
         vals.push(sid);
+        newSubthemeId = sid;
       }
     }
 
@@ -800,15 +1043,25 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       return res.status(400).json({ error: "Klaida: Paketiimai nepateikti" });
     }
 
+    // A reassigned theme/subtheme must still be a real pair
+    if ((newThemeId !== null || newSubthemeId !== null)
+        && !(await subthemeMatchesTheme(id, newThemeId, newSubthemeId))) {
+      return res.status(400).json({ error: MSG_PAIR });
+    }
+
     vals.push(id);
 
-    await pool.query(
+    // Conditional write: still PATEIKTA, or the verdict lost
+    // a race (see answerLostRace)
+    const upd = await pool.query(
       `UPDATE activities
           SET ${fields.join(", ")},
               updated_at = NOW()
-        WHERE id = $${i}`,
+        WHERE id = $${i}
+          AND status = 'PATEIKTA'`,
       vals
     );
+    if (upd.rowCount === 0) return answerLostRace(res, id);
 
     // Notify the employee about deny/return — reading the
     // comment back from the DB so the mail matches what was
@@ -901,6 +1154,12 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
 //           "return" → back to PATEIKTA, score cleared
 //   committee_comments, theme_id, subtheme_id — optional.
 //
+// The score is 1/n for n people who carried the activity
+// out (0 for none), so it lives in [0, 1] — the pages derive
+// it, the API enforces the bounds and rounds to 2 decimals,
+// since an out-of-range value would skew every theme total
+// the calculator divides the budget by.
+//
 // Works on PATVIRTINTA and ĮVERTINTA rows, so an existing
 // score can be corrected later from the results page.
 //
@@ -936,11 +1195,14 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
     const vals = [];
     let i = 1;
 
+    let newThemeId = null;
+    let newSubthemeId = null;
     if (theme_id !== undefined) {
       const tid = parseInt(theme_id, 10);
       if (!Number.isNaN(tid)) {
         fields.push(`theme_id = $${i++}`);
         vals.push(tid);
+        newThemeId = tid;
       }
     }
 
@@ -949,6 +1211,7 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
       if (!Number.isNaN(sid)) {
         fields.push(`subtheme_id = $${i++}`);
         vals.push(sid);
+        newSubthemeId = sid;
       }
     }
 
@@ -960,8 +1223,11 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
       if (!Number.isFinite(num)) {
         return res.status(400).json({ error: "Klaida: Įvertinimas turi būti skaičius." });
       }
+      if (num < 0 || num > 1) {
+        return res.status(400).json({ error: "Klaida: Įvertinimas turi būti tarp 0 ir 1." });
+      }
       fields.push(`score = $${i++}`);
-      vals.push(num);
+      vals.push(Number(num.toFixed(2)));
 
       fields.push(`status = $${i++}`);
       vals.push("ĮVERTINTA");
@@ -984,15 +1250,25 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
       return res.status(400).json({ error: "Klaida: Pakeitimai nepateikti" });
     }
 
+    // A reassigned theme/subtheme must still be a real pair
+    if ((newThemeId !== null || newSubthemeId !== null)
+        && !(await subthemeMatchesTheme(id, newThemeId, newSubthemeId))) {
+      return res.status(400).json({ error: MSG_PAIR });
+    }
+
     vals.push(id);
 
-    await pool.query(
+    // Conditional write: still PATVIRTINTA/ĮVERTINTA, or the
+    // verdict lost a race (see answerLostRace)
+    const upd = await pool.query(
       `UPDATE activities
           SET ${fields.join(", ")},
               updated_at = NOW()
-        WHERE id = $${i}`,
+        WHERE id = $${i}
+          AND status IN ('PATVIRTINTA', 'ĮVERTINTA')`,
       vals
     );
+    if (upd.rowCount === 0) return answerLostRace(res, id);
 
     const q = await pool.query(
       `SELECT
@@ -1084,6 +1360,10 @@ router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) =
     const filePath = path.join(uploadDir, row.attachment_path);
     const downloadName = row.attachment_original_name || "priedas";
 
+    // Always an attachment download, never sniffed into an
+    // inline render — the stored types are allowlisted, this
+    // is the second line
+    res.setHeader("X-Content-Type-Options", "nosniff");
     return res.download(filePath, downloadName);
   } catch (e) {
     console.error("GET /api/activities/:id/attachment error:", e);
@@ -1104,18 +1384,15 @@ router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) =
 // The employee editing their own activity (multipart, same
 // form as POST). Only the owner, and only in PATEIKTA or
 // TIKSLINTI status. A new attachment replaces the old file on
-// disk (best-effort unlink, ENOENT ignored).
-//
-// Bug, documented not fixed: the replacement file's
-// attachment_original_name is stored RAW here — without the
-// latin1→utf8 re-decode POST / does — so a re-uploaded
-// Lithuanian filename downloads mangled.
+// disk (best-effort unlink, ENOENT ignored). The replacement's
+// original name gets the same latin1→utf8 re-decode as on
+// POST /, so Lithuanian filenames survive a re-upload.
 //
 // Used by:
 //   - employee/myActivities.jsx — the edit dialog
 // -----------------------------------------------------------
 
-router.patch("/:id", guard, loadUserFullName, upload.single("attachment"), async (req, res) => {
+router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res) => {
   try {
     const { id } = req.params;
     const oid = req.user?.oid || req.user?.sub;
@@ -1144,17 +1421,21 @@ router.patch("/:id", guard, loadUserFullName, upload.single("attachment"), async
     const vals = [];
     let i = 1;
 
+    let newThemeId = null;
+    let newSubthemeId = null;
     if (theme_id !== undefined) {
       const themeId = parseInt(theme_id, 10);
       if (!themeId) return res.status(400).json({ error: "Klaida: Netinkama tema" });
       fields.push(`theme_id = $${i++}`);
       vals.push(themeId);
+      newThemeId = themeId;
     }
     if (subtheme_id !== undefined) {
       const subthemeId = parseInt(subtheme_id, 10);
       if (!subthemeId) return res.status(400).json({ error: "Klaida: Netinkama potemė" });
       fields.push(`subtheme_id = $${i++}`);
       vals.push(subthemeId);
+      newSubthemeId = subthemeId;
     }
     if (title !== undefined) {
       if (!title.trim()) return res.status(400).json({ error: "Klaida: Netinkamas pavadinimas" });
@@ -1170,24 +1451,41 @@ router.patch("/:id", guard, loadUserFullName, upload.single("attachment"), async
       fields.push(`attachment_path = $${i++}`);
       vals.push(req.file.filename);
 
-      // Missing the latin1→utf8 re-decode — see the banner
+      // Same latin1→utf8 re-decode as POST /
       fields.push(`attachment_original_name = $${i++}`);
-      vals.push(req.file.originalname);
+      vals.push(Buffer.from(req.file.originalname, "latin1").toString("utf8"));
     }
 
     if (!fields.length) {
       return res.status(400).json({ error: "Klaida: Atnaujinimai nepateikti" });
     }
 
-    vals.push(id);
+    // A reassigned theme/subtheme must still be a real pair
+    if ((newThemeId !== null || newSubthemeId !== null)
+        && !(await subthemeMatchesTheme(id, newThemeId, newSubthemeId))) {
+      if (req.file) fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: MSG_PAIR });
+    }
 
-    await pool.query(
+    vals.push(id, oid);
+
+    // Conditional write: still the owner's and still
+    // PATEIKTA/TIKSLINTI, or the edit lost a race with a
+    // manager verdict (see answerLostRace) — then the file
+    // just uploaded is dropped again
+    const upd = await pool.query(
       `UPDATE activities
           SET ${fields.join(", ")},
               updated_at = NOW()
-        WHERE id = $${i}`,
+        WHERE id = $${i}
+          AND employee_oid = $${i + 1}
+          AND status IN ('PATEIKTA', 'TIKSLINTI')`,
       vals
     );
+    if (upd.rowCount === 0) {
+      if (req.file) fs.unlink(req.file.path, () => {});
+      return answerLostRace(res, id, oid);
+    }
 
     // The old file is orphaned once the row points elsewhere
     const oldPath = cur.rows[0].attachment_path;
@@ -1246,7 +1544,10 @@ router.patch("/:id", guard, loadUserFullName, upload.single("attachment"), async
 // The employee deleting their own activity — owner only,
 // PATEIKTA or TIKSLINTI only (the error text mentions just
 // PATEIKTA, but TIKSLINTI is accepted too). The attachment
-// file is NOT removed from disk — deletes orphan it.
+// file goes with the row: the DELETE returns the stored path
+// and the file is unlinked once the row is gone (best
+// effort, a missing file is fine) — the employee's data is
+// really erased, not orphaned on disk.
 //
 // Used by:
 //   - employee/myActivities.jsx — the delete button
@@ -1278,7 +1579,25 @@ router.delete("/:id", guard, async (req, res) => {
         .json({ error: "Klaida: Galima ištrinti tik PATEIKTA būsenos veiklas." });
     }
 
-    await pool.query(`DELETE FROM activities WHERE id = $1`, [id]);
+    // Conditional delete — see answerLostRace; RETURNING the
+    // path so the file can follow the row
+    const del = await pool.query(
+      `DELETE FROM activities WHERE id = $1
+          AND employee_oid = $2
+          AND status IN ('PATEIKTA', 'TIKSLINTI')
+       RETURNING attachment_path`,
+      [id, oid]
+    );
+    if (del.rowCount === 0) return answerLostRace(res, id, oid);
+
+    const gonePath = del.rows[0]?.attachment_path;
+    if (gonePath) {
+      fs.unlink(path.join(uploadDir, gonePath), (err) => {
+        if (err && err.code !== "ENOENT") {
+          console.error("Klaida: Nepavyko panaikinti priedo:", err);
+        }
+      });
+    }
     res.sendStatus(204);
   } catch (e) {
     console.error("DELETE /api/activities/:id error:", e);
@@ -1332,14 +1651,18 @@ router.post("/:id/resubmit", guard, async (req, res) => {
       });
     }
 
-    await pool.query(
+    // Conditional write — see answerLostRace
+    const upd = await pool.query(
       `UPDATE activities
           SET status = 'PATEIKTA',
               rejection_comment = NULL,
               updated_at = NOW()
-        WHERE id = $1`,
-      [id]
+        WHERE id = $1
+          AND employee_oid = $2
+          AND status = 'TIKSLINTI'`,
+      [id, oid]
     );
+    if (upd.rowCount === 0) return answerLostRace(res, id, oid);
 
     const q = await pool.query(
       `SELECT

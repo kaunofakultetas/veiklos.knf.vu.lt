@@ -422,9 +422,10 @@ router.patch("/:id/pointvalue", committeeGuard, async (req, res) => {
 // Deletes a theme and its subthemes. A theme with activities
 // still attached refuses with a 409 up front — friendlier
 // than the FK error the delete would otherwise hit. The
-// cascade itself is manual, two statements not wrapped in a
-// transaction, so a failure between them can leave the theme
-// without its subthemes.
+// cascade is manual (subthemes, then the theme) but runs in
+// one transaction on a dedicated client: an unknown theme
+// rolls the subtheme delete back and answers 404, any error
+// rolls back and answers 500.
 //
 // Used by:
 //   - manager/themes.jsx — theme delete button
@@ -439,10 +440,24 @@ router.delete("/:id", manageGuard, async (req, res) => {
     );
     if (linked.rowCount > 0)
       return res.status(409).json({ error: "Klaida: negalima ištrinti temos, nes yra su ja susietų veiklų." });
-    await pool.query(`DELETE FROM subthemes WHERE theme_id = $1`, [id]);
-    const del = await pool.query(`DELETE FROM themes WHERE id = $1`, [id]);
-    if (del.rowCount === 0) return res.status(404).json({ error: "not found" });
-    res.sendStatus(204);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`DELETE FROM subthemes WHERE theme_id = $1`, [id]);
+      const del = await client.query(`DELETE FROM themes WHERE id = $1`, [id]);
+      if (del.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "not found" });
+      }
+      await client.query("COMMIT");
+      res.sendStatus(204);
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
   } catch (e) {
     console.error("DELETE /api/themes/:id", e);
     res.status(500).json({ error: "internal error" });

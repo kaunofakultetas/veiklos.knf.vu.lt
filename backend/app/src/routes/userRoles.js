@@ -6,12 +6,17 @@
 //    POST /api/user-roles/remove      — revoke a role by email
 //
 //  The role administration API behind the manager's roles
-//  page. Users are looked up by email, case-insensitively.
+//  page. Users are looked up by email, case-insensitively and
+//  trimmed; role names are matched exactly (trimmed).
 //
 //  Auth: index.js mounts the router behind verifySamlSession
-//  + attachRoles, and every route adds managerOnly — the
-//  caller must OWN the Vadybininkas role; the X-Active-Role
-//  header plays no part here, unlike the other routers.
+//  + attachRoles, and the router itself adds managerOnly once
+//  for every route — the caller must OWN the Vadybininkas
+//  role; the X-Active-Role header plays no part here, unlike
+//  the other routers. A manager MAY revoke their own
+//  Vadybininkas role (the page confirms it first); the base
+//  "Darbuotojas" role cannot be revoked at all, since
+//  attachRoles re-grants it on the user's next request.
 //
 //  Used by:
 //    - manager/roles.jsx — the whole page
@@ -22,11 +27,99 @@ import { pool } from "../db/pool.js";
 import { authorize } from "../auth/authorize.js";
 
 
+// The role every signed-in user gets automatically
+// (auth/attachRoles.js) — revoking it would be undone on the
+// next request, so it is refused up front
+const BASE_ROLE = "Darbuotojas";
+
+// Shared response texts — one wording per situation
+const MSG_EMAIL_REQUIRED = "Klaida: Vartotojo el. paštas yra privalomas";
+const MSG_EMAIL_ROLE_REQUIRED = "Klaida: Vartotojo el. paštas ir rolė yra privalomi";
+const MSG_USER_NOT_FOUND = "Klaida: Vartotojas nerastas";
+const MSG_UNKNOWN_ROLE = "Klaida: nežinoma rolė";
+const MSG_BASE_ROLE = `Klaida: rolė ${BASE_ROLE} yra bazinė ir nešalinama`;
+
+
 const router = Router();
 
 // Ownership of the manager role is enough — attachRoles has
 // already filled req.user.roles by the time this runs
 const managerOnly = authorize(["Vadybininkas"]);
+router.use(managerOnly);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// readEmailAndRole
+// -----------------------------------------------------------
+//
+// The { email, role } body of assign/remove, both trimmed;
+// either missing → null, so the caller answers 400.
+//
+// Used by:
+//   - POST /assign, POST /remove (below)
+// -----------------------------------------------------------
+
+function readEmailAndRole(body) {
+  const email = String(body?.email ?? "").trim();
+  const role = String(body?.role ?? "").trim();
+  if (!email || !role) return null;
+  return { email, role };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// findUserByEmail
+// -----------------------------------------------------------
+//
+// The email→user lookup every route starts with: case-
+// insensitive in SQL, oid aliased as id (the shape the page
+// expects). null when there is no such user.
+//
+// Used by:
+//   - GET /, POST /assign, POST /remove (below)
+// -----------------------------------------------------------
+
+async function findUserByEmail(email) {
+  const u = await pool.query(
+    `SELECT oid AS id, email, full_name
+       FROM users
+      WHERE LOWER(email) = LOWER($1)
+      LIMIT 1`,
+    [email]
+  );
+  return u.rowCount ? u.rows[0] : null;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// findRoleId
+// -----------------------------------------------------------
+//
+// Role name → id, or null for a name not in the catalog.
+//
+// Used by:
+//   - POST /assign, POST /remove (below)
+// -----------------------------------------------------------
+
+async function findRoleId(name) {
+  const r = await pool.query(`SELECT id FROM roles WHERE name = $1`, [name]);
+  return r.rowCount ? r.rows[0].id : null;
+}
 
 
 
@@ -40,39 +133,32 @@ const managerOnly = authorize(["Vadybininkas"]);
 //
 // ?email=... → { user, roles, allRoles }: the user (oid
 // aliased as id), the roles they own, and the full catalog so
-// the UI can render assign buttons for the rest.
+// the UI can render assign buttons for the rest. Catalog and
+// ownership come from ONE query — a LEFT JOIN of user_roles
+// onto roles for this user — so the two lists can never
+// disagree.
 //
 // Used by:
 //   - manager/roles.jsx — user search
 // -----------------------------------------------------------
 
-router.get("/", managerOnly, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const email = (req.query.email || "").trim();
-    if (!email) return res.status(400).json({ error: "Klaida: Vartotojo el. paštas ir rolė yra privalomi" });
+    const email = String(req.query.email ?? "").trim();
+    if (!email) return res.status(400).json({ error: MSG_EMAIL_REQUIRED });
 
-    const u = await pool.query(
-      `SELECT oid AS id, email, full_name
-         FROM users
-        WHERE LOWER(email) = LOWER($1)
-        LIMIT 1`,
-      [email]
-    );
-    if (u.rowCount === 0) return res.status(404).json({ error: "Klaida: vartotojas nerastas" });
-    const user = u.rows[0];
+    const user = await findUserByEmail(email);
+    if (!user) return res.status(404).json({ error: MSG_USER_NOT_FOUND });
 
-    const all = await pool.query(`SELECT name FROM roles ORDER BY name ASC`);
-    const allRoles = all.rows.map(r => r.name);
-
-    const ur = await pool.query(
-      `SELECT r.name
-         FROM user_roles ur
-         JOIN roles r ON r.id = ur.role_id
-        WHERE ur.user_oid = $1
+    const catalog = await pool.query(
+      `SELECT r.name, ur.user_oid IS NOT NULL AS owned
+         FROM roles r
+         LEFT JOIN user_roles ur ON ur.role_id = r.id AND ur.user_oid = $1
         ORDER BY r.name ASC`,
       [user.id]
     );
-    const roles = ur.rows.map(r => r.name);
+    const allRoles = catalog.rows.map((r) => r.name);
+    const roles = catalog.rows.filter((r) => r.owned).map((r) => r.name);
 
     res.json({ user, roles, allRoles });
   } catch (e) {
@@ -99,27 +185,22 @@ router.get("/", managerOnly, async (req, res) => {
 //   - manager/roles.jsx — the "Priskirti" buttons
 // -----------------------------------------------------------
 
-router.post("/assign", managerOnly, async (req, res) => {
+router.post("/assign", async (req, res) => {
   try {
-    const { email, role } = req.body || {};
-    if (!email || !role) return res.status(400).json({ error: "Klaida: Vartotojo el. paštas ir rolė yra privalomi" });
+    const input = readEmailAndRole(req.body);
+    if (!input) return res.status(400).json({ error: MSG_EMAIL_ROLE_REQUIRED });
 
-    const u = await pool.query(
-      `SELECT oid AS id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
-      [email]
-    );
-    if (u.rowCount === 0) return res.status(404).json({ error: "Klaida: Vartotojas nerastas" });
-    const userId = u.rows[0].id;
+    const user = await findUserByEmail(input.email);
+    if (!user) return res.status(404).json({ error: MSG_USER_NOT_FOUND });
 
-    const r = await pool.query(`SELECT id FROM roles WHERE name = $1`, [role]);
-    if (r.rowCount === 0) return res.status(400).json({ error: "Klaida: nežinoma rolė" });
-    const roleId = r.rows[0].id;
+    const roleId = await findRoleId(input.role);
+    if (roleId === null) return res.status(400).json({ error: MSG_UNKNOWN_ROLE });
 
     await pool.query(
       `INSERT INTO user_roles (user_oid, role_id)
        VALUES ($1, $2)
        ON CONFLICT DO NOTHING`,
-      [userId, roleId]
+      [user.id, roleId]
     );
 
     res.sendStatus(204);
@@ -141,33 +222,29 @@ router.post("/assign", managerOnly, async (req, res) => {
 //
 // Body: { email, role }. Revokes the role; an unknown role
 // name is treated as already-removed (204), only an unknown
-// user is a 404. Note "Darbuotojas" comes back on the user's
-// next request — attachRoles re-grants it automatically.
+// user is a 404. The base "Darbuotojas" role is refused with
+// a 400 — attachRoles would hand it straight back anyway.
 //
 // Used by:
 //   - manager/roles.jsx — the "Pašalinti" buttons
 // -----------------------------------------------------------
 
-router.post("/remove", managerOnly, async (req, res) => {
+router.post("/remove", async (req, res) => {
   try {
-    const { email, role } = req.body || {};
-    if (!email || !role) return res.status(400).json({ error: "Klaida: Vartotojo el. paštas ir rolė yra privalomi" });
+    const input = readEmailAndRole(req.body);
+    if (!input) return res.status(400).json({ error: MSG_EMAIL_ROLE_REQUIRED });
+    if (input.role === BASE_ROLE) return res.status(400).json({ error: MSG_BASE_ROLE });
 
-    const u = await pool.query(
-      `SELECT oid AS id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
-      [email]
-    );
-    if (u.rowCount === 0) return res.status(404).json({ error: "Klaida: Vartotojas nerastas" });
-    const userId = u.rows[0].id;
+    const user = await findUserByEmail(input.email);
+    if (!user) return res.status(404).json({ error: MSG_USER_NOT_FOUND });
 
-    const r = await pool.query(`SELECT id FROM roles WHERE name = $1`, [role]);
-    if (r.rowCount === 0) return res.sendStatus(204);
-    const roleId = r.rows[0].id;
+    const roleId = await findRoleId(input.role);
+    if (roleId === null) return res.sendStatus(204);
 
     await pool.query(
       `DELETE FROM user_roles
         WHERE user_oid = $1 AND role_id = $2`,
-      [userId, roleId]
+      [user.id, roleId]
     );
 
     res.sendStatus(204);

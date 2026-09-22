@@ -16,7 +16,6 @@
 //         /api/themes       — routes/themes.js
 //         /api/activities   — routes/activities.js
 //         /auth/saml        — routes/saml.js (login flow)
-//         /uploads/*        — uploaded attachments (static)
 //
 //  Auth model since the VU SSO (SAML) migration: the SAML
 //  /assert callback stores the login in an express-session
@@ -25,18 +24,14 @@
 //  loading the VU SSO IdP metadata (createSamlSetup) from
 //  _SAML/ — no IdP metadata, no backend.
 //
-//  Gotcha: the /uploads mount serves every uploaded file
-//  WITHOUT auth, and it is mounted BEFORE the session
-//  middleware. The frontend never links to it — downloads go
-//  through GET /api/activities/:id/attachment, which does
-//  check ownership/role — but anyone who can reach the
-//  backend and guess a filename can fetch a file.
+//  Uploaded attachments are NOT served as static files —
+//  the only way to a file is GET /api/activities/:id/
+//  attachment, which checks ownership/role first.
 // -----------------------------------------------------------
 
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import path from 'path';
 import session from 'express-session';
 
 // Routers, one per resource
@@ -74,10 +69,6 @@ app.use((req, _res, next) => {
 
 app.use(cors());
 app.use(express.json());
-
-// Raw attachment files — see the auth gotcha in the header
-const uploadDir = path.join(process.cwd(), "uploads");
-app.use("/uploads", express.static(uploadDir));
 
 
 
@@ -159,13 +150,12 @@ app.get("/api/me", verifySamlSession, attachRoles, (req, res) => {
 });
 
 
-// Mount the routers. /api/users gets only the session gate
-// (no role check — see routes/users.js); /api/user-roles gets
-// session + roles here because its own managerOnly guard
-// needs req.user.roles filled
-app.use('/api/users', verifySamlSession, usersRouter);
+// Mount the routers. /api/users, /api/roles and
+// /api/user-roles get session + roles here because their own
+// managerOnly guards need req.user.roles filled
+app.use('/api/users', verifySamlSession, attachRoles, usersRouter);
 app.use('/api/session', sessionRouter);
-app.use('/api/roles', rolesRouter);
+app.use('/api/roles', verifySamlSession, attachRoles, rolesRouter);
 app.use("/api/user-roles", verifySamlSession, attachRoles, userRolesRouter);
 app.use("/api/themes", themesRouter);
 app.use("/api/activities", activitiesRouter);

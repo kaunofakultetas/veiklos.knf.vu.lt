@@ -4,11 +4,11 @@
 //  The role admin API behind manager/roles.jsx. The old
 //  no-auth hole is FIXED since the VU SSO (SAML) migration:
 //  index.js mounts the router behind verifySamlSession +
-//  attachRoles, and every route adds authorize(
-//  ["Vadybininkas"]) — role OWNERSHIP, no X-Active-Role
-//  header involved. The tests mount it exactly like index.js
-//  does (mocked session middlewares as `pre`), with the real
-//  authorize in the router.
+//  attachRoles, and the router adds authorize(
+//  ["Vadybininkas"]) once for every route — role OWNERSHIP,
+//  no X-Active-Role header involved. The tests mount it
+//  exactly like index.js does (mocked session middlewares as
+//  `pre`), with the real authorize in the router.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -60,6 +60,13 @@ beforeEach(() => {
 
 function stubUserLookup(row) {
   onQuery(/SELECT oid AS id.* FROM users WHERE LOWER\(email\) = LOWER\(\$1\)/, row ? [row] : []);
+}
+
+
+// The one catalog + ownership query GET / runs after the
+// user lookup: rows of { name, owned }
+function stubCatalog(rows) {
+  onQuery(/SELECT r\.name, ur\.user_oid IS NOT NULL AS owned FROM roles r LEFT JOIN user_roles ur/, rows);
 }
 
 
@@ -138,8 +145,7 @@ test("a signed-in non-manager gets authorize's 403 on every route", async () => 
 test("OWNING Vadybininkas is enough — no X-Active-Role header needed (pinned)", async () => {
   manager();
   stubUserLookup({ id: "oid-1", email: "a@x", full_name: "A" });
-  onQuery(/SELECT name FROM roles ORDER BY name ASC/, [{ name: "Darbuotojas" }]);
-  onQuery(/SELECT r\.name FROM user_roles ur/, []);
+  stubCatalog([{ name: "Darbuotojas", owned: false }]);
 
   const res = await api(app.base, "GET", "/api/user-roles?email=a@x");
   assert.equal(res.status, 200);
@@ -155,14 +161,16 @@ test("OWNING Vadybininkas is enough — no X-Active-Role header needed (pinned)"
 // GET — validation
 // -----------------------------------------------------------
 //
-// No ?email → 400 with the shared (mismatched) message.
+// No ?email (or a blank one) → 400 naming just the email.
 // -----------------------------------------------------------
 
 test("GET: missing email → 400", async () => {
   manager();
-  const res = await api(app.base, "GET", "/api/user-roles");
-  assert.equal(res.status, 400);
-  assert.deepEqual(res.body, { error: "Klaida: Vartotojo el. paštas ir rolė yra privalomi" });
+  for (const path of ["/api/user-roles", "/api/user-roles?email=%20%20"]) {
+    const res = await api(app.base, "GET", path);
+    assert.equal(res.status, 400, path);
+    assert.deepEqual(res.body, { error: "Klaida: Vartotojo el. paštas yra privalomas" });
+  }
 });
 
 
@@ -175,7 +183,8 @@ test("GET: missing email → 400", async () => {
 // GET — unknown user
 // -----------------------------------------------------------
 //
-// An empty lookup → the lowercase 'vartotojas nerastas' 404.
+// An empty lookup → the same 'Vartotojas nerastas' 404 every
+// route uses.
 // -----------------------------------------------------------
 
 test("GET: unknown user → 404", async () => {
@@ -183,7 +192,7 @@ test("GET: unknown user → 404", async () => {
   stubUserLookup(null);
   const res = await api(app.base, "GET", "/api/user-roles?email=niekas@x");
   assert.equal(res.status, 404);
-  assert.deepEqual(res.body, { error: "Klaida: vartotojas nerastas" });
+  assert.deepEqual(res.body, { error: "Klaida: Vartotojas nerastas" });
 });
 
 
@@ -196,31 +205,35 @@ test("GET: unknown user → 404", async () => {
 // GET — the full shape
 // -----------------------------------------------------------
 //
-// User row + catalog + owned roles combined into one body;
-// the trim-in-JS / LOWER-in-SQL split pinned via the bound
-// param.
+// User row + catalog + owned roles combined into one body,
+// from two queries: the user lookup (trim-in-JS / LOWER-in-
+// SQL split pinned via the bound param) and one LEFT JOIN
+// keyed by the user's oid that yields catalog and ownership
+// together.
 // -----------------------------------------------------------
 
-test("GET: returns { user, roles, allRoles }; lookup is case-insensitive in SQL", async () => {
+test("GET: returns { user, roles, allRoles } from the lookup + one catalog query", async () => {
   manager();
   stubUserLookup({ id: "oid-1", email: "a@x", full_name: "A" });
-  onQuery(/SELECT name FROM roles ORDER BY name ASC/, [
-    { name: "Darbuotojas" },
-    { name: "Vadybininkas" },
+  stubCatalog([
+    { name: "Darbuotojas", owned: true },
+    { name: "Komisijos narys", owned: false },
+    { name: "Vadybininkas", owned: false },
   ]);
-  onQuery(/SELECT r\.name FROM user_roles ur/, [{ name: "Darbuotojas" }]);
 
   const res = await api(app.base, "GET", "/api/user-roles?email=%20A@X%20");
   assert.equal(res.status, 200);
   assert.deepEqual(res.body, {
     user: { id: "oid-1", email: "a@x", full_name: "A" },
     roles: ["Darbuotojas"],
-    allRoles: ["Darbuotojas", "Vadybininkas"],
+    allRoles: ["Darbuotojas", "Komisijos narys", "Vadybininkas"],
   });
 
-  const lookup = queryLog()[0];
+  assert.equal(queryLog().length, 2);
+  const [lookup, catalog] = queryLog();
   assert.ok(lookup.sql.includes("LOWER(email) = LOWER($1)"));
   assert.deepEqual(lookup.params, ["A@X"]);
+  assert.deepEqual(catalog.params, ["oid-1"]);
 });
 
 
@@ -233,13 +246,18 @@ test("GET: returns { user, roles, allRoles }; lookup is case-insensitive in SQL"
 // assign — validation
 // -----------------------------------------------------------
 //
-// role omitted → 400 before any lookup.
+// role omitted, or blank after trimming → 400 before any
+// lookup.
 // -----------------------------------------------------------
 
-test("assign: missing fields → 400", async () => {
+test("assign: missing or blank fields → 400, no lookup", async () => {
   manager();
-  const res = await api(app.base, "POST", "/api/user-roles/assign", { body: { email: "a@x" } });
-  assert.equal(res.status, 400);
+  for (const body of [{ email: "a@x" }, { email: "  ", role: "Vadybininkas" }, { email: "a@x", role: " " }]) {
+    const res = await api(app.base, "POST", "/api/user-roles/assign", { body });
+    assert.equal(res.status, 400);
+    assert.deepEqual(res.body, { error: "Klaida: Vartotojo el. paštas ir rolė yra privalomi" });
+  }
+  assert.equal(queryLog().length, 0);
 });
 
 
@@ -286,21 +304,23 @@ test("assign: unknown user → 404, unknown role → 400", async () => {
 // -----------------------------------------------------------
 //
 // ON CONFLICT insert by (oid, role id) with the params
-// pinned; 204.
+// pinned; 204. Email and role arrive trimmed at the lookups.
 // -----------------------------------------------------------
 
-test("assign: grants by (oid, role id) with ON CONFLICT → 204", async () => {
+test("assign: grants by (oid, role id) with ON CONFLICT → 204; inputs trimmed", async () => {
   manager();
   stubUserLookup({ id: "oid-1" });
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 2 }]);
   onQuery(/INSERT INTO user_roles/, { rowCount: 1 });
 
   const res = await api(app.base, "POST", "/api/user-roles/assign", {
-    body: { email: "a@x", role: "Vadybininkas" },
+    body: { email: " a@x ", role: " Vadybininkas " },
   });
   assert.equal(res.status, 204);
 
-  const insert = queryLog().find((q) => q.sql.includes("INSERT INTO user_roles"));
+  const [lookup, role, insert] = queryLog();
+  assert.deepEqual(lookup.params, ["a@x"]);
+  assert.deepEqual(role.params, ["Vadybininkas"]);
   assert.ok(insert.sql.includes("ON CONFLICT DO NOTHING"));
   assert.deepEqual(insert.params, ["oid-1", 2]);
 });
@@ -379,4 +399,56 @@ test("remove: unknown user → 404", async () => {
     body: { email: "niekas@x", role: "Vadybininkas" },
   });
   assert.equal(res.status, 404);
+  assert.deepEqual(res.body, { error: "Klaida: Vartotojas nerastas" });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// remove — the base role
+// -----------------------------------------------------------
+//
+// "Darbuotojas" is refused with a 400 before any lookup —
+// attachRoles would re-grant it on the next request anyway.
+// -----------------------------------------------------------
+
+test("remove: Darbuotojas is refused → 400, no queries at all", async () => {
+  manager();
+  const res = await api(app.base, "POST", "/api/user-roles/remove", {
+    body: { email: "a@x", role: "Darbuotojas" },
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(res.body, { error: "Klaida: rolė Darbuotojas yra bazinė ir nešalinama" });
+  assert.equal(queryLog().length, 0);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// remove — own manager role
+// -----------------------------------------------------------
+//
+// A manager may revoke their OWN Vadybininkas role — the
+// page confirms it first; the API does not second-guess it.
+// -----------------------------------------------------------
+
+test("remove: a manager may revoke their own Vadybininkas role → 204", async () => {
+  manager();
+  stubUserLookup({ id: "mgr-1" });
+  onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 2 }]);
+  onQuery(/DELETE FROM user_roles WHERE user_oid = \$1 AND role_id = \$2/, { rowCount: 1 });
+
+  const res = await api(app.base, "POST", "/api/user-roles/remove", {
+    body: { email: "mgr@x", role: "Vadybininkas" },
+  });
+  assert.equal(res.status, 204);
+  assert.deepEqual(queryLog().at(-1).params, ["mgr-1", 2]);
 });
