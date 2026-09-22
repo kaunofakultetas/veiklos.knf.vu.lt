@@ -15,23 +15,14 @@
 //  domain the app is hosted on, ITS metadata URL is what gets
 //  registered with VU SSO.
 //
-//  SP_ENTITY_ID / SP_ACS_URL pin the entity id and assertion
-//  consumer URL regardless of host. VU SSO knows an SP by its
-//  entity id, not its domain, so this is how the app reuses a
-//  registration that already exists — lab.knf.vu.lt's, when
-//  hosted on that domain (entity id https://lab.knf.vu.lt,
-//  ACS under /simplesaml/…). Nothing private from lab is
-//  needed: VU SSO neither demands signed requests nor
-//  encrypts assertions.
-//
 //  The SP always carries a key pair (SP_PRIVATE_KEY_PATH /
 //  SP_CERT_PATH, made by generateSamlKeys.sh): VU SSO
 //  encrypts assertions with the certificate it finds in our
 //  metadata, so the key decrypts them — a plaintext assertion
-//  is refused — and the same pair signs our AuthnRequests and
-//  logout messages (VU signs logout on its side too). The
-//  certificate is what VU registers; rotating it means
-//  re-registering.
+//  is refused — and the same pair signs our logout messages
+//  (AuthnRequests only if the IdP's metadata asks, VU's does
+//  not). The certificate is what VU registers; rotating it
+//  means re-registering.
 //
 //  The mdui/organization/contact enrichment exists for the
 //  LitNET FEDI registration: the federation requires SP
@@ -108,10 +99,9 @@ export const SP_INFO = {
 // -----------------------------------------------------------
 //
 // Every name each identity field may arrive under, in
-// priority order: the OIDs VU SSO releases (the same four
-// lab.knf.vu.lt consumes — uid, mail, givenName, sn), then
-// their friendly names in case the IdP is ever configured to
-// send those instead.
+// priority order: the OIDs VU SSO releases (uid, mail,
+// givenName, sn), then their friendly names in case the IdP
+// is ever configured to send those instead.
 //
 // Used by:
 //   - mapSamlAttributes (below)
@@ -146,8 +136,6 @@ function readConfig() {
   const env = process.env;
   return {
     idpMetadata:        env.IDP_METADATA || "",
-    spEntityId:         env.SP_ENTITY_ID || "",
-    spAcsUrl:           env.SP_ACS_URL || "",
     spNameIdFormat:     env.SP_NAME_ID_FORMAT ??
                           "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified",
     spPrivateKeyPath:   env.SP_PRIVATE_KEY_PATH,
@@ -357,13 +345,9 @@ export function enrichSpMetadata(rawXml) {
 //   spCertFingerprint — SHA-256 of the SP certificate, for
 //                     the boot log / VU's registration form
 //   identityFor(o)  — { spEntityId, acsUrl } for origin o
-//                     (o + /auth/saml/{metadata,assert}, or the
-//                     SP_ENTITY_ID / SP_ACS_URL overrides)
+//                     (o + /auth/saml/{metadata,assert})
 //   spFor(o)        — the samlify ServiceProvider for origin
 //                     o, built on first use and memoized
-//   acsPath         — the ACS URL's path, so index.js can
-//                     mount the assert handler there when
-//                     SP_ACS_URL moved it off defaultAcsPath
 //
 // Used by:
 //   - index.js — const samlSetup = await createSamlSetup()
@@ -387,17 +371,12 @@ export async function createSamlSetup() {
   const spCert = readRequiredFile(cfg.spCertPath, "SP_CERT_PATH");
   const spCertFingerprint = new X509Certificate(spCert).fingerprint256;
 
-  const defaultAcsPath = `${SAML_BASE_PATH}/assert`;
-  const acsPath = cfg.spAcsUrl ? new URL(cfg.spAcsUrl).pathname : defaultAcsPath;
-
   const identityFor = (origin) => ({
-    spEntityId: cfg.spEntityId || `${origin}${SAML_BASE_PATH}/metadata`,
-    acsUrl: cfg.spAcsUrl || `${origin}${defaultAcsPath}`,
+    spEntityId: `${origin}${SAML_BASE_PATH}/metadata`,
+    acsUrl: `${origin}${SAML_BASE_PATH}/assert`,
   });
 
-  // One SP per origin — the SLO callback always lives on the
-  // origin the browser is using, even when the identity is
-  // pinned by the overrides
+  // One SP per origin
   const sps = new Map();
   const spFor = (origin) => {
     let sp = sps.get(origin);
@@ -446,9 +425,6 @@ export async function createSamlSetup() {
     idpSource,
     idpEntityId: idp.entityMeta.getEntityID(),
     spCertFingerprint,
-    spEntityIdOverride: cfg.spEntityId || null,
-    acsPath,
-    defaultAcsPath,
     spNameIdFormat: cfg.spNameIdFormat,
     idpWantsSignedRequests,
   };

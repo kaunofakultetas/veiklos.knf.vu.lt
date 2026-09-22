@@ -74,8 +74,7 @@ test("both routes 401 without a token", async () => {
 //
 // A signed-in employee trying to grant themselves
 // Vadybininkas (their own oid comes from /api/me) is
-// refused by authorize on both routes, before any query —
-// the privilege escalation this router used to allow.
+// refused by authorize on both routes, before any query.
 // -----------------------------------------------------------
 
 test("a signed-in non-manager gets authorize's 403 on every route, no queries", async () => {

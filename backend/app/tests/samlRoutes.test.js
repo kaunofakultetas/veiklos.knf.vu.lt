@@ -7,9 +7,6 @@
 //  sign-in grant, the session write and the redirect — is
 //  pinned without any XML. A fake express-session stands in
 //  for the cookie store; the pool is the usual fake.
-//
-//  Also pins the custom-ACS mount index.js does when
-//  SP_ACS_URL points at lab.knf.vu.lt's path.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -19,9 +16,6 @@ import http from "node:http";
 import { resetDb, onQuery, queryLog } from "./helpers/db.js";
 import createSamlRouter from "../src/routes/saml.js";
 
-
-// lab.knf.vu.lt's registered ACS path — the custom mount
-const LAB_ACS_PATH = "/simplesaml/module.php/saml/sp/saml2-acs.php/default-sp";
 
 // What the fake SP "parses" out of the next POSTed assertion;
 // set per test. null → parseLoginResponse throws
@@ -133,9 +127,9 @@ before(async () => {
   app.use(express.urlencoded({ extended: false }));
   app.use(fakeSessionMiddleware);
 
-  // Mounted exactly like index.js does, custom ACS included;
-  // the fake setup hands the same SP to every origin but
-  // records which origin was asked for
+  // Mounted exactly like index.js does; the fake setup hands
+  // the same SP to every origin but records which origin was
+  // asked for
   const router = createSamlRouter({
     setup: {
       idp: {},
@@ -147,7 +141,6 @@ before(async () => {
     },
   });
   app.use("/auth/saml", router);
-  app.post(LAB_ACS_PATH, router.assert);
 
   server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -295,29 +288,6 @@ test("assert: parse failure → 401 with the reason", async () => {
   const res = await post("/auth/saml/assert");
   assert.equal(res.status, 401);
   assert.equal(await res.text(), "SAML assertion parsing failed: bad signature");
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// assert — the custom ACS mount
-// -----------------------------------------------------------
-//
-// The same handler answers at lab.knf.vu.lt's registered ACS
-// path when index.js mounts router.assert there.
-// -----------------------------------------------------------
-
-test("assert: served at the custom ACS path too", async () => {
-  nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { uid: "u1", mail: "u1@vu.lt" } };
-  stubReturningUser();
-
-  const res = await post(LAB_ACS_PATH);
-  assert.equal(res.status, 302);
-  assert.equal(res.headers.get("location"), "/");
 });
 
 

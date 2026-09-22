@@ -17,12 +17,9 @@
 //
 //  /assert is where a user is BORN in this system: it upserts
 //  the users row from the IdP attributes and auto-grants
-//  "Darbuotojas" on first sign-in — the work the old
-//  /api/session/init did in the Microsoft era. Attributes are
+//  "Darbuotojas" on first sign-in. Attributes are
 //  read through mapSamlAttributes, so VU SSO's OIDs (or their
-//  friendly names) both work. The assert handler is also
-//  exposed as router.assert, for mounting at a non-default
-//  ACS path (SP_ACS_URL).
+//  friendly names) both work.
 //
 //  Used by:
 //    - the browser — App.jsx redirects to /login, VU SSO
@@ -160,7 +157,6 @@ res.redirect("/");
         }
     };
     samlRouter.post("/assert", assert);
-    samlRouter.assert = assert;
 
     // GET /logout — drop the local session FIRST, then try to
     // log the IdP session out too; any IdP failure still ends

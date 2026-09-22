@@ -3,10 +3,9 @@
 //
 //    GET /api/session/check   — the SPA's "am I signed in"
 //
-//  Since the VU SSO (SAML) migration this router only probes
-//  the session. The user upsert and Darbuotojas auto-grant
-//  that the old /init did now live in the SAML /assert
-//  callback (routes/saml.js).
+//  Only probes the session; the user upsert and Darbuotojas
+//  auto-grant live in the SAML /assert callback
+//  (routes/saml.js).
 //
 //  Used by:
 //    - App.jsx — on load, to route the user by session state

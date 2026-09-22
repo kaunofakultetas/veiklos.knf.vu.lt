@@ -56,8 +56,7 @@ const manager = () => signInAs("mgr-1", ["Vadybininkas"]);
 //
 // No session → 401 from the session middleware; a signed-in
 // employee → authorize's 403 — and in neither case is the
-// users table touched. This is the user-enumeration hole
-// closed on 2026-09-22.
+// users table touched.
 // -----------------------------------------------------------
 
 test("GET /: anonymous → 401, plain employee → 403, no query either way", async () => {

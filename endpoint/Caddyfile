@@ -43,16 +43,6 @@
         }
 
 
-        # Reusing lab.knf.vu.lt's VU SSO registration: the IdP POSTs
-        # assertions to lab's registered ACS path, which the backend
-        # serves when SP_ACS_URL is set (see utils/saml.js)
-        handle /simplesaml/module.php/saml/sp/saml2-acs.php/default-sp {
-            reverse_proxy veiklos-backend:4000 {
-                header_up X-Forwarded-Proto https
-            }
-        }
-
-
         # Backend - API
         handle /api/* {
             reverse_proxy veiklos-backend:4000 {

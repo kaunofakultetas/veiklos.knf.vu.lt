@@ -1,8 +1,7 @@
 // -----------------------------------------------------------
 //  [*] Regression — routes /api/user-roles
 //
-//  The role admin API behind manager/roles.jsx. The old
-//  no-auth hole is FIXED since the VU SSO (SAML) migration:
+//  The role admin API behind manager/roles.jsx:
 //  index.js mounts the router behind verifySamlSession +
 //  attachRoles, and the router adds authorize(
 //  ["Vadybininkas"]) once for every route — role OWNERSHIP,
@@ -84,8 +83,7 @@ const manager = () => signInAs("mgr-1", ["Vadybininkas"]);
 // -----------------------------------------------------------
 //
 // Anonymous → 401 from the session middleware on all three
-// routes. This is the students' fix for the hole the old
-// suite pinned as an expected failure.
+// routes.
 // -----------------------------------------------------------
 
 test("anonymous callers are rejected on every route", async () => {

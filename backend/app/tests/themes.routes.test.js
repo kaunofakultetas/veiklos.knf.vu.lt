@@ -4,14 +4,12 @@
 //  The theme/subtheme catalog. Pins the guard split (read =
 //  any JWT, structure = active Vadybininkas, numbers = active
 //  Komisijos narys), the tree assembly, the dynamic PATCH SET
-//  building, every validation message, and the manual-cascade
-//  DELETE — whose missing transaction is pinned as an
-//  expected failure.
+//  building, every validation message, and the transactional
+//  cascade DELETE.
 //
 //  verifySamlSession/attachRoles are mocked
 //  (helpers/authMock.js); requireActiveRoleIn is the real
-//  one. The delete cascade gained the students' 409 guard
-//  against themes with linked activities.
+//  one.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -560,8 +558,8 @@ test("PATCH pointvalue: numeric strings pass (Number coercion); stored as a numb
 // delete theme — linked activities refuse
 // -----------------------------------------------------------
 //
-// The guard the students added: a theme with activities
-// still attached refuses with a 409 and NOTHING is deleted.
+// A theme with activities still attached refuses with a 409
+// and NOTHING is deleted.
 // -----------------------------------------------------------
 
 test("DELETE /:id: linked activities → 409, no deletes at all", async () => {

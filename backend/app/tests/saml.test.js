@@ -4,7 +4,7 @@
 //  Drives createSamlSetup against the real sso.vu.lt
 //  descriptor checked into fixtures/ (as a file and, via a
 //  stub server, as a URL). Pins the per-origin SP identity,
-//  the lab-registration overrides, the mandatory SP key pair
+//  the mandatory SP key pair
 //  (signing + encryption KeyDescriptors, signed requests),
 //  the whole encrypted-assertion path against a FAKE IdP
 //  built from a throwaway key pair, the missing-metadata and
@@ -49,15 +49,10 @@ const FAKE_IDP_CERT = fs.readFileSync(FIX("fake-idp.crt"), "utf8");
 const FAKE_IDP_ENTITY = "https://idp.test.local/metadata";
 const FAKE_IDP_FILE = path.join(os.tmpdir(), `fake-idp-${process.pid}.xml`);
 
-// lab.knf.vu.lt's registered identity — what the overrides
-// reuse when the app is hosted on that domain
-const LAB_ENTITY = "https://lab.knf.vu.lt";
-const LAB_ACS = "https://lab.knf.vu.lt/simplesaml/module.php/saml/sp/saml2-acs.php/default-sp";
-
 // Every env key createSamlSetup / enrichSpMetadata read —
 // wiped before each test so nothing leaks between tests
 const SAML_ENV = [
-  "IDP_METADATA", "SP_ENTITY_ID", "SP_ACS_URL", "SP_PRIVATE_KEY_PATH", "SP_CERT_PATH",
+  "IDP_METADATA", "SP_PRIVATE_KEY_PATH", "SP_CERT_PATH",
 ];
 
 let stub;
@@ -286,8 +281,6 @@ test("identity per request origin, one memoized SP each", async () => {
   process.env.IDP_METADATA = VU_FIXTURE;
 
   const setup = await createSamlSetup();
-  assert.equal(setup.spEntityIdOverride, null);
-  assert.equal(setup.acsPath, setup.defaultAcsPath);
   assert.deepEqual(setup.identityFor("https://veiklos.knf.vu.lt"), {
     spEntityId: `https://veiklos.knf.vu.lt${SAML_BASE_PATH}/metadata`,
     acsUrl: `https://veiklos.knf.vu.lt${SAML_BASE_PATH}/assert`,
@@ -302,40 +295,6 @@ test("identity per request origin, one memoized SP each", async () => {
   assert.notEqual(a, b);
   assert.equal(setup.spFor("https://veiklos.knf.vu.lt"), a);
   assert.ok(b.getMetadata().includes('entityID="http://dev.local:8080/auth/saml/metadata"'));
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// overrides — reusing lab.knf.vu.lt's registration
-// -----------------------------------------------------------
-//
-// SP_ENTITY_ID / SP_ACS_URL pin the identity for every
-// origin: the SP metadata carries lab's entity id and ACS
-// whatever host asked, only the SLO callback follows the
-// host, and acsPath is lab's path so index.js mounts the
-// assert handler there.
-// -----------------------------------------------------------
-
-test("overrides: lab's entity id and ACS pinned for every origin", async () => {
-  process.env.IDP_METADATA = VU_FIXTURE;
-  process.env.SP_ENTITY_ID = LAB_ENTITY;
-  process.env.SP_ACS_URL = LAB_ACS;
-
-  const setup = await createSamlSetup();
-  assert.equal(setup.spEntityIdOverride, LAB_ENTITY);
-  assert.deepEqual(setup.identityFor("https://kitas.example"), { spEntityId: LAB_ENTITY, acsUrl: LAB_ACS });
-  assert.equal(setup.acsPath, "/simplesaml/module.php/saml/sp/saml2-acs.php/default-sp");
-  assert.equal(setup.defaultAcsPath, "/auth/saml/assert");
-
-  const md = setup.spFor("https://kitas.example").getMetadata();
-  assert.ok(md.includes(`entityID="${LAB_ENTITY}"`));
-  assert.ok(md.includes(`Location="${LAB_ACS}"`));
-  assert.ok(md.includes('Location="https://kitas.example/auth/saml/logout/callback"'));
 });
 
 
@@ -485,8 +444,8 @@ test("plaintext assertion, or one signed by a stranger → refused", async () =>
 // mapSamlAttributes — VU SSO OIDs
 // -----------------------------------------------------------
 //
-// The attribute set VU SSO releases (as lab.knf.vu.lt
-// consumes it): uid, mail, givenName, sn by OID — and samlify
+// The attribute set VU SSO releases: uid, mail, givenName,
+// sn by OID — and samlify
 // hands multi-valued attributes over as arrays, so the first
 // value is taken.
 // -----------------------------------------------------------

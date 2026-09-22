@@ -2,18 +2,14 @@
 //  [*] Regression — index.js, black box
 //
 //  Spawns the REAL server (node src/index.js) as a child
-//  process — no DB, no module mocks — twice, both against the
-//  real sso.vu.lt descriptor in fixtures/:
-//
-//    plain — SP identity derived from the request host
-//    lab   — SP_ENTITY_ID / SP_ACS_URL reusing lab.knf.vu.lt's
-//            registration
+//  process — no DB, no module mocks — against the real
+//  sso.vu.lt descriptor in fixtures/.
 //
 //  Pins everything reachable without a SAML session: the
 //  health probe, the session gate on /api/me and on every
 //  guarded prefix as MOUNTED in index.js, the SP metadata
 //  endpoint, the boot line, the login redirect target, the
-//  ACS mounts, the 404 fallthrough, the debug request
+//  ACS mount, the 404 fallthrough, the debug request
 //  logging, and that uploads/ is NOT served as static files.
 // -----------------------------------------------------------
 
@@ -38,17 +34,13 @@ const FAKE_SP_CERT = new URL("./fixtures/fake-sp.crt", import.meta.url).pathname
 // The real VU SSO IdP descriptor, as a file path
 const VU_FIXTURE = new URL("./fixtures/idp-metadata.xml", import.meta.url).pathname;
 
-// lab.knf.vu.lt's registered identity
-const LAB_ENTITY = "https://lab.knf.vu.lt";
-const LAB_ACS_PATH = "/simplesaml/module.php/saml/sp/saml2-acs.php/default-sp";
-
 // The file planted in uploads/ to prove it is not served
 const probeName = `regression-static-probe-${Date.now()}.txt`;
 const probePath = path.join(appRoot, "uploads", probeName);
 
 
-// One entry per spawned server: { base, child, out }
-const servers = { plain: null, lab: null };
+// The spawned server: { base, child, out }
+let server = null;
 
 
 
@@ -60,16 +52,15 @@ const servers = { plain: null, lab: null };
 // startServer
 // -----------------------------------------------------------
 //
-// Spawns the server on a random high port with the given
-// extra env and waits for its "API listening" line. Returns
-// { base, child, out } — out.text accumulates stdout+stderr
-// for log assertions.
+// Spawns the server on a random high port and waits for its
+// "API listening" line. Returns { base, child, out } —
+// out.text accumulates stdout+stderr for log assertions.
 //
 // Used by:
-//   - the before() hook (below), once per identity mode
+//   - the before() hook (below)
 // -----------------------------------------------------------
 
-async function startServer(extraEnv) {
+async function startServer() {
   const port = 21000 + Math.floor(Math.random() * 5000);
   const base = `http://127.0.0.1:${port}`;
   const out = { text: "" };
@@ -83,7 +74,6 @@ async function startServer(extraEnv) {
       IDP_METADATA: VU_FIXTURE,
       SP_PRIVATE_KEY_PATH: FAKE_SP_KEY,
       SP_CERT_PATH: FAKE_SP_CERT,
-      ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -108,21 +98,15 @@ before(async () => {
   fs.mkdirSync(path.join(appRoot, "uploads"), { recursive: true });
   fs.writeFileSync(probePath, "slaptas priedas");
 
-  servers.plain = await startServer({});
-  servers.lab = await startServer({
-    SP_ENTITY_ID: LAB_ENTITY,
-    SP_ACS_URL: `${LAB_ENTITY}${LAB_ACS_PATH}`,
-  });
+  server = await startServer();
 });
 
 
 after(async () => {
   fs.rmSync(probePath, { force: true });
-  for (const s of Object.values(servers)) {
-    if (!s) continue;
-    s.child.kill("SIGTERM");
-    await once(s.child, "exit").catch(() => {});
-  }
+  if (!server) return;
+  server.child.kill("SIGTERM");
+  await once(server.child, "exit").catch(() => {});
 });
 
 
@@ -140,7 +124,7 @@ after(async () => {
 // -----------------------------------------------------------
 
 test("GET /api/health → 200 { ok: true }, no auth needed", async () => {
-  const res = await fetch(`${servers.plain.base}/api/health`);
+  const res = await fetch(`${server.base}/api/health`);
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true });
 });
@@ -160,7 +144,7 @@ test("GET /api/health → 200 { ok: true }, no auth needed", async () => {
 // -----------------------------------------------------------
 
 test("GET /api/me without a session → 401 Neprisijungta", async () => {
-  const res = await fetch(`${servers.plain.base}/api/me`);
+  const res = await fetch(`${server.base}/api/me`);
   assert.equal(res.status, 401);
   assert.deepEqual(await res.json(), { error: "Neprisijungta" });
 });
@@ -178,14 +162,11 @@ test("GET /api/me without a session → 401 Neprisijungta", async () => {
 // Every route that must never answer anonymously, hit on the
 // REAL server with the REAL middlewares — this pins the
 // index.js mounts (verifySamlSession, attachRoles) that the
-// per-router tests cannot see. /api/roles is here because
-// until 2026-09-22 it let any signed-in user grant roles;
-// anonymous access to it, /api/user-roles and /api/users was
-// the hole closed in the SSO migration.
+// per-router tests cannot see.
 // -----------------------------------------------------------
 
 test("anonymous → 401 Neprisijungta on every guarded prefix, as mounted", async () => {
-  const { base } = servers.plain;
+  const { base } = server;
   const cases = [
     ["GET", "/api/users"],
     ["GET", "/api/roles"],
@@ -226,8 +207,8 @@ test("anonymous → 401 Neprisijungta on every guarded prefix, as mounted", asyn
 // different Host header yields that host's identity.
 // -----------------------------------------------------------
 
-test("plain: SP metadata carries the identity of the request host", async () => {
-  const { base } = servers.plain;
+test("SP metadata carries the identity of the request host", async () => {
+  const { base } = server;
   const res = await fetch(`${base}/auth/saml/metadata`);
   assert.equal(res.status, 200);
   assert.ok(res.headers.get("content-type").includes("xml"));
@@ -255,7 +236,7 @@ test("plain: SP metadata carries the identity of the request host", async () => 
 
 
 // -----------------------------------------------------------
-// plain — boot log + login target
+// boot log + login target
 // -----------------------------------------------------------
 //
 // The boot line names the VU IdP, the descriptor file and
@@ -263,8 +244,8 @@ test("plain: SP metadata carries the identity of the request host", async () => 
 // sso.vu.lt.
 // -----------------------------------------------------------
 
-test("plain: boots from the file and logs in at sso.vu.lt", async () => {
-  const { base, out } = servers.plain;
+test("boots from the file and logs in at sso.vu.lt", async () => {
+  const { base, out } = server;
   assert.ok(
     out.text.includes(`SAML IdP https://sso.vu.lt/saml/saml2/idp/metadata.php from ${VU_FIXTURE}; SP identity derived from the request host; SP cert SHA-256 `),
     "expected the boot line; got:\n" + out.text
@@ -285,84 +266,6 @@ test("plain: boots from the file and logs in at sso.vu.lt", async () => {
 
 
 // -----------------------------------------------------------
-// lab overrides — boot log, identity, login target
-// -----------------------------------------------------------
-//
-// Booted with the lab overrides: the boot line names lab's
-// entity id; the SP metadata carries lab's entity id and ACS
-// whatever host asked; /login still goes to sso.vu.lt.
-// -----------------------------------------------------------
-
-test("lab: boot line, pinned identity, login at sso.vu.lt", async () => {
-  const { base, out } = servers.lab;
-  assert.ok(
-    out.text.includes(`SAML IdP https://sso.vu.lt/saml/saml2/idp/metadata.php from ${VU_FIXTURE}; SP identity ${LAB_ENTITY}; SP cert SHA-256 `),
-    "expected the boot line; got:\n" + out.text
-  );
-
-  const xml = await (await fetch(`${base}/auth/saml/metadata`)).text();
-  assert.ok(xml.includes(`entityID="${LAB_ENTITY}"`));
-  assert.ok(xml.includes(`Location="${LAB_ENTITY}${LAB_ACS_PATH}"`));
-
-  const login = await fetch(`${base}/auth/saml/login`, { redirect: "manual" });
-  assert.equal(login.status, 302);
-  assert.ok(login.headers.get("location").startsWith("https://sso.vu.lt/saml/module.php/saml/idp/singleSignOnService?SAMLRequest="));
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// lab overrides — both ACS mounts answer
-// -----------------------------------------------------------
-//
-// A garbage assertion POSTed to lab's ACS path and to the
-// default /auth/saml/assert both reach the assert handler
-// (401 from the parser), proving the custom mount.
-// -----------------------------------------------------------
-
-test("lab: the custom ACS path and the default both reach the handler", async () => {
-  const { base } = servers.lab;
-  for (const p of [LAB_ACS_PATH, "/auth/saml/assert"]) {
-    const res = await fetch(base + p, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "SAMLResponse=bm90LXhtbA%3D%3D",
-    });
-    assert.equal(res.status, 401, p);
-    assert.ok((await res.text()).startsWith("SAML assertion parsing failed"), p);
-  }
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// plain — no custom ACS mount
-// -----------------------------------------------------------
-//
-// Without SP_ACS_URL lab's path is not served — it falls
-// through to the 404.
-// -----------------------------------------------------------
-
-test("plain: lab's ACS path is NOT mounted", async () => {
-  const res = await fetch(servers.plain.base + LAB_ACS_PATH, { method: "POST" });
-  assert.equal(res.status, 404);
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
 // unknown route
 // -----------------------------------------------------------
 //
@@ -371,7 +274,7 @@ test("plain: lab's ACS path is NOT mounted", async () => {
 // -----------------------------------------------------------
 
 test("unknown route → express default 404", async () => {
-  const res = await fetch(`${servers.plain.base}/api/definitely-not-a-route`);
+  const res = await fetch(`${server.base}/api/definitely-not-a-route`);
   assert.equal(res.status, 404);
 });
 
@@ -390,7 +293,7 @@ test("unknown route → express default 404", async () => {
 // -----------------------------------------------------------
 
 test("the debug middleware logs every request to stdout", async () => {
-  const { base, out } = servers.plain;
+  const { base, out } = server;
   await fetch(`${base}/api/health`);
   await new Promise((r) => setTimeout(r, 100));
   assert.ok(
@@ -410,12 +313,11 @@ test("the debug middleware logs every request to stdout", async () => {
 // -----------------------------------------------------------
 //
 // A file planted in uploads/ is NOT reachable by URL — the
-// old unauthenticated static mount is gone, so the request
-// falls through to the 404. Attachments come only via the
-// guarded GET /api/activities/:id/attachment.
+// request falls through to the 404. Attachments come only
+// via the guarded GET /api/activities/:id/attachment.
 // -----------------------------------------------------------
 
 test("/uploads/<file> → 404 even for a file that exists on disk", async () => {
-  const res = await fetch(`${servers.plain.base}/uploads/${probeName}`);
+  const res = await fetch(`${server.base}/uploads/${probeName}`);
   assert.equal(res.status, 404);
 });

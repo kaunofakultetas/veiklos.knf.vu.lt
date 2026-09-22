@@ -1,10 +1,10 @@
 // -----------------------------------------------------------
 //  [*] Regression — routes /api/session
 //
-//  Since the VU SSO (SAML) migration this router only has
-//  GET /check: the SPA's "am I signed in" probe. The user
-//  upsert and Darbuotojas auto-grant that /init used to do
-//  now live in the SAML /assert callback (routes/saml.js).
+//  The router has one route, GET /check: the SPA's "am I
+//  signed in" probe. The user upsert and Darbuotojas
+//  auto-grant live in the SAML /assert callback
+//  (routes/saml.js).
 //
 //  verifySamlSession/attachRoles are mocked
 //  (helpers/authMock.js).
@@ -94,10 +94,10 @@ test("check: returns the DB user row plus roles as { name } objects", async () =
 //
 // A session for an oid the users table doesn't know (e.g.
 // wiped DB) still answers 200 — user comes back undefined,
-// not an error. Pinned as shipped.
+// not an error.
 // -----------------------------------------------------------
 
-test("check: unknown oid → 200 with user undefined (pinned as shipped)", async () => {
+test("check: unknown oid → 200 with user undefined", async () => {
   signInAs("ghost-oid", ["Darbuotojas"]);
   onQuery(/FROM users WHERE oid = \$1/, []);
 

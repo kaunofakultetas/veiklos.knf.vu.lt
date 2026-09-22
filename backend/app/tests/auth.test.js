@@ -3,9 +3,8 @@
 //
 //  Unit-tests the four middlewares in src/auth/ with fake
 //  req/res objects — no module mocks here, these are the real
-//  functions. verifySamlSession is the live gate since the
-//  VU SSO (SAML) migration. attachRoles runs against the fake
-//  pool.
+//  functions. verifySamlSession is the session gate;
+//  attachRoles runs against the fake pool.
 // -----------------------------------------------------------
 
 import { test, beforeEach } from "node:test";

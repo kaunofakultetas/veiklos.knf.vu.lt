@@ -6,9 +6,7 @@
 //  Auth: index.js mounts the router behind verifySamlSession
 //  + attachRoles, and the router adds managerOnly — the
 //  caller must OWN the Vadybininkas role, like the other role
-//  admin routers. (Until 2026-09-22 any signed-in user could
-//  dump every user's oid, email and name here — user
-//  enumeration nothing in the app needed.) Users are created
+//  admin routers. Users are created
 //  by the SAML upsert in routes/saml.js (/assert), keyed by
 //  the IdP's oid — there is no create route here, a user
 //  without an oid could never sign in.

@@ -7,11 +7,8 @@
 //  Auth: index.js mounts the router behind verifySamlSession
 //  + attachRoles, and the router adds managerOnly once for
 //  every route — the caller must OWN the Vadybininkas role,
-//  exactly like /api/user-roles. (Until 2026-09-22 any
-//  signed-in user could grant any role to any oid here — a
-//  privilege escalation, since /api/me hands out the caller's
-//  own oid.) The frontend role admin page uses
-//  /api/user-roles (email-keyed) instead.
+//  exactly like /api/user-roles. The frontend role admin page
+//  uses /api/user-roles (email-keyed) instead.
 //
 //  Used by:
 //    - nothing calls this at the moment

@@ -17,10 +17,10 @@
 //         /api/activities   — routes/activities.js
 //         /auth/saml        — routes/saml.js (login flow)
 //
-//  Auth model since the VU SSO (SAML) migration: the SAML
-//  /assert callback stores the login in an express-session
-//  cookie (secure, 8 h); verifySamlSession reads it back and
-//  attachRoles loads the caller's DB roles. Booting BLOCKS on
+//  Auth model: the SAML /assert callback stores the login in
+//  an express-session
+//  cookie (secure, 8 h); verifySamlSession reads it back
+//  and attachRoles loads the caller's DB roles. Booting BLOCKS on
 //  loading the VU SSO IdP metadata (createSamlSetup) from
 //  _SAML/ — no IdP metadata, no backend.
 //
@@ -112,16 +112,8 @@ app.use(session({
 // in _SAML/, or a URL) — the backend cannot
 // boot without it
 const samlSetup = await createSamlSetup();
-console.log(`SAML IdP ${samlSetup.idpEntityId} from ${samlSetup.idpSource}; SP identity ${samlSetup.spEntityIdOverride ?? "derived from the request host"}; SP cert SHA-256 ${samlSetup.spCertFingerprint}`);
-const samlRouter = createSamlRouter({ setup: samlSetup });
-app.use(SAML_BASE_PATH, samlRouter);
-
-// SP_ACS_URL points the registered ACS somewhere other than
-// /auth/saml/assert (reusing lab.knf.vu.lt's registration) —
-// serve the same handler there too
-if (samlSetup.acsPath !== samlSetup.defaultAcsPath) {
-  app.post(samlSetup.acsPath, samlRouter.assert);
-}
+console.log(`SAML IdP ${samlSetup.idpEntityId} from ${samlSetup.idpSource}; SP identity derived from the request host; SP cert SHA-256 ${samlSetup.spCertFingerprint}`);
+app.use(SAML_BASE_PATH, createSamlRouter({ setup: samlSetup }));
 
 
 

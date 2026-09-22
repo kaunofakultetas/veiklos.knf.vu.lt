@@ -1542,7 +1542,7 @@ test(
 // verbatim.
 // -----------------------------------------------------------
 
-test("delete: owner-only; PATVIRTINTA refuses with the PATEIKTA-only message (pinned as shipped)", async () => {
+test("delete: owner-only; PATVIRTINTA refuses with the PATEIKTA-only message", async () => {
   employee();
   onQuery(/SELECT employee_oid, status FROM activities/, [
     { employee_oid: "emp-1", status: "PATVIRTINTA" },

@@ -4,7 +4,7 @@
 //  Plain-text Lithuanian emails sent to an employee when a
 //  manager rejects or returns their activity, delivered
 //  through Mailjet's SMTP relay (in-v3.mailjet.com:587,
-//  STARTTLS) — the same route lab.knf.vu.lt uses. Mailjet
+//  STARTTLS). Mailjet
 //  authenticates the relay with the account's API key /
 //  secret (MAILJET_APIKEY / MAILJET_APISECRET); the sender
 //  address is MAIL_FROM_ADDRESS, whose domain must be
