@@ -58,10 +58,6 @@ const SAML_ENV = [
 let stub;
 let stubOrigin;
 
-// What the stub serves: the VU descriptor, or a variant that
-// demands signed AuthnRequests
-let stubWantsSigned = false;
-
 
 
 
@@ -72,17 +68,15 @@ let stubWantsSigned = false;
 // stubMetadata
 // -----------------------------------------------------------
 //
-// The VU descriptor verbatim, or with WantAuthnRequestsSigned
-// switched on to exercise the key demand.
+// The VU descriptor verbatim, served over HTTP for the URL
+// form of IDP_METADATA.
 //
 // Used by:
 //   - the stub server (below)
 // -----------------------------------------------------------
 
 function stubMetadata() {
-  const xml = fs.readFileSync(VU_FIXTURE, "utf8");
-  if (!stubWantsSigned) return xml;
-  return xml.replace("<md:IDPSSODescriptor ", '<md:IDPSSODescriptor WantAuthnRequestsSigned="true" ');
+  return fs.readFileSync(VU_FIXTURE, "utf8");
 }
 
 
@@ -103,7 +97,6 @@ beforeEach(() => {
   // The key pair is mandatory — every test starts with one
   process.env.SP_PRIVATE_KEY_PATH = FAKE_SP_KEY;
   process.env.SP_CERT_PATH = FAKE_SP_CERT;
-  stubWantsSigned = false;
 });
 
 
@@ -213,7 +206,6 @@ test("file metadata: VU IdP parsed, SP metadata carries both keys, signed login 
 
   assert.equal(setup.idpSource, VU_FIXTURE);
   assert.equal(setup.idpEntityId, "https://sso.vu.lt/saml/saml2/idp/metadata.php");
-  assert.equal(setup.idpWantsSignedRequests, false);
   assert.match(setup.spCertFingerprint, /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
 
   const sp = setup.spFor("https://veiklos.knf.vu.lt");
@@ -223,21 +215,25 @@ test("file metadata: VU IdP parsed, SP metadata carries both keys, signed login 
   assert.ok(md.includes('Location="https://veiklos.knf.vu.lt/auth/saml/logout/callback"'));
 
   // What VU registers: our certificate for signing AND
-  // encryption, and the flag that makes the IdP sign
-  // assertions. AuthnRequests stay unsigned because VU's
-  // descriptor does not ask for them (samlify follows the
-  // IdP's WantAuthnRequestsSigned and refuses a mismatch)
+  // encryption, and the flags that make the IdP sign
+  // assertions and expect signed requests
   const certBody = fs.readFileSync(FAKE_SP_CERT, "utf8").replace(/-----[^-]+-----|\s/g, "");
   assert.ok(md.includes('use="signing"') && md.includes('use="encryption"'));
   assert.equal(md.split(certBody).length - 1, 2, "the SP certificate appears once per use");
-  assert.ok(md.includes('AuthnRequestsSigned="false"') && md.includes('WantAssertionsSigned="true"'));
+  assert.ok(md.includes('AuthnRequestsSigned="true"') && md.includes('WantAssertionsSigned="true"'));
 
+  // VU's descriptor does not say WantAuthnRequestsSigned, yet
+  // the IdP validates every message — the request is signed
+  // regardless (requireSignedRequests)
+  assert.ok(!fs.readFileSync(VU_FIXTURE, "utf8").includes("WantAuthnRequestsSigned"));
   const { context } = await sp.createLoginRequest(setup.idp, "redirect");
   assert.ok(
     context.startsWith("https://sso.vu.lt/saml/module.php/saml/idp/singleSignOnService?"),
     "login must redirect to the VU IdP, got " + context
   );
-  assert.ok(!context.includes("&Signature="), "no signature while the IdP does not want one");
+  const params = new URL(context).searchParams;
+  assert.ok(params.get("Signature"), "the AuthnRequest is signed");
+  assert.equal(params.get("SigAlg"), "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256");
 });
 
 

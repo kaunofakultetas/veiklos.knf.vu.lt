@@ -19,10 +19,13 @@
 //  SP_CERT_PATH, made by generateSamlKeys.sh): VU SSO
 //  encrypts assertions with the certificate it finds in our
 //  metadata, so the key decrypts them — a plaintext assertion
-//  is refused — and the same pair signs our logout messages
-//  (AuthnRequests only if the IdP's metadata asks, VU's does
-//  not). The certificate is what VU registers; rotating it
-//  means re-registering.
+//  is refused — and the same pair signs every message we
+//  send: AuthnRequests and logout messages alike. VU's IdP
+//  validates the signature on everything it receives
+//  (SimpleSAMLphp's redirect.validate) although its descriptor
+//  never says WantAuthnRequestsSigned — see
+//  requireSignedRequests. The certificate is what VU
+//  registers; rotating it means re-registering.
 //
 //  The mdui/organization/contact enrichment exists for the
 //  LitNET FEDI registration: the federation requires SP
@@ -279,6 +282,36 @@ async function loadIdpMetadata(cfg) {
 
 
 // -----------------------------------------------------------
+// requireSignedRequests
+// -----------------------------------------------------------
+//
+// The loaded IdP descriptor with WantAuthnRequestsSigned
+// forced to "true" on its IDPSSODescriptor. samlify signs an
+// AuthnRequest only when the IdP's descriptor asks for it
+// (and refuses a mismatch), while VU's IdP demands signed
+// messages without saying so in its metadata — the login
+// died there with "Validation of received messages enabled,
+// but no signature found". samlify never checks the
+// descriptor's own signature, so the edit is safe.
+//
+// Used by:
+//   - createSamlSetup (below)
+// -----------------------------------------------------------
+
+function requireSignedRequests(idpXml) {
+  return idpXml.replace(
+    /<(md:)?IDPSSODescriptor\b([^>]*?)(\s+WantAuthnRequestsSigned="[^"]*")?([^>]*)>/,
+    '<$1IDPSSODescriptor$2 WantAuthnRequestsSigned="true"$4>'
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // enrichSpMetadata
 // -----------------------------------------------------------
 //
@@ -362,11 +395,10 @@ export async function createSamlSetup() {
   // it from the SENDER when deciding to decrypt, so without it
   // an encrypted response is judged unsigned and refused
   const idp = saml.IdentityProvider({
-    metadata: idpMetadata,
+    metadata: requireSignedRequests(idpMetadata),
     isAssertionEncrypted: true,
     wantLogoutRequestSigned: true,
   });
-  const idpWantsSignedRequests = idp.entityMeta.isWantAuthnRequestsSigned();
   const spPrivateKey = readRequiredFile(cfg.spPrivateKeyPath, "SP_PRIVATE_KEY_PATH");
   const spCert = readRequiredFile(cfg.spCertPath, "SP_CERT_PATH");
   const spCertFingerprint = new X509Certificate(spCert).fingerprint256;
@@ -385,12 +417,10 @@ export async function createSamlSetup() {
     const { spEntityId, acsUrl } = identityFor(origin);
     sp = saml.ServiceProvider({
       entityID: spEntityId,
-      // Our side of the VU SSO contract: signed assertions
-      // expected, assertions encrypted for the certificate we
-      // publish; AuthnRequests are signed only if the IdP's
-      // metadata asks (samlify refuses a mismatch), and VU's
-      // does not
-      authnRequestsSigned: idpWantsSignedRequests,
+      // Our side of the VU SSO contract: every request
+      // signed, signed assertions expected, assertions
+      // encrypted for the certificate we publish
+      authnRequestsSigned: true,
       wantAssertionsSigned: true,
       isAssertionEncrypted: true,
       privateKey: spPrivateKey,
@@ -426,6 +456,5 @@ export async function createSamlSetup() {
     idpEntityId: idp.entityMeta.getEntityID(),
     spCertFingerprint,
     spNameIdFormat: cfg.spNameIdFormat,
-    idpWantsSignedRequests,
   };
 }
