@@ -38,6 +38,44 @@ import { enrichSpMetadata, mapSamlAttributes } from "../utils/saml.js";
 
 
 // -----------------------------------------------------------
+// failedStatusDetail
+// -----------------------------------------------------------
+//
+// The IdP's own explanation of a non-Success response: the
+// StatusMessage (and any nested StatusCode) read straight
+// out of the posted SAMLResponse. samlify reports only the
+// status codes ("ERR_FAILED_STATUS ... Responder"), which is
+// useless for finding out what went wrong on VU's side —
+// the message next to them names the reason. null when
+// there is nothing to read.
+//
+// Used by:
+//   - POST /assert (below) — the failure log line and 401
+// -----------------------------------------------------------
+
+function failedStatusDetail(samlResponseB64) {
+    if (!samlResponseB64) return null;
+    let xml;
+    try {
+        xml = Buffer.from(String(samlResponseB64), "base64").toString("utf8");
+    } catch {
+        return null;
+    }
+    const message = /<(?:\w+:)?StatusMessage>([^<]*)<\//.exec(xml)?.[1]?.trim();
+    const codes = [...xml.matchAll(/<(?:\w+:)?StatusCode Value="([^"]+)"/g)].map((m) => m[1]);
+    const parts = [];
+    if (message) parts.push(message);
+    if (codes.length > 1) parts.push(`(${codes.join(" → ")})`);
+    return parts.length ? parts.join(" ") : null;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // createSamlRouter (default export)
 // -----------------------------------------------------------
 //
@@ -153,7 +191,9 @@ res.redirect("/");
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            res.status(401).send(`SAML assertion parsing failed: ${message}`);
+            const detail = failedStatusDetail(req.body?.SAMLResponse);
+            console.error("SAML assert failed:", message, detail ? `— IdP says: ${detail}` : "");
+            res.status(401).send(`SAML assertion parsing failed: ${message}${detail ? ` — IdP says: ${detail}` : ""}`);
         }
     };
     samlRouter.post("/assert", assert);

@@ -297,6 +297,41 @@ test("assert: parse failure → 401 with the reason", async () => {
 
 
 // -----------------------------------------------------------
+// assert — the IdP's own failure reason
+// -----------------------------------------------------------
+//
+// When the IdP answers with a non-Success status, its
+// StatusMessage and the nested status codes are read out of
+// the posted response and appended to the 401 — the
+// "Responder" code alone says nothing about the cause.
+// -----------------------------------------------------------
+
+test("assert: a failed-status response surfaces the IdP's StatusMessage", async () => {
+  const xml = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status>` +
+    `<samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Responder">` +
+    `<samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:InvalidNameIDPolicy"/></samlp:StatusCode>` +
+    `<samlp:StatusMessage>Unable to provide requested NameID format</samlp:StatusMessage></samlp:Status></samlp:Response>`;
+  const res = await fetch(base + "/auth/saml/assert", {
+    method: "POST",
+    redirect: "manual",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "SAMLResponse=" + encodeURIComponent(Buffer.from(xml).toString("base64")),
+  });
+  assert.equal(res.status, 401);
+  assert.equal(
+    await res.text(),
+    "SAML assertion parsing failed: bad signature — IdP says: Unable to provide requested NameID format " +
+      "(urn:oasis:names:tc:SAML:2.0:status:Responder → urn:oasis:names:tc:SAML:2.0:status:InvalidNameIDPolicy)"
+  );
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // assert — audience
 // -----------------------------------------------------------
 //

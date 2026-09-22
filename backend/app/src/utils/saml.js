@@ -427,9 +427,12 @@ export async function createSamlSetup() {
       signingCert: spCert,
       encPrivateKey: spPrivateKey,
       encryptCert: spCert,
+      // The first entry is what the AuthnRequest's NameIDPolicy
+      // asks for; transient is what VU's SimpleSAMLphp hands out
+      // (users are keyed by the uid attribute, not the NameID)
       nameIDFormat: [
-        "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
         "urn:oasis:names:tc:SAML:2.0:nameid-format:transient",
+        "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
       ],
       assertionConsumerService: [
         {

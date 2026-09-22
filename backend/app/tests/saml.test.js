@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
+import zlib from "node:zlib";
 import path from "node:path";
 import { once } from "node:events";
 import * as saml from "samlify";
@@ -234,6 +235,11 @@ test("file metadata: VU IdP parsed, SP metadata carries both keys, signed login 
   const params = new URL(context).searchParams;
   assert.ok(params.get("Signature"), "the AuthnRequest is signed");
   assert.equal(params.get("SigAlg"), "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256");
+
+  // The request asks for a TRANSIENT NameID — what VU's
+  // SimpleSAMLphp issues; asking for persistent made it fail
+  const inflated = zlib.inflateRawSync(Buffer.from(params.get("SAMLRequest"), "base64")).toString();
+  assert.match(inflated, /NameIDPolicy[^>]*Format="urn:oasis:names:tc:SAML:2.0:nameid-format:transient"/);
 });
 
 
