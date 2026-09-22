@@ -36,6 +36,9 @@ let base;
 // Every origin the router asked spFor() for, in order
 const askedOrigins = [];
 
+// The audience /assert demands: this server's own entity id
+const audienceOf = () => `${base}/auth/saml/metadata`;
+
 
 
 
@@ -140,6 +143,7 @@ before(async () => {
         askedOrigins.push(origin);
         return fakeSp;
       },
+      identityFor: (origin) => ({ spEntityId: `${origin}/auth/saml/metadata` }),
     },
   });
   app.use("/auth/saml", router);
@@ -199,7 +203,7 @@ function stubReturningUser() {
 
 test("assert: OID attributes → upsert by uid, session stored, redirect /", async () => {
   nextExtract = {
-    nameID: "transient-1",
+    audience: audienceOf(),    nameID: "transient-1",
     sessionIndex: "sidx-1",
     attributes: {
       "urn:oid:0.9.2342.19200300.100.1.1": "jonas.jonaitis",
@@ -235,7 +239,7 @@ test("assert: OID attributes → upsert by uid, session stored, redirect /", asy
 // -----------------------------------------------------------
 
 test("assert: first sign-in auto-grants Darbuotojas", async () => {
-  nextExtract = { nameID: "n", sessionIndex: "s", attributes: { uid: "new-1", mail: "new@vu.lt" } };
+  nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { uid: "new-1", mail: "new@vu.lt" } };
   onQuery(/INSERT INTO users \(oid, email, full_name\)/, { rowCount: 1 });
   onQuery(/SELECT 1 FROM user_roles WHERE user_oid = \$1 LIMIT 1/, []);
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 3 }]);
@@ -265,7 +269,7 @@ test("assert: first sign-in auto-grants Darbuotojas", async () => {
 // -----------------------------------------------------------
 
 test("assert: no oid or email in any scheme → 400, no queries", async () => {
-  nextExtract = { nameID: "n", sessionIndex: "s", attributes: { givenName: "Anonimas" } };
+  nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { givenName: "Anonimas" } };
 
   const res = await post("/auth/saml/assert");
   assert.equal(res.status, 400);
@@ -308,12 +312,47 @@ test("assert: parse failure → 401 with the reason", async () => {
 // -----------------------------------------------------------
 
 test("assert: served at the custom ACS path too", async () => {
-  nextExtract = { nameID: "n", sessionIndex: "s", attributes: { uid: "u1", mail: "u1@vu.lt" } };
+  nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { uid: "u1", mail: "u1@vu.lt" } };
   stubReturningUser();
 
   const res = await post(LAB_ACS_PATH);
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("location"), "/");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// assert — audience
+// -----------------------------------------------------------
+//
+// samlify does not check the AudienceRestriction, so /assert
+// does: an assertion minted for another SP (or carrying no
+// audience at all) is a 401, and nothing is upserted. An
+// array of audiences containing ours passes.
+// -----------------------------------------------------------
+
+test("assert: foreign or missing audience → 401, no upsert; a list containing ours passes", async () => {
+  for (const audience of ["https://kitas-sp.example/metadata", undefined, []]) {
+    resetDb();
+    nextExtract = { nameID: "n", sessionIndex: "s", attributes: { uid: "u1", mail: "u1@vu.lt" } };
+    if (audience !== undefined) nextExtract.audience = audience;
+
+    const res = await post("/auth/saml/assert");
+    assert.equal(res.status, 401, String(audience));
+    assert.equal(await res.text(), "SAML assertion audience mismatch");
+    assert.equal(queryLog().length, 0);
+  }
+
+  resetDb();
+  stubReturningUser();
+  nextExtract = { audience: ["https://other.example", audienceOf()], nameID: "n", sessionIndex: "s", attributes: { uid: "u1", mail: "u1@vu.lt" } };
+  const ok = await post("/auth/saml/assert");
+  assert.equal(ok.status, 302);
 });
 
 

@@ -104,12 +104,10 @@ services:
         DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@veiklos-db:5432/${POSTGRES_DB}
 
         # SAML / VU SSO
-        IDP_METADATA: /app/certs/vu-idp-metadata.xml
+        IDP_METADATA: /app/certs/test/idp-metadata.xml
+        SP_PRIVATE_KEY_PATH: /app/certs/test/sp-private.key
+        SP_CERT_PATH: /app/certs/test/sp-cert.pem
         
-        # # Dev SAML
-        # SP_ENTITY_ID: https://lab.knf.vu.lt
-        # SP_ACS_URL: https://lab.knf.vu.lt/simplesaml/module.php/saml/sp/saml2-acs.php/default-sp
-
         # Email
         MAILJET_APIKEY: ${MAILJET_APIKEY}
         MAILJET_APISECRET: ${MAILJET_APISECRET}

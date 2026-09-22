@@ -5,7 +5,7 @@
 //  against VU SSO (https://sso.vu.lt, a SimpleSAMLphp IdP
 //  registered with LitNET FEDI). Its public metadata lives in
 //  _SAML/ and reaches the container via IDP_METADATA — a file
-//  path (/app/certs/vu-idp-metadata.xml) or an http(s) URL.
+//  path (/app/certs/prod/idp-metadata.xml) or an http(s) URL.
 //
 //  The SP identity is derived from the origin each request
 //  arrives on (scheme + Host as forwarded by the ingress), so
@@ -24,9 +24,14 @@
 //  needed: VU SSO neither demands signed requests nor
 //  encrypts assertions.
 //
-//  Whether AuthnRequests get signed is decided by the IdP's
-//  metadata; only then are the SP key/cert in _SAML/ loaded.
-//  VU SSO does not ask for it, so the key pair is dormant.
+//  The SP always carries a key pair (SP_PRIVATE_KEY_PATH /
+//  SP_CERT_PATH, made by generateSamlKeys.sh): VU SSO
+//  encrypts assertions with the certificate it finds in our
+//  metadata, so the key decrypts them — a plaintext assertion
+//  is refused — and the same pair signs our AuthnRequests and
+//  logout messages (VU signs logout on its side too). The
+//  certificate is what VU registers; rotating it means
+//  re-registering.
 //
 //  The mdui/organization/contact enrichment exists for the
 //  LitNET FEDI registration: the federation requires SP
@@ -40,6 +45,7 @@
 import * as saml from "samlify";
 import * as validator from "@authenio/samlify-node-xmllint";
 import { readFileSync } from "node:fs";
+import { X509Certificate } from "node:crypto";
 
 
 
@@ -145,7 +151,7 @@ function readConfig() {
     spNameIdFormat:     env.SP_NAME_ID_FORMAT ??
                           "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified",
     spPrivateKeyPath:   env.SP_PRIVATE_KEY_PATH,
-    spSigningCertPath:  env.SP_SIGNING_CERT_PATH,
+    spCertPath:         env.SP_CERT_PATH,
   };
 }
 
@@ -223,9 +229,8 @@ export function mapSamlAttributes(attrs) {
 // readRequiredFile
 // -----------------------------------------------------------
 //
-// readFileSync with a pointed error naming the env var — the
-// SP key/cert are only REQUIRED when the IdP demands signed
-// AuthnRequests, so the message explains why booting failed.
+// readFileSync with a pointed error naming the env var, so a
+// missing SP key/cert explains itself at boot.
 //
 // Used by:
 //   - createSamlSetup (below)
@@ -234,7 +239,7 @@ export function mapSamlAttributes(attrs) {
 function readRequiredFile(path, envName) {
   if (!path) {
     throw new Error(
-      `${envName} is required when IdP expects signed AuthnRequests`,
+      `${envName} is required: the SP key pair VU SSO encrypts for (see generateSamlKeys.sh)`,
     );
   }
   return readFileSync(path, "utf8");
@@ -346,10 +351,11 @@ export function enrichSpMetadata(rawXml) {
 // -----------------------------------------------------------
 //
 // The boot-time factory index.js awaits: loads the IdP
-// metadata, asks it whether AuthnRequests must be signed
-// (only then are the SP key/cert loaded), and returns
+// metadata and the SP key pair, and returns
 //
 //   idp             — the samlify IdentityProvider
+//   spCertFingerprint — SHA-256 of the SP certificate, for
+//                     the boot log / VU's registration form
 //   identityFor(o)  — { spEntityId, acsUrl } for origin o
 //                     (o + /auth/saml/{metadata,assert}, or the
 //                     SP_ENTITY_ID / SP_ACS_URL overrides)
@@ -368,17 +374,18 @@ export async function createSamlSetup() {
   saml.setSchemaValidator(validator);
 
   const { xml: idpMetadata, source: idpSource } = await loadIdpMetadata(cfg);
+  // isAssertionEncrypted here describes the IdP: samlify reads
+  // it from the SENDER when deciding to decrypt, so without it
+  // an encrypted response is judged unsigned and refused
   const idp = saml.IdentityProvider({
     metadata: idpMetadata,
+    isAssertionEncrypted: true,
     wantLogoutRequestSigned: true,
   });
   const idpWantsSignedRequests = idp.entityMeta.isWantAuthnRequestsSigned();
-  const spPrivateKey = idpWantsSignedRequests
-    ? readRequiredFile(cfg.spPrivateKeyPath, "SP_PRIVATE_KEY_PATH")
-    : undefined;
-  const spSigningCert = idpWantsSignedRequests
-    ? readRequiredFile(cfg.spSigningCertPath, "SP_SIGNING_CERT_PATH")
-    : undefined;
+  const spPrivateKey = readRequiredFile(cfg.spPrivateKeyPath, "SP_PRIVATE_KEY_PATH");
+  const spCert = readRequiredFile(cfg.spCertPath, "SP_CERT_PATH");
+  const spCertFingerprint = new X509Certificate(spCert).fingerprint256;
 
   const defaultAcsPath = `${SAML_BASE_PATH}/assert`;
   const acsPath = cfg.spAcsUrl ? new URL(cfg.spAcsUrl).pathname : defaultAcsPath;
@@ -399,7 +406,18 @@ export async function createSamlSetup() {
     const { spEntityId, acsUrl } = identityFor(origin);
     sp = saml.ServiceProvider({
       entityID: spEntityId,
+      // Our side of the VU SSO contract: signed assertions
+      // expected, assertions encrypted for the certificate we
+      // publish; AuthnRequests are signed only if the IdP's
+      // metadata asks (samlify refuses a mismatch), and VU's
+      // does not
       authnRequestsSigned: idpWantsSignedRequests,
+      wantAssertionsSigned: true,
+      isAssertionEncrypted: true,
+      privateKey: spPrivateKey,
+      signingCert: spCert,
+      encPrivateKey: spPrivateKey,
+      encryptCert: spCert,
       nameIDFormat: [
         "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
         "urn:oasis:names:tc:SAML:2.0:nameid-format:transient",
@@ -416,12 +434,6 @@ export async function createSamlSetup() {
           Location: `${origin}${SAML_BASE_PATH}/logout/callback`,
         },
       ],
-      ...(idpWantsSignedRequests
-        ? {
-            privateKey: spPrivateKey,
-            signingCert: spSigningCert,
-          }
-        : {}),
     });
     sps.set(origin, sp);
     return sp;
@@ -433,6 +445,7 @@ export async function createSamlSetup() {
     spFor,
     idpSource,
     idpEntityId: idp.entityMeta.getEntityID(),
+    spCertFingerprint,
     spEntityIdOverride: cfg.spEntityId || null,
     acsPath,
     defaultAcsPath,

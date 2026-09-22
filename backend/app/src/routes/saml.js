@@ -53,13 +53,14 @@ import { enrichSpMetadata, mapSamlAttributes } from "../utils/saml.js";
 // -----------------------------------------------------------
 
 export default function createSamlRouter({ setup }) {
-    const { idp, spFor } = setup;
+    const { idp, spFor, identityFor } = setup;
     const samlRouter = Router();
 
     // The SP for the origin this request arrived on. Behind
     // the Caddy ingress req.protocol honours X-Forwarded-Proto
     // (index.js trusts the proxy) and Host passes through
-    const spOf = (req) => spFor(`${req.protocol}://${req.get("host")}`);
+    const originOf = (req) => `${req.protocol}://${req.get("host")}`;
+    const spOf = (req) => spFor(originOf(req));
 
     // GET /metadata — the SP metadata (enriched with the
     // LitNET FEDI blocks) that VU SSO / the federation
@@ -80,13 +81,23 @@ export default function createSamlRouter({ setup }) {
         }
     });
 
-    // POST /assert — the IdP posts the signed assertion here.
-    // Validates it, upserts the user, auto-grants Darbuotojas
-    // on first sign-in, stores the login in the session and
-    // sends the browser home
+    // POST /assert — the IdP posts the encrypted, signed
+    // assertion here. samlify checks signature, issuer and
+    // validity window; the audience is checked here because
+    // samlify does not — an assertion minted for another SP
+    // must not log anyone in. Then: upsert the user,
+    // auto-grant Darbuotojas on first sign-in, store the login
+    // in the session and send the browser home
     const assert = async (req, res) => {
         try {
             const { extract } = await spOf(req).parseLoginResponse(idp, "post", req);
+
+            const { spEntityId } = identityFor(originOf(req));
+            const audiences = [].concat(extract.audience ?? []);
+            if (!audiences.includes(spEntityId)) {
+                return res.status(401).send("SAML assertion audience mismatch");
+            }
+
             const { oid, email, name: fullName } = mapSamlAttributes(extract.attributes);
 
             if (!oid || !email) {

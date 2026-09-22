@@ -112,7 +112,7 @@ app.use(session({
 // in _SAML/, or a URL) — the backend cannot
 // boot without it
 const samlSetup = await createSamlSetup();
-console.log(`SAML IdP ${samlSetup.idpEntityId} from ${samlSetup.idpSource}; SP identity ${samlSetup.spEntityIdOverride ?? "derived from the request host"}`);
+console.log(`SAML IdP ${samlSetup.idpEntityId} from ${samlSetup.idpSource}; SP identity ${samlSetup.spEntityIdOverride ?? "derived from the request host"}; SP cert SHA-256 ${samlSetup.spCertFingerprint}`);
 const samlRouter = createSamlRouter({ setup: samlSetup });
 app.use(SAML_BASE_PATH, samlRouter);
 

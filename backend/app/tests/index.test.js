@@ -30,8 +30,13 @@ import path from "node:path";
 // lives)
 const appRoot = new URL("..", import.meta.url).pathname;
 
+// A throwaway SP key pair (tests/fixtures, test-only) — the
+// backend refuses to boot without one
+const FAKE_SP_KEY = new URL("./fixtures/fake-sp.key", import.meta.url).pathname;
+const FAKE_SP_CERT = new URL("./fixtures/fake-sp.crt", import.meta.url).pathname;
+
 // The real VU SSO IdP descriptor, as a file path
-const VU_FIXTURE = new URL("./fixtures/vu-idp-metadata.xml", import.meta.url).pathname;
+const VU_FIXTURE = new URL("./fixtures/idp-metadata.xml", import.meta.url).pathname;
 
 // lab.knf.vu.lt's registered identity
 const LAB_ENTITY = "https://lab.knf.vu.lt";
@@ -76,6 +81,8 @@ async function startServer(extraEnv) {
       PORT: String(port),
       SESSION_SECRET: "test-secret",
       IDP_METADATA: VU_FIXTURE,
+      SP_PRIVATE_KEY_PATH: FAKE_SP_KEY,
+      SP_CERT_PATH: FAKE_SP_CERT,
       ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -259,14 +266,14 @@ test("plain: SP metadata carries the identity of the request host", async () => 
 test("plain: boots from the file and logs in at sso.vu.lt", async () => {
   const { base, out } = servers.plain;
   assert.ok(
-    out.text.includes(`SAML IdP https://sso.vu.lt/SSO/saml2/idp/metadata.php from ${VU_FIXTURE}; SP identity derived from the request host`),
+    out.text.includes(`SAML IdP https://sso.vu.lt/saml/saml2/idp/metadata.php from ${VU_FIXTURE}; SP identity derived from the request host; SP cert SHA-256 `),
     "expected the boot line; got:\n" + out.text
   );
 
   const login = await fetch(`${base}/auth/saml/login`, { redirect: "manual" });
   assert.equal(login.status, 302);
   assert.ok(
-    login.headers.get("location").startsWith("https://sso.vu.lt/SSO/saml2/idp/SSOService.php?SAMLRequest="),
+    login.headers.get("location").startsWith("https://sso.vu.lt/saml/module.php/saml/idp/singleSignOnService?SAMLRequest="),
     "login must go to sso.vu.lt, got " + login.headers.get("location")
   );
 });
@@ -289,7 +296,7 @@ test("plain: boots from the file and logs in at sso.vu.lt", async () => {
 test("lab: boot line, pinned identity, login at sso.vu.lt", async () => {
   const { base, out } = servers.lab;
   assert.ok(
-    out.text.includes(`SAML IdP https://sso.vu.lt/SSO/saml2/idp/metadata.php from ${VU_FIXTURE}; SP identity ${LAB_ENTITY}`),
+    out.text.includes(`SAML IdP https://sso.vu.lt/saml/saml2/idp/metadata.php from ${VU_FIXTURE}; SP identity ${LAB_ENTITY}; SP cert SHA-256 `),
     "expected the boot line; got:\n" + out.text
   );
 
@@ -299,7 +306,7 @@ test("lab: boot line, pinned identity, login at sso.vu.lt", async () => {
 
   const login = await fetch(`${base}/auth/saml/login`, { redirect: "manual" });
   assert.equal(login.status, 302);
-  assert.ok(login.headers.get("location").startsWith("https://sso.vu.lt/SSO/saml2/idp/SSOService.php?SAMLRequest="));
+  assert.ok(login.headers.get("location").startsWith("https://sso.vu.lt/saml/module.php/saml/idp/singleSignOnService?SAMLRequest="));
 });
 
 
