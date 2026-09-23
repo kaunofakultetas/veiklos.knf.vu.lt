@@ -31,6 +31,7 @@ import {
   SP_INFO,
   ATTRIBUTE_ALIASES,
   mapSamlAttributes,
+  withNestedNameIds,
   enrichSpMetadata,
   createSamlSetup,
 } from "../src/utils/saml.js";
@@ -148,9 +149,15 @@ function fakeIdp({ encrypted }) {
     const now = new Date(Date.now() + skewMs);
     const later = new Date(now.getTime() + 5 * 60 * 1000);
     const acs = sp.entityMeta.getAssertionConsumerService("post");
+    // A value starting with "<" is emitted as-is (a nested
+    // element), anything else as an xs:string
     const attrs = Object.entries(attributes)
       .map(([name, value]) =>
-        `<saml:Attribute Name="${name}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri"><saml:AttributeValue xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="xs:string">${value}</saml:AttributeValue></saml:Attribute>`)
+        `<saml:Attribute Name="${name}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri">` +
+        (String(value).startsWith("<")
+          ? `<saml:AttributeValue>${value}</saml:AttributeValue>`
+          : `<saml:AttributeValue xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="xs:string">${value}</saml:AttributeValue>`) +
+        `</saml:Attribute>`)
       .join("");
     const { context } = await idp.createLoginResponse(
       sp,
@@ -396,6 +403,62 @@ test("encrypted + signed assertion from the fake IdP decrypts into attributes an
   assert.equal(extract.sessionIndex.sessionIndex, "_session-1");
   assert.deepEqual(mapSamlAttributes(extract.attributes), {
     oid: "vu12345",
+    email: "jonas.jonaitis@knf.vu.lt",
+    firstName: "Jonas",
+    lastName: "Jonaitis",
+    name: "Jonas Jonaitis",
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// encrypted assertion — VU test IdP's actual release
+// -----------------------------------------------------------
+//
+// The four attributes VU's TEST IdP really sends, in the
+// shape SimpleSAMLphp emits them: sn, givenName, mail as
+// strings and eduPersonTargetedID as a NESTED NameID element.
+// samlify hands that last one over as [] — withNestedNameIds
+// recovers it from the decrypted assertion, and the mapper
+// keys the user on it. This is the login that failed with
+// "missing oid or email" against the real test IdP.
+// -----------------------------------------------------------
+
+test("VU test IdP release: eduPersonTargetedID as a nested NameID keys the user", async () => {
+  const { loginResponseFor } = fakeIdp({ encrypted: true });
+  process.env.IDP_METADATA = FAKE_IDP_FILE;
+  const setup = await createSamlSetup();
+  const sp = setup.spFor("https://veiklos.knf.vu.lt");
+
+  const samlResponse = await loginResponseFor(sp, {
+    attributes: {
+      "urn:oid:2.5.4.4": "Jonaitis",
+      "urn:oid:2.5.4.42": "Jonas",
+      "urn:oid:0.9.2342.19200300.100.1.3": "jonas.jonaitis@knf.vu.lt",
+      "urn:oid:1.3.6.1.4.1.5923.1.1.1.10":
+        '<saml:NameID Format="urn:oasis:names:tc:SAML:2.0:nameid-format:persistent" ' +
+        'NameQualifier="https://sso.test.vu.lt/SSO/saml2/idp/metadata.php" ' +
+        'SPNameQualifier="https://veiklos.knf.vu.lt/auth/saml/metadata">a1b2c3d4e5f6</saml:NameID>',
+    },
+  });
+  const { samlContent, extract } = await sp.parseLoginResponse(setup.idp, "post", { body: { SAMLResponse: samlResponse } });
+
+  // what samlify alone gives — the pairwise id is lost
+  assert.deepEqual(extract.attributes["urn:oid:1.3.6.1.4.1.5923.1.1.1.10"], []);
+  assert.equal(mapSamlAttributes(extract.attributes).oid, null);
+
+  // what /assert does with it — samlContent is still the
+  // encrypted wire form, the helper decrypts it again
+  assert.ok(samlContent.includes("EncryptedAssertion"));
+  const attributes = await withNestedNameIds(sp, extract.attributes, samlContent);
+  assert.equal(attributes["urn:oid:1.3.6.1.4.1.5923.1.1.1.10"], "a1b2c3d4e5f6");
+  assert.deepEqual(mapSamlAttributes(attributes), {
+    oid: "a1b2c3d4e5f6",
     email: "jonas.jonaitis@knf.vu.lt",
     firstName: "Jonas",
     lastName: "Jonaitis",

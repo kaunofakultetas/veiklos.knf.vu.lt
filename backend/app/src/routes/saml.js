@@ -29,7 +29,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { TBL_USERS, TBL_ROLES, TBL_USER_ROLES } from "../db/tables.js";
-import { enrichSpMetadata, mapSamlAttributes } from "../utils/saml.js";
+import { enrichSpMetadata, mapSamlAttributes, withNestedNameIds } from "../utils/saml.js";
 
 
 
@@ -125,7 +125,7 @@ export default function createSamlRouter({ setup }) {
     // in the session and send the browser home
     const assert = async (req, res) => {
         try {
-            const { extract } = await spOf(req).parseLoginResponse(idp, "post", req);
+            const { samlContent, extract } = await spOf(req).parseLoginResponse(idp, "post", req);
 
             const { spEntityId } = identityFor(originOf(req));
             const audiences = [].concat(extract.audience ?? []);
@@ -133,14 +133,17 @@ export default function createSamlRouter({ setup }) {
                 return res.status(401).send("SAML assertion audience mismatch");
             }
 
-            const { oid, email, name: fullName } = mapSamlAttributes(extract.attributes);
+            // Nested-NameID attributes (eduPersonTargetedID) come
+            // back empty from samlify — filled from the assertion
+            const attributes = await withNestedNameIds(spOf(req), extract.attributes, samlContent);
+            const { oid, email, name: fullName } = mapSamlAttributes(attributes);
 
             // The attribute NAMES (never the values) are logged and
             // echoed, so a release policy that sends the identity
             // under names we don't map is diagnosable from the
             // error alone
             if (!oid || !email) {
-                const received = Object.keys(extract.attributes || {});
+                const received = Object.keys(attributes);
                 console.error("SAML assert: missing oid/email; attributes received:", received.join(", ") || "(none)");
                 return res.status(400).send(
                     `SAML assertion missing oid or email attributes (received: ${received.join(", ") || "none"})`
@@ -148,10 +151,12 @@ export default function createSamlRouter({ setup }) {
             }
 
             // Upsert keyed by oid — email always refreshes,
-            // full_name only when the IdP sent one
+            // full_name only when the IdP sent one; last_login_at
+            // is stamped on the first login too, not only on
+            // returning ones
             await pool.query(
-                `INSERT INTO ${TBL_USERS} (oid, email, full_name)
-                 VALUES ($1, $2, $3)
+                `INSERT INTO ${TBL_USERS} (oid, email, full_name, last_login_at)
+                 VALUES ($1, $2, $3, NOW())
                  ON CONFLICT (oid) DO UPDATE
                    SET email        = EXCLUDED.email,
                        full_name    = COALESCE(EXCLUDED.full_name, ${TBL_USERS}.full_name),
@@ -187,7 +192,7 @@ export default function createSamlRouter({ setup }) {
             req.session.samlUser = {
                 nameID:       extract.nameID,
                 sessionIndex: extract.sessionIndex,
-                attributes:   extract.attributes,
+                attributes,
             };
 
             req.session.save((err) => {

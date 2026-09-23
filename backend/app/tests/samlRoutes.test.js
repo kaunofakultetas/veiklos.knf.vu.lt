@@ -21,6 +21,10 @@ import createSamlRouter from "../src/routes/saml.js";
 // set per test. null → parseLoginResponse throws
 let nextExtract = null;
 
+// The decrypted assertion XML the fake SP hands back with it
+// (only the nested-NameID test needs a real one)
+let nextSamlContent = "";
+
 // The session object of the LAST request, for inspection
 let lastSession = null;
 
@@ -60,7 +64,7 @@ const fakeSp = {
   }),
   parseLoginResponse: async () => {
     if (!nextExtract) throw new Error("bad signature");
-    return { extract: nextExtract };
+    return { samlContent: nextSamlContent, extract: nextExtract };
   },
 };
 
@@ -152,6 +156,7 @@ after(() => new Promise((r) => server.close(r)));
 beforeEach(() => {
   resetDb();
   nextExtract = null;
+  nextSamlContent = "";
   lastSession = null;
   askedOrigins.length = 0;
 });
@@ -175,7 +180,7 @@ beforeEach(() => {
 // -----------------------------------------------------------
 
 function stubReturningUser() {
-  onQuery(/INSERT INTO users \(oid, email, full_name\)/, { rowCount: 1 });
+  onQuery(/INSERT INTO users \(oid, email, full_name, last_login_at\)/, { rowCount: 1 });
   onQuery(/SELECT 1 FROM user_roles WHERE user_oid = \$1 LIMIT 1/, [{ "?column?": 1 }]);
 }
 
@@ -233,7 +238,7 @@ test("assert: OID attributes → upsert by uid, session stored, redirect /", asy
 
 test("assert: first sign-in auto-grants Darbuotojas", async () => {
   nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { uid: "new-1", mail: "new@vu.lt" } };
-  onQuery(/INSERT INTO users \(oid, email, full_name\)/, { rowCount: 1 });
+  onQuery(/INSERT INTO users \(oid, email, full_name, last_login_at\)/, { rowCount: 1 });
   onQuery(/SELECT 1 FROM user_roles WHERE user_oid = \$1 LIMIT 1/, []);
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 3 }]);
   onQuery(/INSERT INTO user_roles \(user_oid, role_id\)/, { rowCount: 1 });
@@ -324,6 +329,39 @@ test("assert: a failed-status response surfaces the IdP's StatusMessage", async 
     "SAML assertion parsing failed: bad signature — IdP says: Unable to provide requested NameID format " +
       "(urn:oasis:names:tc:SAML:2.0:status:Responder → urn:oasis:names:tc:SAML:2.0:status:InvalidNameIDPolicy)"
   );
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// assert — nested NameID identifier
+// -----------------------------------------------------------
+//
+// samlify leaves eduPersonTargetedID empty; /assert recovers
+// it from the decrypted assertion and upserts the user keyed
+// on it, storing the completed attribute bag in the session.
+// -----------------------------------------------------------
+
+test("assert: an empty eduPersonTargetedID is recovered from the assertion and keys the upsert", async () => {
+  nextExtract = {
+    audience: audienceOf(), nameID: "n", sessionIndex: "s",
+    attributes: { "urn:oid:0.9.2342.19200300.100.1.3": "j@vu.lt", "urn:oid:1.3.6.1.4.1.5923.1.1.1.10": [] },
+  };
+  nextSamlContent =
+    '<saml:Assertion><saml:AttributeStatement><saml:Attribute Name="urn:oid:1.3.6.1.4.1.5923.1.1.1.10">' +
+    '<saml:AttributeValue><saml:NameID Format="x">pairwise-42</saml:NameID></saml:AttributeValue>' +
+    '</saml:Attribute></saml:AttributeStatement></saml:Assertion>';
+  stubReturningUser();
+
+  const res = await post("/auth/saml/assert");
+  assert.equal(res.status, 302);
+  const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
+  assert.equal(upsert.params[0], "pairwise-42");
+  assert.equal(lastSession.samlUser.attributes["urn:oid:1.3.6.1.4.1.5923.1.1.1.10"], "pairwise-42");
 });
 
 

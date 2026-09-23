@@ -255,6 +255,61 @@ export function mapSamlAttributes(attrs) {
 
 
 // -----------------------------------------------------------
+// withNestedNameIds
+// -----------------------------------------------------------
+//
+// samlify's attribute extractor reads only the TEXT of an
+// AttributeValue; an attribute whose value is a nested
+// element — eduPersonTargetedID, which SimpleSAMLphp emits
+// as <AttributeValue><NameID …>value</NameID></AttributeValue>
+// — comes back as an empty array, and VU's test IdP sends
+// exactly that as the user's identifier. This reads every
+// such nested NameID out of the assertion and fills it into
+// the bag where samlify left nothing. The samlContent
+// parseLoginResponse returns is still the ENCRYPTED wire
+// form (samlify decrypts into a scratch copy), so the
+// assertion is decrypted again here with the SP key — a
+// second decrypt of bytes whose signature parseLoginResponse
+// already verified. Skipped entirely when nothing is empty.
+//
+// Used by:
+//   - routes/saml.js — POST /assert, before mapSamlAttributes
+// -----------------------------------------------------------
+
+export async function withNestedNameIds(sp, attributes, samlContent) {
+  const bag = { ...(attributes || {}) };
+  if (!samlContent) return bag;
+  const empty = Object.keys(bag).filter((k) => firstValue(bag[k]) === null);
+  if (!empty.length) return bag;
+
+  let xml = samlContent;
+  if (/EncryptedAssertion/.test(xml)) {
+    try {
+      [xml] = await saml.SamlLib.decryptAssertion(sp, samlContent);
+    } catch {
+      return bag;
+    }
+  }
+
+  const attrRe = /<(?:\w+:)?Attribute\b[^>]*\bName="([^"]+)"[^>]*>([\s\S]*?)<\/(?:\w+:)?Attribute>/g;
+  for (const m of xml.matchAll(attrRe)) {
+    const name = m[1];
+    const nameIds = [...m[2].matchAll(/<(?:\w+:)?NameID\b[^>]*>([^<]*)<\/(?:\w+:)?NameID>/g)]
+      .map((n) => n[1].trim())
+      .filter(Boolean);
+    const present = firstValue(bag[name]) !== null;
+    if (nameIds.length && !present) bag[name] = nameIds.length === 1 ? nameIds[0] : nameIds;
+  }
+  return bag;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // readRequiredFile
 // -----------------------------------------------------------
 //
