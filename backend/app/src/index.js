@@ -126,7 +126,7 @@ app.use(SAML_BASE_PATH, createSamlRouter({ setup: samlSetup }));
 // -----------------------------------------------------------
 //
 // The caller's identity as the frontend sees it: name, email,
-// oid and ALL roles they own (attachRoles also auto-grants
+// eid and ALL roles they own (attachRoles also auto-grants
 // "Darbuotojas" on the way). The frontend picks its active
 // role from this list and sends it back as X-Active-Role.
 //
@@ -136,9 +136,9 @@ app.use(SAML_BASE_PATH, createSamlRouter({ setup: samlSetup }));
 // -----------------------------------------------------------
 
 app.get("/api/me", verifySamlSession, attachRoles, (req, res) => {
-  const { name, email, oid } = req.user;
+  const { name, email, eid } = req.user;
   const roles = req.user.roles || [];
-  res.json({ name, email, oid, roles });
+  res.json({ name, email, eid, roles });
 });
 
 

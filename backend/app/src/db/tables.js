@@ -16,7 +16,7 @@
 // TBL_USERS
 // -----------------------------------------------------------
 //
-// The users table — one row per SSO account, keyed by oid.
+// The users table — one row per SSO account, keyed by eid.
 //
 // Used by:
 //   - routes/users.js, routes/session.js, routes/saml.js
@@ -53,7 +53,7 @@ export const TBL_ROLES = 'roles';
 // TBL_USER_ROLES
 // -----------------------------------------------------------
 //
-// The user↔role join table (user_oid, role_id).
+// The user↔role join table (user_eid, role_id).
 //
 // Used by:
 //   - routes/roles.js, routes/saml.js — the /assert auto-grant

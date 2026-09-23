@@ -2,7 +2,7 @@
 //  [*] Routes — /api/roles
 //
 //    GET  /api/roles          — the role catalog
-//    POST /api/roles/assign   — grant a role by user oid
+//    POST /api/roles/assign   — grant a role by user eid
 //
 //  Auth: index.js mounts the router behind verifySamlSession
 //  + attachRoles, and the router adds managerOnly once for
@@ -67,7 +67,7 @@ router.get("/", async (_req, res) => {
 // POST /api/roles/assign
 // -----------------------------------------------------------
 //
-// Body: { user_oid, role_name }. Grants the role; re-granting
+// Body: { user_eid, role_name }. Grants the role; re-granting
 // is a no-op (ON CONFLICT DO NOTHING). 404 when the role name
 // is unknown; a DB failure answers the usual 500.
 //
@@ -77,8 +77,8 @@ router.get("/", async (_req, res) => {
 // -----------------------------------------------------------
 
 router.post("/assign", async (req, res) => {
-  const { user_oid, role_name } = req.body;
-  if (!user_oid || !role_name)
+  const { user_eid, role_name } = req.body;
+  if (!user_eid || !role_name)
     return res.status(400).json({ error: "Klaida: Vartotojo OID ir rolė yra privalomi" });
 
   try {
@@ -90,10 +90,10 @@ router.post("/assign", async (req, res) => {
       return res.status(404).json({ error: "Klaida: Rolė nerasta" });
 
     await pool.query(
-      `INSERT INTO ${TBL_USER_ROLES} (user_oid, role_id)
+      `INSERT INTO ${TBL_USER_ROLES} (user_eid, role_id)
        VALUES ($1, $2)
        ON CONFLICT DO NOTHING`,
-      [user_oid, role.rows[0].id]
+      [user_eid, role.rows[0].id]
     );
 
     res.status(204).end();

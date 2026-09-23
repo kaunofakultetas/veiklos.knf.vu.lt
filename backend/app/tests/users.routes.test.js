@@ -4,7 +4,7 @@
 //  Mounted exactly like index.js does — behind the mocked
 //  verifySamlSession + attachRoles (as `pre`) — with the
 //  real authorize(["Vadybininkas"]) guard in the router:
-//  anonymous 401, non-manager 403. Listing every user's oid,
+//  anonymous 401, non-manager 403. Listing every user's eid,
 //  email and name is manager business only. Nothing in the
 //  frontend calls this route; the pins keep the dormant
 //  behavior from drifting.
@@ -82,16 +82,16 @@ test("GET /: anonymous → 401, plain employee → 403, no query either way", as
 // GET — table dump
 // -----------------------------------------------------------
 //
-// One scripted SELECT over the real columns (oid, no serial
+// One scripted SELECT over the real columns (eid, no serial
 // id; ORDER BY created_at DESC pinned in the matcher) passed
 // straight through as JSON.
 // -----------------------------------------------------------
 
 test("GET /: a manager gets the users table, newest first", async () => {
   manager();
-  onQuery(/SELECT oid, email, full_name, created_at FROM users ORDER BY created_at DESC/, [
-    { oid: "o2", email: "b@x", full_name: "B", created_at: "2026-01-02" },
-    { oid: "o1", email: "a@x", full_name: "A", created_at: "2026-01-01" },
+  onQuery(/SELECT eid, email, full_name, created_at FROM users ORDER BY created_at DESC/, [
+    { eid: "o2", email: "b@x", full_name: "B", created_at: "2026-01-02" },
+    { eid: "o1", email: "a@x", full_name: "A", created_at: "2026-01-01" },
   ]);
 
   const res = await api(app.base, "GET", "/api/users");

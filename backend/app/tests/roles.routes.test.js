@@ -73,7 +73,7 @@ test("both routes 401 without a token", async () => {
 // -----------------------------------------------------------
 //
 // A signed-in employee trying to grant themselves
-// Vadybininkas (their own oid comes from /api/me) is
+// Vadybininkas (their own eid comes from /api/me) is
 // refused by authorize on both routes, before any query.
 // -----------------------------------------------------------
 
@@ -81,7 +81,7 @@ test("a signed-in non-manager gets authorize's 403 on every route, no queries", 
   signInAs("nobody-special", ["Darbuotojas"]);
 
   const grant = await api(app.base, "POST", "/api/roles/assign", {
-    body: { user_oid: "nobody-special", role_name: "Vadybininkas" },
+    body: { user_eid: "nobody-special", role_name: "Vadybininkas" },
   });
   assert.equal(grant.status, 403);
   assert.deepEqual(grant.body, { error: "Forbidden: insufficient role" });
@@ -132,7 +132,7 @@ test("GET /: returns the catalog alphabetically", async () => {
 
 test("assign: missing fields → 400", async () => {
   manager();
-  const res = await api(app.base, "POST", "/api/roles/assign", { body: { user_oid: "u1" } });
+  const res = await api(app.base, "POST", "/api/roles/assign", { body: { user_eid: "u1" } });
   assert.equal(res.status, 400);
   assert.deepEqual(res.body, { error: "Klaida: Vartotojo OID ir rolė yra privalomi" });
 });
@@ -155,7 +155,7 @@ test("assign: unknown role name → 404", async () => {
   onQuery(/SELECT id FROM roles WHERE name = \$1/, []);
 
   const res = await api(app.base, "POST", "/api/roles/assign", {
-    body: { user_oid: "u1", role_name: "Nėra tokios" },
+    body: { user_eid: "u1", role_name: "Nėra tokios" },
   });
   assert.equal(res.status, 404);
   assert.deepEqual(res.body, { error: "Klaida: Rolė nerasta" });
@@ -175,19 +175,19 @@ test("assign: unknown role name → 404", async () => {
 // clause and bound params are pinned; 204, no body.
 // -----------------------------------------------------------
 
-test("assign: grants by (oid, role id), re-grant is a DB-side no-op → 204 either way", async () => {
+test("assign: grants by (eid, role id), re-grant is a DB-side no-op → 204 either way", async () => {
   manager();
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 7 }]);
   onQuery(/INSERT INTO user_roles/, { rowCount: 0 });
 
   const res = await api(app.base, "POST", "/api/roles/assign", {
-    body: { user_oid: "target-oid", role_name: "Vadybininkas" },
+    body: { user_eid: "target-eid", role_name: "Vadybininkas" },
   });
   assert.equal(res.status, 204);
 
   const insert = queryLog().find((q) => q.sql.includes("INSERT INTO user_roles"));
   assert.ok(insert.sql.includes("ON CONFLICT DO NOTHING"));
-  assert.deepEqual(insert.params, ["target-oid", 7]);
+  assert.deepEqual(insert.params, ["target-eid", 7]);
 });
 
 
@@ -216,7 +216,7 @@ test("GET / and assign: DB failure → 500 internal error", async () => {
   assert.deepEqual(list.body, { error: "internal error" });
 
   const assign = await api(app.base, "POST", "/api/roles/assign", {
-    body: { user_oid: "target-oid", role_name: "Vadybininkas" },
+    body: { user_eid: "target-eid", role_name: "Vadybininkas" },
   });
   assert.equal(assign.status, 500);
   assert.deepEqual(assign.body, { error: "internal error" });

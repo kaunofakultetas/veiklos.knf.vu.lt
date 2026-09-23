@@ -86,7 +86,7 @@ const asRole = (role) => ({ "X-Active-Role": role });
 // -----------------------------------------------------------
 //
 // Signs the mocked identity in as the employee "emp-1" — the
-// oid the ownership tests treat as the activity's author.
+// eid the ownership tests treat as the activity's author.
 //
 // Used by:
 //   - the create / my / edit / delete / resubmit tests (below)
@@ -174,7 +174,7 @@ function activityForm({ file, fileName, fileType = "text/plain", ...fields }) {
 // -----------------------------------------------------------
 
 function stubFullName(name = "Jonas Jonaitis") {
-  onQuery(/SELECT full_name FROM users WHERE oid = \$1/, name ? [{ full_name: name }] : []);
+  onQuery(/SELECT full_name FROM users WHERE eid = \$1/, name ? [{ full_name: name }] : []);
 }
 
 
@@ -277,7 +277,7 @@ test("create: trims title/description, null attachment columns without a file �
   stubFullName();
   stubPair();
   onQuery(/INSERT INTO activities/, (sql, params) => [
-    { id: 1, employee_oid: params[0], title: params[3], status: "PATEIKTA" },
+    { id: 1, employee_eid: params[0], title: params[3], status: "PATEIKTA" },
   ]);
 
   const res = await api(app.base, "POST", "/api/activities", {
@@ -513,13 +513,13 @@ test("create: an attachment over 100 MB → 400 per didelis", async () => {
 // list — /my
 // -----------------------------------------------------------
 //
-// WHERE employee_oid = caller pinned via the bound
+// WHERE employee_eid = caller pinned via the bound
 // param; DESC ordering in the matcher.
 // -----------------------------------------------------------
 
-test("GET /my: scoped to the caller's oid, newest first", async () => {
+test("GET /my: scoped to the caller's eid, newest first", async () => {
   employee();
-  onQuery(/WHERE a\.employee_oid = \$1 ORDER BY a\.created_at DESC/, [{ id: 1 }]);
+  onQuery(/WHERE a\.employee_eid = \$1 ORDER BY a\.created_at DESC/, [{ id: 1 }]);
 
   const res = await api(app.base, "GET", "/api/activities/my", {
     headers: asRole("Darbuotojas"),
@@ -621,12 +621,12 @@ test("GET /evaluated/theme-totals: LEFT JOIN keeps score-less themes at 0", asyn
 // -----------------------------------------------------------
 //
 // The DISTINCT employee list, then one employee's
-// grouped sums with the oid bound as a param.
+// grouped sums with the eid bound as a param.
 // -----------------------------------------------------------
 
-test("GET /evaluated/employees + /evaluated/employee/:oid/subthemes", async () => {
+test("GET /evaluated/employees + /evaluated/employee/:eid/subthemes", async () => {
   committee();
-  onQuery(/SELECT DISTINCT u\.oid/, [{ oid: "emp-1", full_name: "J", email: "j@x" }]);
+  onQuery(/SELECT DISTINCT u\.eid/, [{ eid: "emp-1", full_name: "J", email: "j@x" }]);
   let res = await api(app.base, "GET", "/api/activities/evaluated/employees", {
     headers: asRole("Komisijos narys"),
   });
@@ -933,7 +933,7 @@ test('no usable fields → 400 with the shipped "Paketiimai" typo (load-bearing 
 function stubCommitteePatch(status = "PATVIRTINTA") {
   onQuery(/SELECT status FROM activities WHERE id = \$1/, status ? [{ status }] : []);
   onQuery(/UPDATE activities SET/, { rowCount: 1 });
-  onQuery(/SELECT a\.id, a\.employee_oid/, [{ id: 10, status: "updated" }]);
+  onQuery(/SELECT a\.id, a\.employee_eid/, [{ id: 10, status: "updated" }]);
 }
 
 
@@ -1152,7 +1152,7 @@ test("committee empty body → 400, correctly spelled here", async () => {
 // -----------------------------------------------------------
 
 function stubAttachmentRow(overrides = {}) {
-  onQuery(/SELECT attachment_path, attachment_original_name, employee_oid/, [
+  onQuery(/SELECT attachment_path, attachment_original_name, employee_eid/, [
     {
       attachment_path:
         "attachment_path" in overrides ? overrides.attachment_path : "test-attach.txt",
@@ -1160,7 +1160,7 @@ function stubAttachmentRow(overrides = {}) {
         "attachment_original_name" in overrides
           ? overrides.attachment_original_name
           : "Priedas ū.txt",
-      employee_oid: "employee_oid" in overrides ? overrides.employee_oid : "emp-1",
+      employee_eid: "employee_eid" in overrides ? overrides.employee_eid : "emp-1",
     },
   ]);
 }
@@ -1204,7 +1204,7 @@ test("attachment: the owner downloads under the ORIGINAL name", async () => {
 // attachment — stranger
 // -----------------------------------------------------------
 //
-// A different oid with no privileged roles → the
+// A different eid with no privileged roles → the
 // Draudžiama 403.
 // -----------------------------------------------------------
 
@@ -1290,9 +1290,9 @@ test("attachment: row without a file → 404 Nėra priedo; unknown id → 404 Ne
 // -----------------------------------------------------------
 
 function stubEmployeePatch(cur = {}) {
-  onQuery(/SELECT employee_oid, status, attachment_path FROM activities/, [
+  onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
     {
-      employee_oid: cur.employee_oid ?? "emp-1",
+      employee_eid: cur.employee_eid ?? "emp-1",
       status: cur.status ?? "PATEIKTA",
       attachment_path: cur.attachment_path ?? null,
     },
@@ -1317,7 +1317,7 @@ function stubEmployeePatch(cur = {}) {
 
 test("employee edit: 403 for non-owners, 400 outside PATEIKTA/TIKSLINTI", async () => {
   employee();
-  stubEmployeePatch({ employee_oid: "kitas" });
+  stubEmployeePatch({ employee_eid: "kitas" });
   stubFullName();
   let res = await api(app.base, "PATCH", "/api/activities/10", {
     form: activityForm({ title: "X" }),
@@ -1403,10 +1403,10 @@ test("employee edit: TIKSLINTI is editable; text-only edit builds a partial SET"
   const update = queryLog().find((q) => q.sql.startsWith("UPDATE activities"));
   assert.ok(update.sql.includes("title = $1"));
   assert.ok(update.sql.includes("description = $2"));
-  // ...then the row id and the owner's oid — the UPDATE is
+  // ...then the row id and the owner's eid — the UPDATE is
   // conditional on both (see the lost-race tests)
   assert.deepEqual(update.params, ["Naujas", "Aprašas", "10", "emp-1"]);
-  assert.ok(update.sql.includes("AND employee_oid = $4 AND status IN ('PATEIKTA', 'TIKSLINTI')"));
+  assert.ok(update.sql.includes("AND employee_eid = $4 AND status IN ('PATEIKTA', 'TIKSLINTI')"));
 });
 
 
@@ -1544,8 +1544,8 @@ test(
 
 test("delete: owner-only; PATVIRTINTA refuses with the PATEIKTA-only message", async () => {
   employee();
-  onQuery(/SELECT employee_oid, status FROM activities/, [
-    { employee_oid: "emp-1", status: "PATVIRTINTA" },
+  onQuery(/SELECT employee_eid, status FROM activities/, [
+    { employee_eid: "emp-1", status: "PATVIRTINTA" },
   ]);
 
   const res = await api(app.base, "DELETE", "/api/activities/10", {
@@ -1579,8 +1579,8 @@ test("delete: TIKSLINTI (and PATEIKTA) rows delete → 204 and the disk file is 
   createdFiles.add(stored);
 
   employee();
-  onQuery(/SELECT employee_oid, status FROM activities/, [
-    { employee_oid: "emp-1", status: "TIKSLINTI" },
+  onQuery(/SELECT employee_eid, status FROM activities/, [
+    { employee_eid: "emp-1", status: "TIKSLINTI" },
   ]);
   onQuery(/DELETE FROM activities WHERE id = \$1/, [{ attachment_path: stored }]);
 
@@ -1616,8 +1616,8 @@ test("delete: no attachment, or one already missing on disk → still 204", asyn
   employee();
   for (const attachment_path of [null, `never-existed-${Date.now()}.pdf`]) {
     resetDb();
-    onQuery(/SELECT employee_oid, status FROM activities/, [
-      { employee_oid: "emp-1", status: "PATEIKTA" },
+    onQuery(/SELECT employee_eid, status FROM activities/, [
+      { employee_eid: "emp-1", status: "PATEIKTA" },
     ]);
     onQuery(/DELETE FROM activities WHERE id = \$1/, [{ attachment_path }]);
 
@@ -1644,8 +1644,8 @@ test("delete: no attachment, or one already missing on disk → still 204", asyn
 
 test("resubmit: TIKSLINTI-only, owner-only → PATEIKTA with the comment cleared", async () => {
   employee();
-  onQuery(/SELECT employee_oid, status FROM activities/, [
-    { employee_oid: "emp-1", status: "TIKSLINTI" },
+  onQuery(/SELECT employee_eid, status FROM activities/, [
+    { employee_eid: "emp-1", status: "TIKSLINTI" },
   ]);
   onQuery(/UPDATE activities SET status = 'PATEIKTA', rejection_comment = NULL/, { rowCount: 1 });
   onQuery(/SELECT a\.id, a\.theme_id/, [{ id: 10, status: "PATEIKTA" }]);
@@ -1673,8 +1673,8 @@ test("resubmit: TIKSLINTI-only, owner-only → PATEIKTA with the comment cleared
 
 test("resubmit: a PATEIKTA row cannot be resubmitted", async () => {
   employee();
-  onQuery(/SELECT employee_oid, status FROM activities/, [
-    { employee_oid: "emp-1", status: "PATEIKTA" },
+  onQuery(/SELECT employee_eid, status FROM activities/, [
+    { employee_eid: "emp-1", status: "PATEIKTA" },
   ]);
 
   const res = await api(app.base, "POST", "/api/activities/10/resubmit", {
@@ -1728,12 +1728,12 @@ function twice(first, then) {
 test("edit: manager approves between the gate and the UPDATE → 409, upload dropped", async () => {
   employee();
   stubFullName();
-  onQuery(/SELECT employee_oid, status, attachment_path FROM activities/, [
-    { employee_oid: "emp-1", status: "PATEIKTA", attachment_path: null },
+  onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
+    { employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null },
   ]);
   onQuery(/UPDATE activities SET/, { rowCount: 0 });
-  onQuery(/SELECT employee_oid, status FROM activities WHERE id = \$1/, [
-    { employee_oid: "emp-1", status: "PATVIRTINTA" },
+  onQuery(/SELECT employee_eid, status FROM activities WHERE id = \$1/, [
+    { employee_eid: "emp-1", status: "PATVIRTINTA" },
   ]);
   const before = snapshotUploads();
 
@@ -1770,15 +1770,15 @@ test("edit: a 0-row UPDATE answers 404 when the row vanished, 403 when it is not
 
   for (const [reread, status, body] of [
     [[], 404, { error: "Klaida: Nerasta" }],
-    [[{ employee_oid: "kitas", status: "PATEIKTA" }], 403, { error: "Klaida: Draudžiama" }],
+    [[{ employee_eid: "kitas", status: "PATEIKTA" }], 403, { error: "Klaida: Draudžiama" }],
   ]) {
     resetDb();
     stubFullName();
-    onQuery(/SELECT employee_oid, status, attachment_path FROM activities/, [
-      { employee_oid: "emp-1", status: "PATEIKTA", attachment_path: null },
+    onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
+      { employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null },
     ]);
     onQuery(/UPDATE activities SET/, { rowCount: 0 });
-    onQuery(/SELECT employee_oid, status FROM activities WHERE id = \$1/, reread);
+    onQuery(/SELECT employee_eid, status FROM activities WHERE id = \$1/, reread);
 
     const res = await api(app.base, "PATCH", "/api/activities/10", {
       form: activityForm({ title: "X", theme_code: "T1", subtheme_code: "T1.1" }),
@@ -1809,8 +1809,8 @@ test("manager: a verdict that lost the race → 409, no email", async () => {
   manager();
   onQuery(/SELECT status FROM activities WHERE id = \$1/, [{ status: "PATEIKTA" }]);
   onQuery(/UPDATE activities SET/, { rowCount: 0 });
-  onQuery(/SELECT employee_oid, status FROM activities WHERE id = \$1/, [
-    { employee_oid: "emp-1", status: "ATMESTA" },
+  onQuery(/SELECT employee_eid, status FROM activities WHERE id = \$1/, [
+    { employee_eid: "emp-1", status: "ATMESTA" },
   ]);
 
   const res = await api(app.base, "PATCH", "/api/activities/10/manager", {
@@ -1844,8 +1844,8 @@ test("committee: scoring a row the manager just returned → 409", async () => {
   committee();
   onQuery(/SELECT status FROM activities WHERE id = \$1/, [{ status: "PATVIRTINTA" }]);
   onQuery(/UPDATE activities SET/, { rowCount: 0 });
-  onQuery(/SELECT employee_oid, status FROM activities WHERE id = \$1/, [
-    { employee_oid: "emp-1", status: "PATEIKTA" },
+  onQuery(/SELECT employee_eid, status FROM activities WHERE id = \$1/, [
+    { employee_eid: "emp-1", status: "PATEIKTA" },
   ]);
 
   const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
@@ -1878,8 +1878,8 @@ test("committee: scoring a row the manager just returned → 409", async () => {
 test("delete and resubmit: the conditional write loses → 409 naming the new status", async () => {
   employee();
   onQuery(
-    /SELECT employee_oid, status FROM activities WHERE id = \$1/,
-    twice([{ employee_oid: "emp-1", status: "PATEIKTA" }], [{ employee_oid: "emp-1", status: "PATVIRTINTA" }])
+    /SELECT employee_eid, status FROM activities WHERE id = \$1/,
+    twice([{ employee_eid: "emp-1", status: "PATEIKTA" }], [{ employee_eid: "emp-1", status: "PATVIRTINTA" }])
   );
   onQuery(/DELETE FROM activities WHERE id = \$1/, { rowCount: 0 });
 
@@ -1887,13 +1887,13 @@ test("delete and resubmit: the conditional write loses → 409 naming the new st
   assert.equal(del.status, 409);
   assert.match(del.body.error, /dabar: PATVIRTINTA/);
   const delSql = queryLog().find((q) => q.sql.startsWith("DELETE FROM activities"));
-  assert.ok(delSql.sql.includes("AND employee_oid = $2 AND status IN ('PATEIKTA', 'TIKSLINTI')"), delSql.sql);
+  assert.ok(delSql.sql.includes("AND employee_eid = $2 AND status IN ('PATEIKTA', 'TIKSLINTI')"), delSql.sql);
   assert.deepEqual(delSql.params, ["10", "emp-1"]);
 
   resetDb();
   onQuery(
-    /SELECT employee_oid, status FROM activities WHERE id = \$1/,
-    twice([{ employee_oid: "emp-1", status: "TIKSLINTI" }], [{ employee_oid: "emp-1", status: "ATMESTA" }])
+    /SELECT employee_eid, status FROM activities WHERE id = \$1/,
+    twice([{ employee_eid: "emp-1", status: "TIKSLINTI" }], [{ employee_eid: "emp-1", status: "ATMESTA" }])
   );
   onQuery(/UPDATE activities SET status = 'PATEIKTA', rejection_comment = NULL/, { rowCount: 0 });
 
@@ -1901,7 +1901,7 @@ test("delete and resubmit: the conditional write loses → 409 naming the new st
   assert.equal(re.status, 409);
   assert.match(re.body.error, /dabar: ATMESTA/);
   const upd = queryLog().find((q) => q.sql.startsWith("UPDATE activities"));
-  assert.ok(upd.sql.includes("AND employee_oid = $2 AND status = 'TIKSLINTI'"), upd.sql);
+  assert.ok(upd.sql.includes("AND employee_eid = $2 AND status = 'TIKSLINTI'"), upd.sql);
   assert.deepEqual(upd.params, ["10", "emp-1"]);
 });
 

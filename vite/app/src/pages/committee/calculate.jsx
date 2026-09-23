@@ -329,22 +329,22 @@ function PointValueCalculator({
 // The right panel's employee dropdown — hand-rolled here
 // (with a search box) rather than using AppSelect. The
 // open/closed and search-term state is its own; picking an
-// option reports the oid up, closes the list and clears the
+// option reports the eid up, closes the list and clears the
 // search. Loading and empty states are early returns.
 //
 // Used by:
 //   - CalculatePage (below) — right panel
 // -----------------------------------------------------------
 
-function EmployeePicker({ employees, loading, selectedOid, onSelect }) {
+function EmployeePicker({ employees, loading, selectedEid, onSelect }) {
 
   const [open, setOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
 
 
   const options = employees.map((e) => ({
-    id: e.oid,
-    label: e.full_name || e.email || e.oid,
+    id: e.eid,
+    label: e.full_name || e.email || e.eid,
   }));
 
   const filteredOptions = options.filter((opt) =>
@@ -352,7 +352,7 @@ function EmployeePicker({ employees, loading, selectedOid, onSelect }) {
   );
 
   const selectedLabel =
-    options.find((o) => o.id === selectedOid)?.label ||
+    options.find((o) => o.id === selectedEid)?.label ||
     "(nepasirinktas)";
 
 
@@ -560,7 +560,7 @@ export default function CalculatePage() {
 
   const [employees, setEmployees] = useState([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
-  const [selectedEmployeeOid, setSelectedEmployeeOid] = useState("");
+  const [selectedEmployeeEid, setSelectedEmployeeEid] = useState("");
   const [employeeSubthemes, setEmployeeSubthemes] = useState([]);
   const [subthemesLoading, setSubthemesLoading] = useState(false);
 
@@ -629,7 +629,7 @@ export default function CalculatePage() {
   // The selected employee's per-subtheme sums
   useEffect(() => {
     const loadSubthemes = async () => {
-      if (!selectedEmployeeOid) {
+      if (!selectedEmployeeEid) {
         setEmployeeSubthemes([]);
         return;
       }
@@ -641,7 +641,7 @@ export default function CalculatePage() {
         const activeRole = getActiveRole();
 
         const res = await fetch(
-          `/api/activities/evaluated/employee/${selectedEmployeeOid}/subthemes`,
+          `/api/activities/evaluated/employee/${selectedEmployeeEid}/subthemes`,
           {
             headers: {
               "X-Active-Role": activeRole,
@@ -664,7 +664,7 @@ export default function CalculatePage() {
     };
 
     loadSubthemes();
-  }, [selectedEmployeeOid]);
+  }, [selectedEmployeeEid]);
 
 
   const selectedTheme = themeTotals.find(
@@ -789,12 +789,12 @@ export default function CalculatePage() {
                   <EmployeePicker
                     employees={employees}
                     loading={employeesLoading}
-                    selectedOid={selectedEmployeeOid}
-                    onSelect={setSelectedEmployeeOid}
+                    selectedEid={selectedEmployeeEid}
+                    onSelect={setSelectedEmployeeEid}
                   />
                 </div>
 
-                {selectedEmployeeOid && (
+                {selectedEmployeeEid && (
                   <div>
                     <h4 style={{ marginTop: 12, marginBottom: 8 }}>
                       Veiklų lentelė pasirinktam darbuotojui

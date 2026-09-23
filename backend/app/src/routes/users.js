@@ -8,8 +8,8 @@
 //  caller must OWN the Vadybininkas role, like the other role
 //  admin routers. Users are created
 //  by the SAML upsert in routes/saml.js (/assert), keyed by
-//  the IdP's oid — there is no create route here, a user
-//  without an oid could never sign in.
+//  the IdP's eid — there is no create route here, a user
+//  without an eid could never sign in.
 //
 //  Used by:
 //    - nothing calls this at the moment — the frontend
@@ -40,7 +40,7 @@ router.use(managerOnly);
 // -----------------------------------------------------------
 //
 // Plain dump of the users table for a manager, newest first
-// (by created_at — users have no serial id, the oid is the
+// (by created_at — users have no serial id, the eid is the
 // key). A DB failure answers the usual 500 internal error.
 //
 // Used by:
@@ -50,7 +50,7 @@ router.use(managerOnly);
 router.get('/', async (_req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT oid, email, full_name, created_at FROM ${TBL_USERS} ORDER BY created_at DESC`
+      `SELECT eid, email, full_name, created_at FROM ${TBL_USERS} ORDER BY created_at DESC`
     );
     res.json(rows);
   } catch (e) {

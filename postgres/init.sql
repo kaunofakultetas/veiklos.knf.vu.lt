@@ -1,6 +1,6 @@
 -- Users
 CREATE TABLE IF NOT EXISTS users (
-    oid           VARCHAR PRIMARY KEY,
+    eid           VARCHAR PRIMARY KEY,
     email         VARCHAR UNIQUE NOT NULL,
     full_name     VARCHAR,
     created_at    TIMESTAMP DEFAULT NOW(),
@@ -16,10 +16,10 @@ CREATE TABLE IF NOT EXISTS roles (
 
 -- User ↔ role assignments
 CREATE TABLE IF NOT EXISTS user_roles (
-    user_oid    VARCHAR   NOT NULL REFERENCES users(oid) ON DELETE CASCADE,
+    user_eid    VARCHAR   NOT NULL REFERENCES users(eid) ON DELETE CASCADE,
     role_id     INTEGER   NOT NULL REFERENCES roles(id)  ON DELETE CASCADE,
     assigned_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (user_oid, role_id)
+    PRIMARY KEY (user_eid, role_id)
 );
 
 -- Activity themes
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS subthemes (
 -- Activities
 CREATE TABLE IF NOT EXISTS activities (
     id                       SERIAL PRIMARY KEY,
-    employee_oid             VARCHAR NOT NULL REFERENCES users(oid) ON DELETE CASCADE,
+    employee_eid             VARCHAR NOT NULL REFERENCES users(eid) ON DELETE CASCADE,
     theme_id                 INTEGER NOT NULL REFERENCES themes(id),
     subtheme_id              INTEGER NOT NULL REFERENCES subthemes(id),
     title                    VARCHAR NOT NULL,

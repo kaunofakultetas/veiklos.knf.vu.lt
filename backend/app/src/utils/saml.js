@@ -127,25 +127,21 @@ export const SP_INFO = {
 // -----------------------------------------------------------
 //
 // Every name each identity field may arrive under, in
-// priority order: the OIDs VU SSO releases (uid, mail,
-// givenName, sn), then their friendly names in case the IdP
-// is ever configured to send those instead. Friendly names
-// match case-insensitively — VU's own description spells the
-// personnel number "UID".
+// priority order: OIDs first, then friendly names (matched
+// case-insensitively) in case the IdP sends those instead.
 //
-// The user key (oid) falls back to eduPersonTargetedID: VU's
-// TEST IdP releases that pairwise pseudonym instead of uid.
-// It is stable per user per SP, so it keys an account fine,
-// but it is opaque and differs between the test and the
-// production IdP — uid stays first so the moment VU releases
-// it, it wins.
+// The user key (eid) is VU's eID: the six-digit code that
+// belongs to the person, not to a role or an IdP (uid follows
+// the role picked at login; eduPersonTargetedID is derived
+// from it). A login without eID is refused. eID has no
+// standard OID; VU releases it under its own name.
 //
 // Used by:
 //   - mapSamlAttributes (below)
 // -----------------------------------------------------------
 
 export const ATTRIBUTE_ALIASES = {
-  oid:       ["urn:oid:0.9.2342.19200300.100.1.1", "uid", "urn:oid:1.3.6.1.4.1.5923.1.1.1.10", "eduPersonTargetedID"],
+  eid:       ["eID"],
   email:     ["urn:oid:0.9.2342.19200300.100.1.3", "mail"],
   firstName: ["urn:oid:2.5.4.42", "givenName"],
   lastName:  ["urn:oid:2.5.4.4", "sn"],
@@ -215,10 +211,11 @@ function firstValue(value) {
 // mapSamlAttributes
 // -----------------------------------------------------------
 //
-// The app's identity: { oid, email, firstName, lastName,
+// The app's identity: { eid, email, firstName, lastName,
 // name } from a raw samlify attribute bag (see
-// ATTRIBUTE_ALIASES). oid is VU's uid — the stable username,
-// NOT the NameID, which VU SSO issues as transient. Missing
+// ATTRIBUTE_ALIASES). eid is VU's eID — the person's
+// permanent code, NOT the NameID, which VU SSO issues as
+// transient. Missing
 // fields come back null; name is firstName + lastName with
 // missing parts dropped, null when both are missing.
 //
@@ -245,62 +242,7 @@ export function mapSamlAttributes(attrs) {
   const lastName = pick("lastName");
   const name = [firstName, lastName].filter(Boolean).join(" ") || null;
 
-  return { oid: pick("oid"), email: pick("email"), firstName, lastName, name };
-}
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// withNestedNameIds
-// -----------------------------------------------------------
-//
-// samlify's attribute extractor reads only the TEXT of an
-// AttributeValue; an attribute whose value is a nested
-// element — eduPersonTargetedID, which SimpleSAMLphp emits
-// as <AttributeValue><NameID …>value</NameID></AttributeValue>
-// — comes back as an empty array, and VU's test IdP sends
-// exactly that as the user's identifier. This reads every
-// such nested NameID out of the assertion and fills it into
-// the bag where samlify left nothing. The samlContent
-// parseLoginResponse returns is still the ENCRYPTED wire
-// form (samlify decrypts into a scratch copy), so the
-// assertion is decrypted again here with the SP key — a
-// second decrypt of bytes whose signature parseLoginResponse
-// already verified. Skipped entirely when nothing is empty.
-//
-// Used by:
-//   - routes/saml.js — POST /assert, before mapSamlAttributes
-// -----------------------------------------------------------
-
-export async function withNestedNameIds(sp, attributes, samlContent) {
-  const bag = { ...(attributes || {}) };
-  if (!samlContent) return bag;
-  const empty = Object.keys(bag).filter((k) => firstValue(bag[k]) === null);
-  if (!empty.length) return bag;
-
-  let xml = samlContent;
-  if (/EncryptedAssertion/.test(xml)) {
-    try {
-      [xml] = await saml.SamlLib.decryptAssertion(sp, samlContent);
-    } catch {
-      return bag;
-    }
-  }
-
-  const attrRe = /<(?:\w+:)?Attribute\b[^>]*\bName="([^"]+)"[^>]*>([\s\S]*?)<\/(?:\w+:)?Attribute>/g;
-  for (const m of xml.matchAll(attrRe)) {
-    const name = m[1];
-    const nameIds = [...m[2].matchAll(/<(?:\w+:)?NameID\b[^>]*>([^<]*)<\/(?:\w+:)?NameID>/g)]
-      .map((n) => n[1].trim())
-      .filter(Boolean);
-    const present = firstValue(bag[name]) !== null;
-    if (nameIds.length && !present) bag[name] = nameIds.length === 1 ? nameIds[0] : nameIds;
-  }
-  return bag;
+  return { eid: pick("eid"), email: pick("email"), firstName, lastName, name };
 }
 
 
@@ -411,9 +353,8 @@ function requireSignedRequests(idpXml) {
 // Injects the LitNET FEDI registration blocks (SP_INFO) into
 // samlify's bare SP metadata via string surgery: mdui:UIInfo
 // (display name / description / privacy), the requested
-// attributes (uid + mail required, givenName/sn optional —
-// the four VU SSO releases), the organization and the
-// technical contact.
+// attributes (eID + mail required, givenName/sn optional),
+// the organization and the technical contact.
 //
 // Used by:
 //   - routes/saml.js — GET /auth/saml/metadata
@@ -432,7 +373,7 @@ export function enrichSpMetadata(rawXml) {
 
   const attributeConsumingService = `<AttributeConsumingService index="1">
       <ServiceName xml:lang="en">${cfg.displayName}</ServiceName>
-      <RequestedAttribute NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri" Name="urn:oid:0.9.2342.19200300.100.1.1" FriendlyName="uid" isRequired="true"/>
+      <RequestedAttribute NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic" Name="eID" FriendlyName="eID" isRequired="true"/>
       <RequestedAttribute NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri" Name="urn:oid:0.9.2342.19200300.100.1.3" FriendlyName="mail" isRequired="true"/>
       <RequestedAttribute NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri" Name="urn:oid:2.5.4.42" FriendlyName="givenName" isRequired="false"/>
       <RequestedAttribute NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri" Name="urn:oid:2.5.4.4" FriendlyName="sn" isRequired="false"/>

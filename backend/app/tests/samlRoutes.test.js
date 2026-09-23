@@ -21,10 +21,6 @@ import createSamlRouter from "../src/routes/saml.js";
 // set per test. null → parseLoginResponse throws
 let nextExtract = null;
 
-// The decrypted assertion XML the fake SP hands back with it
-// (only the nested-NameID test needs a real one)
-let nextSamlContent = "";
-
 // The session object of the LAST request, for inspection
 let lastSession = null;
 
@@ -64,7 +60,7 @@ const fakeSp = {
   }),
   parseLoginResponse: async () => {
     if (!nextExtract) throw new Error("bad signature");
-    return { samlContent: nextSamlContent, extract: nextExtract };
+    return { extract: nextExtract };
   },
 };
 
@@ -92,7 +88,7 @@ function fakeSessionMiddleware(req, _res, next) {
     destroy: (cb) => cb(),
   };
   if (req.headers["x-test-session"] === "signed-in") {
-    req.session.samlUser = { nameID: "name-1", sessionIndex: "idx-1", attributes: { uid: "u1" } };
+    req.session.samlUser = { nameID: "name-1", sessionIndex: "idx-1", attributes: { eID: "112546" } };
   }
   lastSession = req.session;
   next();
@@ -156,7 +152,6 @@ after(() => new Promise((r) => server.close(r)));
 beforeEach(() => {
   resetDb();
   nextExtract = null;
-  nextSamlContent = "";
   lastSession = null;
   askedOrigins.length = 0;
 });
@@ -180,9 +175,8 @@ beforeEach(() => {
 // -----------------------------------------------------------
 
 function stubReturningUser() {
-  onQuery(/SELECT 1 FROM users WHERE oid = \$1 LIMIT 1/, [{ "?column?": 1 }]);
-  onQuery(/INSERT INTO users \(oid, email, full_name, last_login_at\)/, { rowCount: 1 });
-  onQuery(/SELECT 1 FROM user_roles WHERE user_oid = \$1 LIMIT 1/, [{ "?column?": 1 }]);
+  onQuery(/INSERT INTO users \(eid, email, full_name, last_login_at\)/, { rowCount: 1 });
+  onQuery(/SELECT 1 FROM user_roles WHERE user_eid = \$1 LIMIT 1/, [{ "?column?": 1 }]);
 }
 
 
@@ -195,17 +189,17 @@ function stubReturningUser() {
 // assert — VU SSO attributes
 // -----------------------------------------------------------
 //
-// An assertion carrying the OID attribute set: the upsert is
-// keyed by uid, gets mail and "givenName sn", the RAW bag is
+// An assertion carrying VU's attribute set: the upsert is
+// keyed by eID, gets mail and "givenName sn", the RAW bag is
 // stored in the session, and the browser is sent home.
 // -----------------------------------------------------------
 
-test("assert: OID attributes → upsert by uid, session stored, redirect /", async () => {
+test("assert: VU attributes → upsert by eID, session stored, redirect /", async () => {
   nextExtract = {
     audience: audienceOf(),    nameID: "transient-1",
     sessionIndex: "sidx-1",
     attributes: {
-      "urn:oid:0.9.2342.19200300.100.1.1": "jonas.jonaitis",
+      eID: "112546",
       "urn:oid:0.9.2342.19200300.100.1.3": ["jonas.jonaitis@knf.vu.lt"],
       "urn:oid:2.5.4.42": "Jonas",
       "urn:oid:2.5.4.4": "Jonaitis",
@@ -217,11 +211,10 @@ test("assert: OID attributes → upsert by uid, session stored, redirect /", asy
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("location"), "/");
 
-  // The identifier is known, so the upsert follows the lookup
-  const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
-  assert.deepEqual(upsert.params, ["jonas.jonaitis", "jonas.jonaitis@knf.vu.lt", "Jonas Jonaitis"]);
+  const upsert = queryLog()[0];
+  assert.ok(upsert.sql.startsWith("INSERT INTO users"), "the upsert is the first query");
+  assert.deepEqual(upsert.params, ["112546", "jonas.jonaitis@knf.vu.lt", "Jonas Jonaitis"]);
   assert.equal(lastSession.samlUser.nameID, "transient-1");
-  assert.equal(lastSession.samlUser.oid, upsert.params[0]);
   assert.equal(lastSession.samlUser.attributes["urn:oid:2.5.4.42"], "Jonas");
 });
 
@@ -240,23 +233,19 @@ test("assert: OID attributes → upsert by uid, session stored, redirect /", asy
 // -----------------------------------------------------------
 
 test("assert: first sign-in auto-grants Darbuotojas", async () => {
-  nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { uid: "new-1", mail: "new@vu.lt" } };
-  // Neither the identifier nor the email is known → a new account
-  onQuery(/SELECT 1 FROM users WHERE oid = \$1 LIMIT 1/, []);
-  onQuery(/SELECT oid FROM users WHERE LOWER\(email\) = LOWER\(\$1\) LIMIT 1/, []);
-  onQuery(/INSERT INTO users \(oid, email, full_name, last_login_at\)/, { rowCount: 1 });
-  onQuery(/SELECT 1 FROM user_roles WHERE user_oid = \$1 LIMIT 1/, []);
+  nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { eID: "200001", mail: "new@vu.lt" } };
+  onQuery(/INSERT INTO users \(eid, email, full_name, last_login_at\)/, { rowCount: 1 });
+  onQuery(/SELECT 1 FROM user_roles WHERE user_eid = \$1 LIMIT 1/, []);
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 3 }]);
-  onQuery(/INSERT INTO user_roles \(user_oid, role_id\)/, { rowCount: 1 });
+  onQuery(/INSERT INTO user_roles \(user_eid, role_id\)/, { rowCount: 1 });
 
   const res = await post("/auth/saml/assert");
   assert.equal(res.status, 302);
 
   // name is null when the IdP sent neither part
-  const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
-  assert.deepEqual(upsert.params, ["new-1", "new@vu.lt", null]);
+  assert.deepEqual(queryLog()[0].params, ["200001", "new@vu.lt", null]);
   const grant = queryLog().find((q) => q.sql.includes("INSERT INTO user_roles"));
-  assert.deepEqual(grant.params, ["new-1", 3]);
+  assert.deepEqual(grant.params, ["200001", 3]);
 });
 
 
@@ -269,17 +258,24 @@ test("assert: first sign-in auto-grants Darbuotojas", async () => {
 // assert — missing identity
 // -----------------------------------------------------------
 //
-// No usable oid/uid or email in any spelling → 400 before
-// any DB work, naming the attributes that DID arrive so a
-// release policy with unknown names is diagnosable.
+// No eID or no mail → 400 before any DB work, naming the
+// attributes that DID arrive so a release policy with
+// unknown names is diagnosable. uid or eduPersonTargetedID
+// alone never key an account.
 // -----------------------------------------------------------
 
-test("assert: no oid or email in any scheme → 400 naming what arrived, no queries", async () => {
-  nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { cn: "Anonimas", eduPersonAffiliation: "staff" } };
+test("assert: no eID or mail → 400 naming what arrived, no queries", async () => {
+  nextExtract = {
+    audience: audienceOf(), nameID: "n", sessionIndex: "s",
+    attributes: { "urn:oid:0.9.2342.19200300.100.1.1": "vu12345", "urn:oid:1.3.6.1.4.1.5923.1.1.1.10": "pairwise", mail: "j@vu.lt" },
+  };
 
   const res = await post("/auth/saml/assert");
   assert.equal(res.status, 400);
-  assert.equal(await res.text(), "SAML assertion missing oid or email attributes (received: cn, eduPersonAffiliation)");
+  assert.equal(
+    await res.text(),
+    "SAML assertion missing eID or mail attributes (received: urn:oid:0.9.2342.19200300.100.1.1, urn:oid:1.3.6.1.4.1.5923.1.1.1.10, mail)"
+  );
   assert.equal(queryLog().length, 0);
 });
 
@@ -345,77 +341,6 @@ test("assert: a failed-status response surfaces the IdP's StatusMessage", async 
 
 
 // -----------------------------------------------------------
-// assert — nested NameID identifier
-// -----------------------------------------------------------
-//
-// samlify leaves eduPersonTargetedID empty; /assert recovers
-// it from the decrypted assertion and upserts the user keyed
-// on it, storing the completed attribute bag in the session.
-// -----------------------------------------------------------
-
-test("assert: an empty eduPersonTargetedID is recovered from the assertion and keys the upsert", async () => {
-  nextExtract = {
-    audience: audienceOf(), nameID: "n", sessionIndex: "s",
-    attributes: { "urn:oid:0.9.2342.19200300.100.1.3": "j@vu.lt", "urn:oid:1.3.6.1.4.1.5923.1.1.1.10": [] },
-  };
-  nextSamlContent =
-    '<saml:Assertion><saml:AttributeStatement><saml:Attribute Name="urn:oid:1.3.6.1.4.1.5923.1.1.1.10">' +
-    '<saml:AttributeValue><saml:NameID Format="x">pairwise-42</saml:NameID></saml:AttributeValue>' +
-    '</saml:Attribute></saml:AttributeStatement></saml:Assertion>';
-  stubReturningUser();
-
-  const res = await post("/auth/saml/assert");
-  assert.equal(res.status, 302);
-  const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
-  assert.equal(upsert.params[0], "pairwise-42");
-  assert.equal(lastSession.samlUser.attributes["urn:oid:1.3.6.1.4.1.5923.1.1.1.10"], "pairwise-42");
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// assert — same person, different identifier
-// -----------------------------------------------------------
-//
-// No row under the IdP's identifier but one under the same
-// email (case-insensitive): that account is adopted — the
-// upsert, the role check and the session all use ITS oid,
-// not the identifier the IdP sent. This is what happens when
-// VU switches from uid to eduPersonTargetedID, or between the
-// test and production IdP; before, it died on the unique
-// email constraint.
-// -----------------------------------------------------------
-
-test("assert: unknown identifier but known email → existing account adopted, its oid in the session", async () => {
-  nextExtract = {
-    audience: audienceOf(), nameID: "n", sessionIndex: "s",
-    attributes: { "urn:oid:1.3.6.1.4.1.5923.1.1.1.10": "pairwise-new", "urn:oid:0.9.2342.19200300.100.1.3": "Jonas@KNF.vu.lt" },
-  };
-  onQuery(/SELECT 1 FROM users WHERE oid = \$1 LIMIT 1/, []);
-  onQuery(/SELECT oid FROM users WHERE LOWER\(email\) = LOWER\(\$1\) LIMIT 1/, [{ oid: "vu12345" }]);
-  onQuery(/INSERT INTO users \(oid, email, full_name, last_login_at\)/, { rowCount: 1 });
-  onQuery(/SELECT 1 FROM user_roles WHERE user_oid = \$1 LIMIT 1/, [{ "?column?": 1 }]);
-
-  const res = await post("/auth/saml/assert");
-  assert.equal(res.status, 302);
-
-  const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
-  assert.equal(upsert.params[0], "vu12345");
-  assert.deepEqual(queryLog().find((q) => q.sql.includes("FROM user_roles")).params, ["vu12345"]);
-  assert.equal(lastSession.samlUser.oid, "vu12345");
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
 // assert — DB failure after a valid assertion
 // -----------------------------------------------------------
 //
@@ -425,8 +350,8 @@ test("assert: unknown identifier but known email → existing account adopted, i
 // -----------------------------------------------------------
 
 test("assert: a DB error after a valid assertion → 500, not 'parsing failed'", async () => {
-  nextExtract = { audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { uid: "u1", mail: "u1@vu.lt" } };
-  onQuery(/SELECT 1 FROM users WHERE oid = \$1 LIMIT 1/, () => {
+  nextExtract = { audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" } };
+  onQuery(/INSERT INTO users/, () => {
     throw Object.assign(new Error('duplicate key value violates unique constraint "users_email_key"'), { code: "23505" });
   });
 
@@ -454,7 +379,7 @@ test("assert: a DB error after a valid assertion → 500, not 'parsing failed'",
 test("assert: foreign or missing audience → 401, no upsert; a list containing ours passes", async () => {
   for (const audience of ["https://kitas-sp.example/metadata", undefined, []]) {
     resetDb();
-    nextExtract = { nameID: "n", sessionIndex: "s", attributes: { uid: "u1", mail: "u1@vu.lt" } };
+    nextExtract = { nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" } };
     if (audience !== undefined) nextExtract.audience = audience;
 
     const res = await post("/auth/saml/assert");
@@ -465,7 +390,7 @@ test("assert: foreign or missing audience → 401, no upsert; a list containing 
 
   resetDb();
   stubReturningUser();
-  nextExtract = { audience: ["https://other.example", audienceOf()], nameID: "n", sessionIndex: "s", attributes: { uid: "u1", mail: "u1@vu.lt" } };
+  nextExtract = { audience: ["https://other.example", audienceOf()], nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" } };
   const ok = await post("/auth/saml/assert");
   assert.equal(ok.status, 302);
 });
@@ -521,7 +446,7 @@ test("metadata is enriched XML; login redirects to the IdP", async () => {
   assert.equal(md.status, 200);
   assert.ok(md.headers.get("content-type").includes("xml"));
   const xml = await md.text();
-  assert.ok(xml.includes('FriendlyName="uid" isRequired="true"'));
+  assert.ok(xml.includes('Name="eID" FriendlyName="eID" isRequired="true"'));
 
   const login = await fetch(base + "/auth/saml/login", { redirect: "manual" });
   assert.equal(login.status, 302);

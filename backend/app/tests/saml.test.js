@@ -31,7 +31,6 @@ import {
   SP_INFO,
   ATTRIBUTE_ALIASES,
   mapSamlAttributes,
-  withNestedNameIds,
   enrichSpMetadata,
   createSamlSetup,
 } from "../src/utils/saml.js";
@@ -149,15 +148,9 @@ function fakeIdp({ encrypted }) {
     const now = new Date(Date.now() + skewMs);
     const later = new Date(now.getTime() + 5 * 60 * 1000);
     const acs = sp.entityMeta.getAssertionConsumerService("post");
-    // A value starting with "<" is emitted as-is (a nested
-    // element), anything else as an xs:string
     const attrs = Object.entries(attributes)
       .map(([name, value]) =>
-        `<saml:Attribute Name="${name}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri">` +
-        (String(value).startsWith("<")
-          ? `<saml:AttributeValue>${value}</saml:AttributeValue>`
-          : `<saml:AttributeValue xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="xs:string">${value}</saml:AttributeValue>`) +
-        `</saml:Attribute>`)
+        `<saml:Attribute Name="${name}" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri"><saml:AttributeValue xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="xs:string">${value}</saml:AttributeValue></saml:Attribute>`)
       .join("");
     const { context } = await idp.createLoginResponse(
       sp,
@@ -389,7 +382,7 @@ test("encrypted + signed assertion from the fake IdP decrypts into attributes an
 
   const samlResponse = await loginResponseFor(sp, {
     attributes: {
-      "urn:oid:0.9.2342.19200300.100.1.1": "vu12345",
+      eID: "112546",
       "urn:oid:0.9.2342.19200300.100.1.3": "jonas.jonaitis@knf.vu.lt",
       "urn:oid:2.5.4.42": "Jonas",
       "urn:oid:2.5.4.4": "Jonaitis",
@@ -402,63 +395,7 @@ test("encrypted + signed assertion from the fake IdP decrypts into attributes an
   assert.equal(extract.nameID, "_nameid-1");
   assert.equal(extract.sessionIndex.sessionIndex, "_session-1");
   assert.deepEqual(mapSamlAttributes(extract.attributes), {
-    oid: "vu12345",
-    email: "jonas.jonaitis@knf.vu.lt",
-    firstName: "Jonas",
-    lastName: "Jonaitis",
-    name: "Jonas Jonaitis",
-  });
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// encrypted assertion — VU test IdP's actual release
-// -----------------------------------------------------------
-//
-// The four attributes VU's TEST IdP really sends, in the
-// shape SimpleSAMLphp emits them: sn, givenName, mail as
-// strings and eduPersonTargetedID as a NESTED NameID element.
-// samlify hands that last one over as [] — withNestedNameIds
-// recovers it from the decrypted assertion, and the mapper
-// keys the user on it. This is the login that failed with
-// "missing oid or email" against the real test IdP.
-// -----------------------------------------------------------
-
-test("VU test IdP release: eduPersonTargetedID as a nested NameID keys the user", async () => {
-  const { loginResponseFor } = fakeIdp({ encrypted: true });
-  process.env.IDP_METADATA = FAKE_IDP_FILE;
-  const setup = await createSamlSetup();
-  const sp = setup.spFor("https://veiklos.knf.vu.lt");
-
-  const samlResponse = await loginResponseFor(sp, {
-    attributes: {
-      "urn:oid:2.5.4.4": "Jonaitis",
-      "urn:oid:2.5.4.42": "Jonas",
-      "urn:oid:0.9.2342.19200300.100.1.3": "jonas.jonaitis@knf.vu.lt",
-      "urn:oid:1.3.6.1.4.1.5923.1.1.1.10":
-        '<saml:NameID Format="urn:oasis:names:tc:SAML:2.0:nameid-format:persistent" ' +
-        'NameQualifier="https://sso.test.vu.lt/SSO/saml2/idp/metadata.php" ' +
-        'SPNameQualifier="https://veiklos.knf.vu.lt/auth/saml/metadata">a1b2c3d4e5f6</saml:NameID>',
-    },
-  });
-  const { samlContent, extract } = await sp.parseLoginResponse(setup.idp, "post", { body: { SAMLResponse: samlResponse } });
-
-  // what samlify alone gives — the pairwise id is lost
-  assert.deepEqual(extract.attributes["urn:oid:1.3.6.1.4.1.5923.1.1.1.10"], []);
-  assert.equal(mapSamlAttributes(extract.attributes).oid, null);
-
-  // what /assert does with it — samlContent is still the
-  // encrypted wire form, the helper decrypts it again
-  assert.ok(samlContent.includes("EncryptedAssertion"));
-  const attributes = await withNestedNameIds(sp, extract.attributes, samlContent);
-  assert.equal(attributes["urn:oid:1.3.6.1.4.1.5923.1.1.1.10"], "a1b2c3d4e5f6");
-  assert.deepEqual(mapSamlAttributes(attributes), {
-    oid: "a1b2c3d4e5f6",
+    eid: "112546",
     email: "jonas.jonaitis@knf.vu.lt",
     firstName: "Jonas",
     lastName: "Jonaitis",
@@ -487,13 +424,13 @@ test("clock skew: an assertion from an IdP 2 min ahead is accepted, 10 min ahead
   process.env.IDP_METADATA = FAKE_IDP_FILE;
   const setup = await createSamlSetup();
   const sp = setup.spFor("https://veiklos.knf.vu.lt");
-  const attributes = { uid: "u1", mail: "u1@vu.lt" };
+  const attributes = { eID: "112546", mail: "u1@vu.lt" };
 
   assert.equal(CLOCK_DRIFT_MS, 5 * 60 * 1000);
 
   const ahead2 = await loginResponseFor(sp, { attributes, skewMs: 2 * 60 * 1000 });
   const ok = await sp.parseLoginResponse(setup.idp, "post", { body: { SAMLResponse: ahead2 } });
-  assert.equal(ok.extract.attributes.uid, "u1");
+  assert.equal(ok.extract.attributes.eID, "112546");
 
   const ahead10 = await loginResponseFor(sp, { attributes, skewMs: 10 * 60 * 1000 });
   await assert.rejects(
@@ -523,13 +460,13 @@ test("plaintext assertion, or one signed by a stranger → refused", async () =>
   process.env.IDP_METADATA = FAKE_IDP_FILE;
   let setup = await createSamlSetup();
   let sp = setup.spFor("https://veiklos.knf.vu.lt");
-  const plainResponse = await plain.loginResponseFor(sp, { attributes: { uid: "u1" } });
+  const plainResponse = await plain.loginResponseFor(sp, { attributes: { eID: "112546" } });
   await assert.rejects(() => sp.parseLoginResponse(setup.idp, "post", { body: { SAMLResponse: plainResponse } }));
 
   // Swap the signer's certificate in the descriptor for the
   // SP's own, so the signature no longer verifies
   const encrypted = fakeIdp({ encrypted: true });
-  const encryptedResponse = await encrypted.loginResponseFor(sp, { attributes: { uid: "u1" } });
+  const encryptedResponse = await encrypted.loginResponseFor(sp, { attributes: { eID: "112546" } });
   const idpCertBody = FAKE_IDP_CERT.replace(/-----[^-]+-----|\s/g, "");
   const spCertBody = fs.readFileSync(FAKE_SP_CERT, "utf8").replace(/-----[^-]+-----|\s/g, "");
   fs.writeFileSync(FAKE_IDP_FILE, fs.readFileSync(FAKE_IDP_FILE, "utf8").split(idpCertBody).join(spCertBody));
@@ -545,24 +482,24 @@ test("plaintext assertion, or one signed by a stranger → refused", async () =>
 
 
 // -----------------------------------------------------------
-// mapSamlAttributes — VU SSO OIDs
+// mapSamlAttributes — VU SSO attributes
 // -----------------------------------------------------------
 //
-// The attribute set VU SSO releases: uid, mail, givenName,
-// sn by OID — and samlify
-// hands multi-valued attributes over as arrays, so the first
+// The attribute set VU SSO releases: eID by its own name,
+// mail, givenName, sn by OID — and samlify hands
+// multi-valued attributes over as arrays, so the first
 // value is taken.
 // -----------------------------------------------------------
 
-test("mapper: VU SSO OIDs, array values", () => {
+test("mapper: VU SSO attributes, array values", () => {
   const m = mapSamlAttributes({
-    "urn:oid:0.9.2342.19200300.100.1.1": "jonas.jonaitis",
+    eID: "112546",
     "urn:oid:0.9.2342.19200300.100.1.3": ["jonas.jonaitis@knf.vu.lt", "alias@vu.lt"],
     "urn:oid:2.5.4.42": ["Jonas"],
     "urn:oid:2.5.4.4": "Jonaitis",
   });
   assert.deepEqual(m, {
-    oid: "jonas.jonaitis",
+    eid: "112546",
     email: "jonas.jonaitis@knf.vu.lt",
     firstName: "Jonas",
     lastName: "Jonaitis",
@@ -577,44 +514,34 @@ test("mapper: VU SSO OIDs, array values", () => {
 
 
 // -----------------------------------------------------------
-// mapSamlAttributes — friendly names and priority
+// mapSamlAttributes — friendly names, case, and eID only
 // -----------------------------------------------------------
 //
-// uid/mail/givenName/sn friendly names work too, and when a
-// bag carries both spellings the OID wins.
+// mail/givenName/sn friendly names work too, matched
+// regardless of case, and the OID wins when a bag carries
+// both spellings. The user key is eID alone: uid and
+// eduPersonTargetedID, however present, never fill eid.
 // -----------------------------------------------------------
 
-test("mapper: friendly names, and OIDs win over friendly names", () => {
+test("mapper: friendly names any case, OIDs win, eID is the only key", () => {
   assert.deepEqual(
-    mapSamlAttributes({ uid: "u1", mail: "u1@vu.lt", givenName: "Ona", sn: "Onaitė" }),
-    { oid: "u1", email: "u1@vu.lt", firstName: "Ona", lastName: "Onaitė", name: "Ona Onaitė" }
+    mapSamlAttributes({ eid: "112546", Mail: "u1@vu.lt", GivenName: "Ona", SN: "Onaitė" }),
+    { eid: "112546", email: "u1@vu.lt", firstName: "Ona", lastName: "Onaitė", name: "Ona Onaitė" }
   );
 
-  const both = mapSamlAttributes({ uid: "friendly", "urn:oid:0.9.2342.19200300.100.1.1": "vu-uid" });
-  assert.equal(both.oid, "vu-uid");
-  assert.equal(ATTRIBUTE_ALIASES.oid[0], "urn:oid:0.9.2342.19200300.100.1.1");
+  const both = mapSamlAttributes({ mail: "friendly@vu.lt", "urn:oid:0.9.2342.19200300.100.1.3": "eid@vu.lt" });
+  assert.equal(both.email, "eid@vu.lt");
+  assert.deepEqual(ATTRIBUTE_ALIASES.eid, ["eID"]);
 
-  // VU's description spells the personnel number "UID" —
-  // friendly names match regardless of case
-  assert.deepEqual(
-    mapSamlAttributes({ UID: "vu12345", Mail: "j@vu.lt", GivenName: "Jonas", SN: "Jonaitis" }),
-    { oid: "vu12345", email: "j@vu.lt", firstName: "Jonas", lastName: "Jonaitis", name: "Jonas Jonaitis" }
-  );
-
-  // VU's TEST IdP releases eduPersonTargetedID and no uid —
-  // the pairwise id keys the user, but uid wins when present
-  const testIdp = mapSamlAttributes({
-    "urn:oid:2.5.4.4": "Jonaitis",
-    "urn:oid:2.5.4.42": "Jonas",
-    "urn:oid:0.9.2342.19200300.100.1.3": "j@vu.lt",
+  const withoutEid = mapSamlAttributes({
+    "urn:oid:0.9.2342.19200300.100.1.1": "vu12345",
     "urn:oid:1.3.6.1.4.1.5923.1.1.1.10": "a1b2c3-pairwise",
+    uid: "vu12345",
+    eduPersonTargetedID: "a1b2c3",
+    mail: "j@vu.lt",
   });
-  assert.equal(testIdp.oid, "a1b2c3-pairwise");
-  assert.equal(testIdp.email, "j@vu.lt");
-  assert.equal(
-    mapSamlAttributes({ "urn:oid:0.9.2342.19200300.100.1.1": "vu12345", "urn:oid:1.3.6.1.4.1.5923.1.1.1.10": "a1b2c3" }).oid,
-    "vu12345"
-  );
+  assert.equal(withoutEid.eid, null);
+  assert.equal(withoutEid.email, "j@vu.lt");
 });
 
 
@@ -634,10 +561,10 @@ test("mapper: friendly names, and OIDs win over friendly names", () => {
 
 test("mapper: empties are nulls, partial names join cleanly", () => {
   assert.deepEqual(mapSamlAttributes(undefined), {
-    oid: null, email: null, firstName: null, lastName: null, name: null,
+    eid: null, email: null, firstName: null, lastName: null, name: null,
   });
-  const m = mapSamlAttributes({ "urn:oid:0.9.2342.19200300.100.1.1": "", uid: "fallback", mail: [], sn: "Kazlauskaitė" });
-  assert.equal(m.oid, "fallback");
+  const m = mapSamlAttributes({ eID: "", EID: "112546", mail: [], sn: "Kazlauskaitė" });
+  assert.equal(m.eid, "112546");
   assert.equal(m.email, null);
   assert.equal(m.name, "Kazlauskaitė");
 });
@@ -654,18 +581,19 @@ test("mapper: empties are nulls, partial names join cleanly", () => {
 //
 // The registration blocks (SP_INFO, fixed in code) land
 // inside the descriptor, and the requested attributes are
-// exactly VU SSO's four — uid and mail required. No privacy
-// URL is set, so that element is omitted.
+// eID and mail required, givenName and sn optional. No
+// privacy URL is set, so that element is omitted.
 // -----------------------------------------------------------
 
-test("enrichSpMetadata: mdui, uid+mail required, organization, contact", () => {
+test("enrichSpMetadata: mdui, eID+mail required, organization, contact", () => {
   const xml = enrichSpMetadata(
     '<EntityDescriptor><SPSSODescriptor protocolSupportEnumeration="x"></SPSSODescriptor></EntityDescriptor>'
   );
   assert.ok(xml.includes(`<mdui:DisplayName xml:lang="en">${SP_INFO.displayName}</mdui:DisplayName>`));
   assert.ok(xml.includes("Veiklų registravimo sistema"));
   assert.ok(!xml.includes("PrivacyStatementURL"));
-  assert.ok(xml.includes('Name="urn:oid:0.9.2342.19200300.100.1.1" FriendlyName="uid" isRequired="true"'));
+  assert.ok(xml.includes('NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:basic" Name="eID" FriendlyName="eID" isRequired="true"'));
+  assert.ok(!xml.includes('FriendlyName="uid"'));
   assert.ok(xml.includes('Name="urn:oid:0.9.2342.19200300.100.1.3" FriendlyName="mail" isRequired="true"'));
   assert.ok(xml.includes('FriendlyName="givenName" isRequired="false"'));
   assert.ok(xml.includes('FriendlyName="sn" isRequired="false"'));

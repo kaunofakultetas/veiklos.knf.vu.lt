@@ -10,7 +10,7 @@
 //                                            — score sums per theme
 //    GET    /api/activities/evaluated/employees
 //                                            — who has evaluated work
-//    GET    /api/activities/evaluated/employee/:oid/subthemes
+//    GET    /api/activities/evaluated/employee/:eid/subthemes
 //                                            — one employee's per-subtheme sums
 //    GET    /api/activities/pending          — PATEIKTA queue   (manager)
 //    PATCH  /api/activities/:id/manager      — approve/deny/return
@@ -119,14 +119,14 @@ const MSG_TOO_BIG = "Klaida: priedas per didelis (iki 100 MB)";
 
 async function loadUserFullName(req, res, next) {
   try {
-    const oid = req.user?.oid || req.user?.sub;
-    if (!oid) {
+    const eid = req.user?.eid || req.user?.sub;
+    if (!eid) {
       return res.status(400).json({ error: "Klaida: Trūksta vartotojo OID" });
     }
 
     const { rows } = await pool.query(
-      "SELECT full_name FROM users WHERE oid = $1 LIMIT 1",
-      [oid]
+      "SELECT full_name FROM users WHERE eid = $1 LIMIT 1",
+      [eid]
     );
 
     req.userFullName = rows[0]?.full_name || "unknown_user";
@@ -233,13 +233,13 @@ const MSG_PAIR = "Klaida: potemė nepriklauso pasirinktai temai";
 //     conditional write reports rowCount 0
 // -----------------------------------------------------------
 
-async function answerLostRace(res, id, ownerOid = null) {
+async function answerLostRace(res, id, ownerEid = null) {
   const q = await pool.query(
-    `SELECT employee_oid, status FROM activities WHERE id = $1`,
+    `SELECT employee_eid, status FROM activities WHERE id = $1`,
     [id]
   );
   if (q.rowCount === 0) return res.status(404).json({ error: "Klaida: Nerasta" });
-  if (ownerOid && q.rows[0].employee_oid !== ownerOid) {
+  if (ownerEid && q.rows[0].employee_eid !== ownerEid) {
     return res.status(403).json({ error: "Klaida: Draudžiama" });
   }
   return res.status(409).json({
@@ -433,8 +433,8 @@ const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Ko
 
 router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => {
     try {
-      const oid = req.user?.oid || req.user?.sub;
-      if (!oid) {
+      const eid = req.user?.eid || req.user?.sub;
+      if (!eid) {
         return res.status(400).json({ error: "Klaida: Trūksta vartotojo OID" });
       }
 
@@ -459,7 +459,7 @@ router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => 
 
       const act = await pool.query(
         `INSERT INTO activities (
-           employee_oid,
+           employee_eid,
            theme_id,
            subtheme_id,
            title,
@@ -469,7 +469,7 @@ router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => 
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id,
-                   employee_oid,
+                   employee_eid,
                    theme_id,
                    subtheme_id,
                    title,
@@ -483,7 +483,7 @@ router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => 
                    created_at,
                    updated_at`,
         [
-          oid,
+          eid,
           themeId,
           subthemeId,
           title.trim(),
@@ -521,8 +521,8 @@ router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => 
 
 router.get("/my", guard, async (req, res) => {
   try {
-    const oid = req.user?.oid || req.user?.sub;
-    if (!oid) {
+    const eid = req.user?.eid || req.user?.sub;
+    if (!eid) {
       return res.status(400).json({ error: "Klaida: Trūksta vartotojo OID" });
     }
 
@@ -549,9 +549,9 @@ router.get("/my", guard, async (req, res) => {
          ON t.id = a.theme_id
        JOIN subthemes s
          ON s.id = a.subtheme_id
-       WHERE a.employee_oid = $1
+       WHERE a.employee_eid = $1
        ORDER BY a.created_at DESC`,
-      [oid]
+      [eid]
     );
 
     res.json(q.rows);
@@ -583,7 +583,7 @@ router.get("/all", managerGuard, async (req, res) => {
     const q = await pool.query(
       `SELECT
          a.id,
-         a.employee_oid,
+         a.employee_eid,
          a.theme_id,
          a.subtheme_id,
          a.title,
@@ -604,7 +604,7 @@ router.get("/all", managerGuard, async (req, res) => {
          s.title  AS subtheme_title
        FROM activities a
        JOIN users u
-         ON u.oid = a.employee_oid
+         ON u.eid = a.employee_eid
        JOIN themes t
          ON t.id = a.theme_id
        JOIN subthemes s
@@ -641,7 +641,7 @@ router.get("/committee", committeeGuard, async (req, res) => {
     const q = await pool.query(
       `SELECT
          a.id,
-         a.employee_oid,
+         a.employee_eid,
          a.theme_id,
          a.subtheme_id,
          a.title,
@@ -661,7 +661,7 @@ router.get("/committee", committeeGuard, async (req, res) => {
          s.title  AS subtheme_title
        FROM activities a
        JOIN users u
-         ON u.oid = a.employee_oid
+         ON u.eid = a.employee_eid
        JOIN themes t
          ON t.id = a.theme_id
        JOIN subthemes s
@@ -718,7 +718,7 @@ router.get("/evaluated", committeeGuard, async (req, res) => {
          s.code  AS subtheme_code,
          s.title AS subtheme_title
        FROM activities a
-       JOIN users u       ON u.oid = a.employee_oid
+       JOIN users u       ON u.eid = a.employee_eid
        JOIN themes t      ON t.id = a.theme_id
        JOIN subthemes s   ON s.id = a.subtheme_id
        WHERE a.status = 'ĮVERTINTA'
@@ -799,11 +799,11 @@ router.get("/evaluated/employees", committeeGuard, async (req, res) => {
   try {
     const q = await pool.query(
       `SELECT DISTINCT
-         u.oid,
+         u.eid,
          u.full_name,
          u.email
        FROM activities a
-       JOIN users u ON u.oid = a.employee_oid
+       JOIN users u ON u.eid = a.employee_eid
        WHERE a.status = 'ĮVERTINTA'
        ORDER BY u.full_name`
     );
@@ -822,7 +822,7 @@ router.get("/evaluated/employees", committeeGuard, async (req, res) => {
 
 
 // -----------------------------------------------------------
-// GET /api/activities/evaluated/employee/:oid/subthemes
+// GET /api/activities/evaluated/employee/:eid/subthemes
 // -----------------------------------------------------------
 //
 // One employee's ĮVERTINTA scores grouped per subtheme, with
@@ -833,9 +833,9 @@ router.get("/evaluated/employees", committeeGuard, async (req, res) => {
 //   - committee/calculate.jsx — after picking an employee
 // -----------------------------------------------------------
 
-router.get("/evaluated/employee/:oid/subthemes", committeeGuard, async (req, res) => {
+router.get("/evaluated/employee/:eid/subthemes", committeeGuard, async (req, res) => {
   try {
-    const { oid } = req.params;
+    const { eid } = req.params;
 
     const q = await pool.query(
       `SELECT
@@ -851,7 +851,7 @@ router.get("/evaluated/employee/:oid/subthemes", committeeGuard, async (req, res
       FROM activities a
       JOIN themes t    ON t.id = a.theme_id
       JOIN subthemes s ON s.id = a.subtheme_id
-      WHERE a.employee_oid = $1
+      WHERE a.employee_eid = $1
         AND a.status = 'ĮVERTINTA'
       GROUP BY
         a.theme_id,
@@ -863,12 +863,12 @@ router.get("/evaluated/employee/:oid/subthemes", committeeGuard, async (req, res
         s.cap,
         t.pointvalue
       ORDER BY t.code, s.code`,
-      [oid]
+      [eid]
     );
 
     res.json(q.rows);
   } catch (e) {
-    console.error("GET /api/activities/evaluated/employee/:oid/subthemes error:", e);
+    console.error("GET /api/activities/evaluated/employee/:eid/subthemes error:", e);
     res.status(500).json({ error: "internal error" });
   }
 });
@@ -913,7 +913,7 @@ router.get("/pending", managerGuard, async (req, res) => {
          s.title  AS subtheme_title
        FROM activities a
        JOIN users u
-         ON u.oid = a.employee_oid
+         ON u.eid = a.employee_eid
        JOIN themes t
          ON t.id = a.theme_id
        JOIN subthemes s
@@ -1074,7 +1074,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
                  u.email,
                  u.full_name
           FROM activities a
-          JOIN users u ON u.oid = a.employee_oid
+          JOIN users u ON u.eid = a.employee_eid
           WHERE a.id = $1
         `;
         const { rows: infoRows } = await pool.query(infoSql, [id]);
@@ -1125,7 +1125,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
          s.code   AS subtheme_code,
          s.title  AS subtheme_title
        FROM activities a
-       JOIN users u ON u.oid = a.employee_oid
+       JOIN users u ON u.eid = a.employee_eid
        JOIN themes t ON t.id = a.theme_id
        JOIN subthemes s ON s.id = a.subtheme_id
        WHERE a.id = $1`,
@@ -1273,7 +1273,7 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
     const q = await pool.query(
       `SELECT
          a.id,
-         a.employee_oid,
+         a.employee_eid,
          a.theme_id,
          a.subtheme_id,
          a.title,
@@ -1293,7 +1293,7 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
          s.code   AS subtheme_code,
          s.title  AS subtheme_title
        FROM activities a
-       JOIN users u ON u.oid = a.employee_oid
+       JOIN users u ON u.eid = a.employee_eid
        JOIN themes t ON t.id = a.theme_id
        JOIN subthemes s ON s.id = a.subtheme_id
        WHERE a.id = $1`,
@@ -1333,10 +1333,10 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
 router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) => {
   try {
     const { id } = req.params;
-    const oid = req.user?.oid || req.user?.sub;
+    const eid = req.user?.eid || req.user?.sub;
 
     const q = await pool.query(
-      `SELECT attachment_path, attachment_original_name, employee_oid
+      `SELECT attachment_path, attachment_original_name, employee_eid
        FROM activities
        WHERE id = $1`,
       [id]
@@ -1349,7 +1349,7 @@ router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) =
     const roles = req.user?.roles || [];
     const isPrivileged = roles.includes("Vadybininkas") || roles.includes("Komisijos narys");
 
-    if (row.employee_oid !== oid && !isPrivileged) {
+    if (row.employee_eid !== eid && !isPrivileged) {
       return res.status(403).json({ error: "Klaida: Draudžiama" });
     }
 
@@ -1395,12 +1395,12 @@ router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) =
 router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res) => {
   try {
     const { id } = req.params;
-    const oid = req.user?.oid || req.user?.sub;
+    const eid = req.user?.eid || req.user?.sub;
     const { theme_id, subtheme_id, title, description } = req.body || {};
 
     // Ownership + status gate before touching anything
     const cur = await pool.query(
-      `SELECT employee_oid, status, attachment_path
+      `SELECT employee_eid, status, attachment_path
          FROM activities
         WHERE id = $1`,
       [id]
@@ -1408,7 +1408,7 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
     if (cur.rowCount === 0) return res.status(404).json({ error: "Klaida: Nerasta" });
 
     const row = cur.rows[0];
-    if (row.employee_oid !== oid) {
+    if (row.employee_eid !== eid) {
       return res.status(403).json({ error: "Klaida: Draudžiama" });
     }
     if (row.status !== "PATEIKTA" && row.status !== "TIKSLINTI") {
@@ -1467,7 +1467,7 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
       return res.status(400).json({ error: MSG_PAIR });
     }
 
-    vals.push(id, oid);
+    vals.push(id, eid);
 
     // Conditional write: still the owner's and still
     // PATEIKTA/TIKSLINTI, or the edit lost a race with a
@@ -1478,13 +1478,13 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
           SET ${fields.join(", ")},
               updated_at = NOW()
         WHERE id = $${i}
-          AND employee_oid = $${i + 1}
+          AND employee_eid = $${i + 1}
           AND status IN ('PATEIKTA', 'TIKSLINTI')`,
       vals
     );
     if (upd.rowCount === 0) {
       if (req.file) fs.unlink(req.file.path, () => {});
-      return answerLostRace(res, id, oid);
+      return answerLostRace(res, id, eid);
     }
 
     // The old file is orphaned once the row points elsewhere
@@ -1556,10 +1556,10 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
 router.delete("/:id", guard, async (req, res) => {
   try {
     const { id } = req.params;
-    const oid = req.user?.oid || req.user?.sub;
+    const eid = req.user?.eid || req.user?.sub;
 
     const q = await pool.query(
-      `SELECT employee_oid, status
+      `SELECT employee_eid, status
          FROM activities
         WHERE id = $1`,
       [id]
@@ -1569,7 +1569,7 @@ router.delete("/:id", guard, async (req, res) => {
 
     const row = q.rows[0];
 
-    if (row.employee_oid !== oid) {
+    if (row.employee_eid !== eid) {
       return res.status(403).json({ error: "Klaida: Draudžiama" });
     }
 
@@ -1583,12 +1583,12 @@ router.delete("/:id", guard, async (req, res) => {
     // path so the file can follow the row
     const del = await pool.query(
       `DELETE FROM activities WHERE id = $1
-          AND employee_oid = $2
+          AND employee_eid = $2
           AND status IN ('PATEIKTA', 'TIKSLINTI')
        RETURNING attachment_path`,
-      [id, oid]
+      [id, eid]
     );
-    if (del.rowCount === 0) return answerLostRace(res, id, oid);
+    if (del.rowCount === 0) return answerLostRace(res, id, eid);
 
     const gonePath = del.rows[0]?.attachment_path;
     if (gonePath) {
@@ -1626,10 +1626,10 @@ router.delete("/:id", guard, async (req, res) => {
 router.post("/:id/resubmit", guard, async (req, res) => {
   try {
     const { id } = req.params;
-    const oid = req.user?.oid || req.user?.sub;
+    const eid = req.user?.eid || req.user?.sub;
 
     const cur = await pool.query(
-      `SELECT employee_oid, status
+      `SELECT employee_eid, status
          FROM activities
         WHERE id = $1`,
       [id]
@@ -1641,7 +1641,7 @@ router.post("/:id/resubmit", guard, async (req, res) => {
 
     const row = cur.rows[0];
 
-    if (row.employee_oid !== oid) {
+    if (row.employee_eid !== eid) {
       return res.status(403).json({ error: "Klaida: Draudžiama" });
     }
 
@@ -1658,11 +1658,11 @@ router.post("/:id/resubmit", guard, async (req, res) => {
               rejection_comment = NULL,
               updated_at = NOW()
         WHERE id = $1
-          AND employee_oid = $2
+          AND employee_eid = $2
           AND status = 'TIKSLINTI'`,
-      [id, oid]
+      [id, eid]
     );
-    if (upd.rowCount === 0) return answerLostRace(res, id, oid);
+    if (upd.rowCount === 0) return answerLostRace(res, id, eid);
 
     const q = await pool.query(
       `SELECT

@@ -245,9 +245,9 @@ test("the checker reports phantom columns and tables", () => {
   const cases = [
     ["SELECT id, email FROM users ORDER BY id DESC", ["users.id", "users.id"]],
     ["INSERT INTO users (email, full_name) VALUES ($1, $2) RETURNING id", ["users.id"]],
-    ["SELECT u.nickname FROM activities a JOIN users u ON u.oid = a.employee_oid", ["users.nickname"]],
+    ["SELECT u.nickname FROM activities a JOIN users u ON u.eid = a.employee_eid", ["users.nickname"]],
     ["DELETE FROM sessions WHERE id = $1", ["table sessions"]],
-    ["SELECT oid, email, full_name, created_at FROM users ORDER BY created_at DESC", []],
+    ["SELECT eid, email, full_name, created_at FROM users ORDER BY created_at DESC", []],
   ];
   for (const [sql, expected] of cases) {
     assert.deepEqual(checkStatement(sql, schema), expected, sql);

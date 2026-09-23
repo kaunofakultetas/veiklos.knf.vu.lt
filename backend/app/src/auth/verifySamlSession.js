@@ -21,14 +21,10 @@ import { mapSamlAttributes } from "../utils/saml.js";
 // -----------------------------------------------------------
 //
 // 401 Neprisijungta when the session has no SAML login;
-// otherwise req.user = { oid, email, name }: email and name
-// mapped from the raw IdP attributes by mapSamlAttributes
-// (VU SSO's OIDs or their friendly names alike; name is
-// firstName + lastName with missing parts dropped, "" when
-// both are missing), oid preferably the account key /assert
-// resolved and stored (it may differ from the attributes'
-// identifier when an existing account was adopted by email),
-// falling back to the mapped identifier.
+// otherwise req.user = { eid, email, name } mapped from the
+// raw IdP attributes by mapSamlAttributes — eid is VU's eID;
+// name is firstName + lastName with missing parts dropped,
+// "" when both are missing.
 //
 // Used by:
 //   - index.js — /api/me, the /api/users and /api/user-roles
@@ -40,9 +36,9 @@ import { mapSamlAttributes } from "../utils/saml.js";
 export function verifySamlSession(req, res, next) {
   const samlUser = req.session?.samlUser;
   if (!samlUser) return res.status(401).json({ error: 'Neprisijungta' });
-  const { oid: attrOid, email, name } = mapSamlAttributes(samlUser.attributes);
+  const { eid, email, name } = mapSamlAttributes(samlUser.attributes);
   req.user = {
-    oid: samlUser.oid ?? attrOid,
+    eid,
     email,
     name: name ?? '',
   };

@@ -99,7 +99,7 @@ test("verifySamlSession: maps VU SSO attributes onto req.user", async () => {
     session: {
       samlUser: {
         attributes: {
-          "urn:oid:0.9.2342.19200300.100.1.1": "jonas.jonaitis",
+          eID: "112546",
           "urn:oid:0.9.2342.19200300.100.1.3": ["jonas.jonaitis@knf.vu.lt"],
           "urn:oid:2.5.4.42": "Jonas",
           "urn:oid:2.5.4.4": "Jonaitis",
@@ -112,14 +112,7 @@ test("verifySamlSession: maps VU SSO attributes onto req.user", async () => {
   verifySamlSession(req, fakeRes(), () => (called = true));
 
   assert.equal(called, true);
-  assert.deepEqual(req.user, { oid: "jonas.jonaitis", email: "jonas.jonaitis@knf.vu.lt", name: "Jonas Jonaitis" });
-
-  // The account key /assert resolved wins over the attributes'
-  // identifier (an adopted account keeps its old oid)
-  req.session.samlUser.oid = "vu00001";
-  verifySamlSession(req, fakeRes(), () => {});
-  assert.equal(req.user.oid, "vu00001");
-  assert.equal(req.user.email, "jonas.jonaitis@knf.vu.lt");
+  assert.deepEqual(req.user, { eid: "112546", email: "jonas.jonaitis@knf.vu.lt", name: "Jonas Jonaitis" });
 });
 
 
@@ -140,14 +133,14 @@ test("verifySamlSession: friendly names and partial names", async () => {
   const req = {
     session: {
       samlUser: {
-        attributes: { uid: "kitas", mail: "kitas@vu.lt", sn: "Kazlauskaitė" },
+        attributes: { eid: "300003", mail: "kitas@vu.lt", sn: "Kazlauskaitė" },
       },
     },
   };
 
   verifySamlSession(req, fakeRes(), () => {});
 
-  assert.deepEqual(req.user, { oid: "kitas", email: "kitas@vu.lt", name: "Kazlauskaitė" });
+  assert.deepEqual(req.user, { eid: "300003", email: "kitas@vu.lt", name: "Kazlauskaitė" });
 });
 
 
@@ -360,7 +353,7 @@ test("attachRoles: loads role names and auto-grants Darbuotojas", async () => {
   onQuery(/INSERT INTO user_roles/, { rowCount: 1 });
   onQuery(/SELECT r\.name FROM user_roles ur/, [{ name: "Darbuotojas" }, { name: "Vadybininkas" }]);
 
-  const req = { user: { oid: "oid-1" } };
+  const req = { user: { eid: "eid-1" } };
   let called = false;
   await attachRoles(req, fakeRes(), () => (called = true));
 
@@ -370,7 +363,7 @@ test("attachRoles: loads role names and auto-grants Darbuotojas", async () => {
   // The auto-grant INSERT runs on EVERY call (ON CONFLICT
   // makes it a no-op after the first) — pinned
   const insert = queryLog().find((q) => q.sql.includes("INSERT INTO user_roles"));
-  assert.deepEqual(insert.params, ["oid-1", 1]);
+  assert.deepEqual(insert.params, ["eid-1", 1]);
 });
 
 
@@ -383,11 +376,11 @@ test("attachRoles: loads role names and auto-grants Darbuotojas", async () => {
 // attachRoles — sub fallback
 // -----------------------------------------------------------
 //
-// No oid claim: the sub claim keys the grant instead —
+// No eid claim: the sub claim keys the grant instead —
 // pinned via the INSERT's bound params.
 // -----------------------------------------------------------
 
-test("attachRoles: sub claim is the oid fallback", async () => {
+test("attachRoles: sub claim is the eid fallback", async () => {
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 1 }]);
   onQuery(/INSERT INTO user_roles/, { rowCount: 0 });
   onQuery(/SELECT r\.name FROM user_roles ur/, []);
@@ -413,7 +406,7 @@ test("attachRoles: sub claim is the oid fallback", async () => {
 // and the request still continues.
 // -----------------------------------------------------------
 
-test("attachRoles: no oid/sub → roles [] and continues", async () => {
+test("attachRoles: no eid/sub → roles [] and continues", async () => {
   const req = { user: {} };
   let called = false;
   await attachRoles(req, fakeRes(), () => (called = true));
@@ -440,7 +433,7 @@ test("attachRoles: no oid/sub → roles [] and continues", async () => {
 test('attachRoles: "Darbuotojas" role missing from catalog → roles [] (auto-grant silently broken)', async () => {
   onQuery(/SELECT id FROM roles WHERE name = \$1/, []);
 
-  const req = { user: { oid: "oid-1" } };
+  const req = { user: { eid: "eid-1" } };
   let called = false;
   await attachRoles(req, fakeRes(), () => (called = true));
 
@@ -469,7 +462,7 @@ test("attachRoles: DB failure fails OPEN — roles [], request continues", async
     throw new Error("db down");
   });
 
-  const req = { user: { oid: "oid-1" } };
+  const req = { user: { eid: "eid-1" } };
   let called = false;
   await attachRoles(req, fakeRes(), () => (called = true));
 

@@ -336,11 +336,11 @@ export default function ManagerExportPage() {
   const employeeOptions = useMemo(() => {
     const map = new Map();
     for (const a of activities) {
-      if (!a.employee_oid) continue;
-      if (!map.has(a.employee_oid)) {
-        map.set(a.employee_oid, {
-          id: String(a.employee_oid),
-          label: a.full_name || a.employee_oid,
+      if (!a.employee_eid) continue;
+      if (!map.has(a.employee_eid)) {
+        map.set(a.employee_eid, {
+          id: String(a.employee_eid),
+          label: a.full_name || a.employee_eid,
         });
       }
     }
@@ -399,7 +399,7 @@ export default function ManagerExportPage() {
   // AND across the four filters; empty filter always passes
   const filteredActivities = useMemo(() => {
     return activities.filter((a) => {
-      const empId = String(a.employee_oid);
+      const empId = String(a.employee_eid);
       const themeId = String(a.theme_id);
       const subthemeId = String(a.subtheme_id);
 

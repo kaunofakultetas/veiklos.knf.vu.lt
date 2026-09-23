@@ -215,7 +215,7 @@ test("SP metadata carries the identity of the request host", async () => {
   const xml = await res.text();
   assert.ok(xml.includes(`entityID="${base}/auth/saml/metadata"`));
   assert.ok(xml.includes(`${base}/auth/saml/assert`));
-  assert.ok(xml.includes('FriendlyName="uid" isRequired="true"'));
+  assert.ok(xml.includes('Name="eID" FriendlyName="eID" isRequired="true"'));
 
   const other = await new Promise((resolve, reject) => {
     const u = new URL(base);

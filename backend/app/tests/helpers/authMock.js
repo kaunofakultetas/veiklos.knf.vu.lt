@@ -55,16 +55,16 @@ mock.module(new URL("../../src/auth/attachRoles.js", import.meta.url).href, {
 // signInAs
 // -----------------------------------------------------------
 //
-// signInAs("oid-1", ["Darbuotojas"], { name: "J" }) — the
+// signInAs("eid-1", ["Darbuotojas"], { name: "J" }) — the
 // extra fields merge into req.user like the real middleware's
-// oid/email/name mapping from SAML attributes.
+// eid/email/name mapping from SAML attributes.
 //
 // Used by:
 //   - every *.routes.test.js file
 // -----------------------------------------------------------
 
-export function signInAs(oid, roles = [], extra = {}) {
-  identity.user = { oid, roles, ...extra };
+export function signInAs(eid, roles = [], extra = {}) {
+  identity.user = { eid, roles, ...extra };
 }
 
 

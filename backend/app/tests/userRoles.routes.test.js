@@ -51,21 +51,21 @@ beforeEach(() => {
 // stubUserLookup
 // -----------------------------------------------------------
 //
-// The email→oid lookup every handler starts with.
+// The email→eid lookup every handler starts with.
 //
 // Used by:
 //   - most tests in this file
 // -----------------------------------------------------------
 
 function stubUserLookup(row) {
-  onQuery(/SELECT oid AS id.* FROM users WHERE LOWER\(email\) = LOWER\(\$1\)/, row ? [row] : []);
+  onQuery(/SELECT eid AS id.* FROM users WHERE LOWER\(email\) = LOWER\(\$1\)/, row ? [row] : []);
 }
 
 
 // The one catalog + ownership query GET / runs after the
 // user lookup: rows of { name, owned }
 function stubCatalog(rows) {
-  onQuery(/SELECT r\.name, ur\.user_oid IS NOT NULL AS owned FROM roles r LEFT JOIN user_roles ur/, rows);
+  onQuery(/SELECT r\.name, ur\.user_eid IS NOT NULL AS owned FROM roles r LEFT JOIN user_roles ur/, rows);
 }
 
 
@@ -142,7 +142,7 @@ test("a signed-in non-manager gets authorize's 403 on every route", async () => 
 
 test("OWNING Vadybininkas is enough — no X-Active-Role header needed (pinned)", async () => {
   manager();
-  stubUserLookup({ id: "oid-1", email: "a@x", full_name: "A" });
+  stubUserLookup({ id: "eid-1", email: "a@x", full_name: "A" });
   stubCatalog([{ name: "Darbuotojas", owned: false }]);
 
   const res = await api(app.base, "GET", "/api/user-roles?email=a@x");
@@ -206,13 +206,13 @@ test("GET: unknown user → 404", async () => {
 // User row + catalog + owned roles combined into one body,
 // from two queries: the user lookup (trim-in-JS / LOWER-in-
 // SQL split pinned via the bound param) and one LEFT JOIN
-// keyed by the user's oid that yields catalog and ownership
+// keyed by the user's eid that yields catalog and ownership
 // together.
 // -----------------------------------------------------------
 
 test("GET: returns { user, roles, allRoles } from the lookup + one catalog query", async () => {
   manager();
-  stubUserLookup({ id: "oid-1", email: "a@x", full_name: "A" });
+  stubUserLookup({ id: "eid-1", email: "a@x", full_name: "A" });
   stubCatalog([
     { name: "Darbuotojas", owned: true },
     { name: "Komisijos narys", owned: false },
@@ -222,7 +222,7 @@ test("GET: returns { user, roles, allRoles } from the lookup + one catalog query
   const res = await api(app.base, "GET", "/api/user-roles?email=%20A@X%20");
   assert.equal(res.status, 200);
   assert.deepEqual(res.body, {
-    user: { id: "oid-1", email: "a@x", full_name: "A" },
+    user: { id: "eid-1", email: "a@x", full_name: "A" },
     roles: ["Darbuotojas"],
     allRoles: ["Darbuotojas", "Komisijos narys", "Vadybininkas"],
   });
@@ -231,7 +231,7 @@ test("GET: returns { user, roles, allRoles } from the lookup + one catalog query
   const [lookup, catalog] = queryLog();
   assert.ok(lookup.sql.includes("LOWER(email) = LOWER($1)"));
   assert.deepEqual(lookup.params, ["A@X"]);
-  assert.deepEqual(catalog.params, ["oid-1"]);
+  assert.deepEqual(catalog.params, ["eid-1"]);
 });
 
 
@@ -282,7 +282,7 @@ test("assign: unknown user → 404, unknown role → 400", async () => {
   assert.deepEqual(res.body, { error: "Klaida: Vartotojas nerastas" });
 
   resetDb();
-  stubUserLookup({ id: "oid-1" });
+  stubUserLookup({ id: "eid-1" });
   onQuery(/SELECT id FROM roles WHERE name = \$1/, []);
   res = await api(app.base, "POST", "/api/user-roles/assign", {
     body: { email: "a@x", role: "Nėra tokios" },
@@ -301,13 +301,13 @@ test("assign: unknown user → 404, unknown role → 400", async () => {
 // assign — grant
 // -----------------------------------------------------------
 //
-// ON CONFLICT insert by (oid, role id) with the params
+// ON CONFLICT insert by (eid, role id) with the params
 // pinned; 204. Email and role arrive trimmed at the lookups.
 // -----------------------------------------------------------
 
-test("assign: grants by (oid, role id) with ON CONFLICT → 204; inputs trimmed", async () => {
+test("assign: grants by (eid, role id) with ON CONFLICT → 204; inputs trimmed", async () => {
   manager();
-  stubUserLookup({ id: "oid-1" });
+  stubUserLookup({ id: "eid-1" });
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 2 }]);
   onQuery(/INSERT INTO user_roles/, { rowCount: 1 });
 
@@ -320,7 +320,7 @@ test("assign: grants by (oid, role id) with ON CONFLICT → 204; inputs trimmed"
   assert.deepEqual(lookup.params, ["a@x"]);
   assert.deepEqual(role.params, ["Vadybininkas"]);
   assert.ok(insert.sql.includes("ON CONFLICT DO NOTHING"));
-  assert.deepEqual(insert.params, ["oid-1", 2]);
+  assert.deepEqual(insert.params, ["eid-1", 2]);
 });
 
 
@@ -339,7 +339,7 @@ test("assign: grants by (oid, role id) with ON CONFLICT → 204; inputs trimmed"
 
 test("remove: unknown role name is treated as already removed — 204, NO delete", async () => {
   manager();
-  stubUserLookup({ id: "oid-1" });
+  stubUserLookup({ id: "eid-1" });
   onQuery(/SELECT id FROM roles WHERE name = \$1/, []);
 
   const res = await api(app.base, "POST", "/api/user-roles/remove", {
@@ -359,14 +359,14 @@ test("remove: unknown role name is treated as already removed — 204, NO delete
 // remove — revoke
 // -----------------------------------------------------------
 //
-// DELETE by (oid, role id) with the params pinned; 204.
+// DELETE by (eid, role id) with the params pinned; 204.
 // -----------------------------------------------------------
 
-test("remove: revokes by (oid, role id) → 204", async () => {
+test("remove: revokes by (eid, role id) → 204", async () => {
   manager();
-  stubUserLookup({ id: "oid-1" });
+  stubUserLookup({ id: "eid-1" });
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 2 }]);
-  onQuery(/DELETE FROM user_roles WHERE user_oid = \$1 AND role_id = \$2/, { rowCount: 1 });
+  onQuery(/DELETE FROM user_roles WHERE user_eid = \$1 AND role_id = \$2/, { rowCount: 1 });
 
   const res = await api(app.base, "POST", "/api/user-roles/remove", {
     body: { email: "a@x", role: "Vadybininkas" },
@@ -374,7 +374,7 @@ test("remove: revokes by (oid, role id) → 204", async () => {
   assert.equal(res.status, 204);
 
   const del = queryLog().find((q) => q.sql.includes("DELETE FROM user_roles"));
-  assert.deepEqual(del.params, ["oid-1", 2]);
+  assert.deepEqual(del.params, ["eid-1", 2]);
 });
 
 
@@ -442,7 +442,7 @@ test("remove: a manager may revoke their own Vadybininkas role → 204", async (
   manager();
   stubUserLookup({ id: "mgr-1" });
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 2 }]);
-  onQuery(/DELETE FROM user_roles WHERE user_oid = \$1 AND role_id = \$2/, { rowCount: 1 });
+  onQuery(/DELETE FROM user_roles WHERE user_eid = \$1 AND role_id = \$2/, { rowCount: 1 });
 
   const res = await api(app.base, "POST", "/api/user-roles/remove", {
     body: { email: "mgr@x", role: "Vadybininkas" },

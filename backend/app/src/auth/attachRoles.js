@@ -6,7 +6,7 @@
 //  caller, so simply signing in makes you an employee — the
 //  same auto-grant routes/session.js does on /init.
 //
-//  Fails open: on any error (or a missing oid) roles becomes
+//  Fails open: on any error (or a missing eid) roles becomes
 //  [] and the request continues — the role guards downstream
 //  then reject with 403 rather than this middleware with 500.
 // -----------------------------------------------------------
@@ -24,7 +24,7 @@ import { pool } from "../db/pool.js";
 // -----------------------------------------------------------
 //
 // Express middleware; expects verifySamlSession to have set
-// req.user. Identity key is oid with sub as fallback — the
+// req.user. Identity key is eid with sub as fallback — the
 // same pair every route handler uses.
 //
 // Used by:
@@ -35,9 +35,9 @@ import { pool } from "../db/pool.js";
 
 export async function attachRoles(req, res, next) {
   try {
-    const oid = req.user?.oid || req.user?.sub;
+    const eid = req.user?.eid || req.user?.sub;
 
-    if (!oid) {
+    if (!eid) {
       req.user.roles = [];
       return next();
     }
@@ -60,11 +60,11 @@ export async function attachRoles(req, res, next) {
     // makes it a no-op after the first time
     await pool.query(
       `
-      INSERT INTO user_roles (user_oid, role_id)
+      INSERT INTO user_roles (user_eid, role_id)
       VALUES ($1, $2)
       ON CONFLICT DO NOTHING
       `,
-      [oid, employeeRoleId]
+      [eid, employeeRoleId]
     );
 
     const rolesRes = await pool.query(
@@ -72,10 +72,10 @@ export async function attachRoles(req, res, next) {
       SELECT r.name
       FROM user_roles ur
       JOIN roles r ON r.id = ur.role_id
-      WHERE ur.user_oid = $1
+      WHERE ur.user_eid = $1
       ORDER BY r.name
       `,
-      [oid]
+      [eid]
     );
 
     req.user.roles = rolesRes.rows.map(r => r.name);

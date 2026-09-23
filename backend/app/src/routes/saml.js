@@ -17,14 +17,8 @@
 //
 //  /assert is where a user is BORN in this system: it upserts
 //  the users row from the IdP attributes and auto-grants
-//  "Darbuotojas" on first sign-in. The account is found by
-//  the IdP's identifier first and by EMAIL second: VU may
-//  release a different identifier than it did before (uid
-//  vs eduPersonTargetedID, test vs production IdP), and the
-//  same person must land in their existing account, roles
-//  and activities included, instead of hitting the unique
-//  email constraint. The resolved oid is stored in the
-//  session; the gate uses it over the attributes. Attributes are
+//  "Darbuotojas" on first sign-in. Users are keyed by VU's
+//  eID — a login without it is refused. Attributes are
 //  read through mapSamlAttributes, so VU SSO's OIDs (or their
 //  friendly names) both work.
 //
@@ -36,7 +30,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { TBL_USERS, TBL_ROLES, TBL_USER_ROLES } from "../db/tables.js";
-import { enrichSpMetadata, mapSamlAttributes, withNestedNameIds } from "../utils/saml.js";
+import { enrichSpMetadata, mapSamlAttributes } from "../utils/saml.js";
 
 
 
@@ -74,44 +68,6 @@ function failedStatusDetail(samlResponseB64) {
     if (message) parts.push(message);
     if (codes.length > 1) parts.push(`(${codes.join(" → ")})`);
     return parts.length ? parts.join(" ") : null;
-}
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// resolveAccountOid
-// -----------------------------------------------------------
-//
-// The users.oid to log this person in as. The IdP's
-// identifier wins when a row has it; otherwise a row with
-// the same email (case-insensitive) is the same person under
-// a previous identifier and its oid is kept — VU's test IdP
-// releases eduPersonTargetedID where earlier logins used uid,
-// and production will differ again. No row either way → the
-// IdP's identifier becomes the new account's oid. Adoption
-// is logged, since it means VU changed what it sends.
-//
-// Used by:
-//   - POST /assert (below)
-// -----------------------------------------------------------
-
-async function resolveAccountOid(idpOid, email) {
-    const byOid = await pool.query(`SELECT 1 FROM ${TBL_USERS} WHERE oid = $1 LIMIT 1`, [idpOid]);
-    if (byOid.rowCount > 0) return idpOid;
-
-    const byEmail = await pool.query(
-        `SELECT oid FROM ${TBL_USERS} WHERE LOWER(email) = LOWER($1) LIMIT 1`,
-        [email]
-    );
-    if (byEmail.rowCount > 0) {
-        console.log(`SAML assert: ${email} known as ${byEmail.rows[0].oid}, IdP now sends ${idpOid} — keeping the existing account`);
-        return byEmail.rows[0].oid;
-    }
-    return idpOid;
 }
 
 
@@ -170,7 +126,7 @@ export default function createSamlRouter({ setup }) {
     // in the session and send the browser home
     const assert = async (req, res) => {
         try {
-            const { samlContent, extract } = await spOf(req).parseLoginResponse(idp, "post", req);
+            const { extract } = await spOf(req).parseLoginResponse(idp, "post", req);
 
             const { spEntityId } = identityFor(originOf(req));
             const audiences = [].concat(extract.audience ?? []);
@@ -178,41 +134,33 @@ export default function createSamlRouter({ setup }) {
                 return res.status(401).send("SAML assertion audience mismatch");
             }
 
-            // Nested-NameID attributes (eduPersonTargetedID) come
-            // back empty from samlify — filled from the assertion
-            const attributes = await withNestedNameIds(spOf(req), extract.attributes, samlContent);
-            const { oid: idpOid, email, name: fullName } = mapSamlAttributes(attributes);
+            const attributes = extract.attributes || {};
+            const { eid, email, name: fullName } = mapSamlAttributes(attributes);
 
             // The attribute NAMES (never the values) are logged and
             // echoed, so a release policy that sends the identity
             // under names we don't map is diagnosable from the
             // error alone
-            if (!idpOid || !email) {
+            if (!eid || !email) {
                 const received = Object.keys(attributes);
-                console.error("SAML assert: missing oid/email; attributes received:", received.join(", ") || "(none)");
+                console.error("SAML assert: missing eID/mail; attributes received:", received.join(", ") || "(none)");
                 return res.status(400).send(
-                    `SAML assertion missing oid or email attributes (received: ${received.join(", ") || "none"})`
+                    `SAML assertion missing eID or mail attributes (received: ${received.join(", ") || "none"})`
                 );
             }
 
-            // The account: by the IdP's identifier, else by email
-            // (same person, different identifier released) — their
-            // stored oid then stays the key so roles and activities
-            // keep pointing at them
-            const oid = await resolveAccountOid(idpOid, email);
-
-            // Upsert keyed by oid — email always refreshes,
+            // Upsert keyed by eid — email always refreshes,
             // full_name only when the IdP sent one; last_login_at
             // is stamped on the first login too, not only on
             // returning ones
             await pool.query(
-                `INSERT INTO ${TBL_USERS} (oid, email, full_name, last_login_at)
+                `INSERT INTO ${TBL_USERS} (eid, email, full_name, last_login_at)
                  VALUES ($1, $2, $3, NOW())
-                 ON CONFLICT (oid) DO UPDATE
+                 ON CONFLICT (eid) DO UPDATE
                    SET email        = EXCLUDED.email,
                        full_name    = COALESCE(EXCLUDED.full_name, ${TBL_USERS}.full_name),
                        last_login_at = NOW()`,
-                [oid, email, fullName]
+                [eid, email, fullName]
             );
 
             // First sign-in: grant the employee role so the
@@ -220,8 +168,8 @@ export default function createSamlRouter({ setup }) {
             // Lithuanian name — renaming the role in the DB
             // breaks this silently
             const { rows: existing } = await pool.query(
-                `SELECT 1 FROM ${TBL_USER_ROLES} WHERE user_oid = $1 LIMIT 1`,
-                [oid]
+                `SELECT 1 FROM ${TBL_USER_ROLES} WHERE user_eid = $1 LIMIT 1`,
+                [eid]
             );
             if (existing.length === 0) {
                 const { rows: defaultRole } = await pool.query(
@@ -230,19 +178,17 @@ export default function createSamlRouter({ setup }) {
                 );
                 if (defaultRole.length > 0) {
                     await pool.query(
-                        `INSERT INTO ${TBL_USER_ROLES} (user_oid, role_id)
+                        `INSERT INTO ${TBL_USER_ROLES} (user_eid, role_id)
                          VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-                        [oid, defaultRole[0].id]
+                        [eid, defaultRole[0].id]
                     );
                 }
             }
 
             // nameID + sessionIndex are kept for single
-            // logout; oid is the RESOLVED account key (may differ
-            // from the attributes' identifier); the RAW attributes
-            // feed verifySamlSession for email and name
+            // logout; the RAW attributes feed verifySamlSession,
+            // which maps them the same way
             req.session.samlUser = {
-                oid,
                 nameID:       extract.nameID,
                 sessionIndex: extract.sessionIndex,
                 attributes,

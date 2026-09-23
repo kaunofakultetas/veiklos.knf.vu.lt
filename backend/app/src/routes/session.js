@@ -31,9 +31,9 @@ const router = Router();
 // -----------------------------------------------------------
 //
 // 401 Neprisijungta without a session; otherwise the user row
-// re-read from the DB by the session's oid, plus the roles
+// re-read from the DB by the session's eid, plus the roles
 // (from attachRoles) as { name } objects — the shape App.jsx
-// expects. An oid missing from the users table still answers
+// expects. An eid missing from the users table still answers
 // 200, with user undefined.
 //
 // Used by:
@@ -43,8 +43,8 @@ const router = Router();
 router.get("/check", verifySamlSession, attachRoles, async (req, res) => {
   try {
     const { rows: [user] } = await pool.query(
-      `SELECT oid, email, full_name, created_at, last_login_at FROM ${TBL_USERS} WHERE oid = $1`,
-      [req.user.oid]
+      `SELECT eid, email, full_name, created_at, last_login_at FROM ${TBL_USERS} WHERE eid = $1`,
+      [req.user.eid]
     );
     res.json({
       user,

@@ -82,7 +82,7 @@ function readEmailAndRole(body) {
 // -----------------------------------------------------------
 //
 // The email→user lookup every route starts with: case-
-// insensitive in SQL, oid aliased as id (the shape the page
+// insensitive in SQL, eid aliased as id (the shape the page
 // expects). null when there is no such user.
 //
 // Used by:
@@ -91,7 +91,7 @@ function readEmailAndRole(body) {
 
 async function findUserByEmail(email) {
   const u = await pool.query(
-    `SELECT oid AS id, email, full_name
+    `SELECT eid AS id, email, full_name
        FROM users
       WHERE LOWER(email) = LOWER($1)
       LIMIT 1`,
@@ -131,7 +131,7 @@ async function findRoleId(name) {
 // GET /api/user-roles
 // -----------------------------------------------------------
 //
-// ?email=... → { user, roles, allRoles }: the user (oid
+// ?email=... → { user, roles, allRoles }: the user (eid
 // aliased as id), the roles they own, and the full catalog so
 // the UI can render assign buttons for the rest. Catalog and
 // ownership come from ONE query — a LEFT JOIN of user_roles
@@ -151,9 +151,9 @@ router.get("/", async (req, res) => {
     if (!user) return res.status(404).json({ error: MSG_USER_NOT_FOUND });
 
     const catalog = await pool.query(
-      `SELECT r.name, ur.user_oid IS NOT NULL AS owned
+      `SELECT r.name, ur.user_eid IS NOT NULL AS owned
          FROM roles r
-         LEFT JOIN user_roles ur ON ur.role_id = r.id AND ur.user_oid = $1
+         LEFT JOIN user_roles ur ON ur.role_id = r.id AND ur.user_eid = $1
         ORDER BY r.name ASC`,
       [user.id]
     );
@@ -197,7 +197,7 @@ router.post("/assign", async (req, res) => {
     if (roleId === null) return res.status(400).json({ error: MSG_UNKNOWN_ROLE });
 
     await pool.query(
-      `INSERT INTO user_roles (user_oid, role_id)
+      `INSERT INTO user_roles (user_eid, role_id)
        VALUES ($1, $2)
        ON CONFLICT DO NOTHING`,
       [user.id, roleId]
@@ -243,7 +243,7 @@ router.post("/remove", async (req, res) => {
 
     await pool.query(
       `DELETE FROM user_roles
-        WHERE user_oid = $1 AND role_id = $2`,
+        WHERE user_eid = $1 AND role_id = $2`,
       [user.id, roleId]
     );
 
