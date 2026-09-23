@@ -108,12 +108,19 @@ export const SP_INFO = {
 // match case-insensitively — VU's own description spells the
 // personnel number "UID".
 //
+// The user key (oid) falls back to eduPersonTargetedID: VU's
+// TEST IdP releases that pairwise pseudonym instead of uid.
+// It is stable per user per SP, so it keys an account fine,
+// but it is opaque and differs between the test and the
+// production IdP — uid stays first so the moment VU releases
+// it, it wins.
+//
 // Used by:
 //   - mapSamlAttributes (below)
 // -----------------------------------------------------------
 
 export const ATTRIBUTE_ALIASES = {
-  oid:       ["urn:oid:0.9.2342.19200300.100.1.1", "uid"],
+  oid:       ["urn:oid:0.9.2342.19200300.100.1.1", "uid", "urn:oid:1.3.6.1.4.1.5923.1.1.1.10", "eduPersonTargetedID"],
   email:     ["urn:oid:0.9.2342.19200300.100.1.3", "mail"],
   firstName: ["urn:oid:2.5.4.42", "givenName"],
   lastName:  ["urn:oid:2.5.4.4", "sn"],

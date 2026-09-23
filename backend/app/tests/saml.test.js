@@ -498,6 +498,21 @@ test("mapper: friendly names, and OIDs win over friendly names", () => {
     mapSamlAttributes({ UID: "vu12345", Mail: "j@vu.lt", GivenName: "Jonas", SN: "Jonaitis" }),
     { oid: "vu12345", email: "j@vu.lt", firstName: "Jonas", lastName: "Jonaitis", name: "Jonas Jonaitis" }
   );
+
+  // VU's TEST IdP releases eduPersonTargetedID and no uid —
+  // the pairwise id keys the user, but uid wins when present
+  const testIdp = mapSamlAttributes({
+    "urn:oid:2.5.4.4": "Jonaitis",
+    "urn:oid:2.5.4.42": "Jonas",
+    "urn:oid:0.9.2342.19200300.100.1.3": "j@vu.lt",
+    "urn:oid:1.3.6.1.4.1.5923.1.1.1.10": "a1b2c3-pairwise",
+  });
+  assert.equal(testIdp.oid, "a1b2c3-pairwise");
+  assert.equal(testIdp.email, "j@vu.lt");
+  assert.equal(
+    mapSamlAttributes({ "urn:oid:0.9.2342.19200300.100.1.1": "vu12345", "urn:oid:1.3.6.1.4.1.5923.1.1.1.10": "a1b2c3" }).oid,
+    "vu12345"
+  );
 });
 
 
