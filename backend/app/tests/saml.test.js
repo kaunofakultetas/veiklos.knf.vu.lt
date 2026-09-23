@@ -491,6 +491,13 @@ test("mapper: friendly names, and OIDs win over friendly names", () => {
   const both = mapSamlAttributes({ uid: "friendly", "urn:oid:0.9.2342.19200300.100.1.1": "vu-uid" });
   assert.equal(both.oid, "vu-uid");
   assert.equal(ATTRIBUTE_ALIASES.oid[0], "urn:oid:0.9.2342.19200300.100.1.1");
+
+  // VU's description spells the personnel number "UID" —
+  // friendly names match regardless of case
+  assert.deepEqual(
+    mapSamlAttributes({ UID: "vu12345", Mail: "j@vu.lt", GivenName: "Jonas", SN: "Jonaitis" }),
+    { oid: "vu12345", email: "j@vu.lt", firstName: "Jonas", lastName: "Jonaitis", name: "Jonas Jonaitis" }
+  );
 });
 
 

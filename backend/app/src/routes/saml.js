@@ -135,8 +135,16 @@ export default function createSamlRouter({ setup }) {
 
             const { oid, email, name: fullName } = mapSamlAttributes(extract.attributes);
 
+            // The attribute NAMES (never the values) are logged and
+            // echoed, so a release policy that sends the identity
+            // under names we don't map is diagnosable from the
+            // error alone
             if (!oid || !email) {
-                return res.status(400).send("SAML assertion missing oid or email attributes");
+                const received = Object.keys(extract.attributes || {});
+                console.error("SAML assert: missing oid/email; attributes received:", received.join(", ") || "(none)");
+                return res.status(400).send(
+                    `SAML assertion missing oid or email attributes (received: ${received.join(", ") || "none"})`
+                );
             }
 
             // Upsert keyed by oid — email always refreshes,

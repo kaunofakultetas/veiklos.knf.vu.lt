@@ -258,15 +258,16 @@ test("assert: first sign-in auto-grants Darbuotojas", async () => {
 // -----------------------------------------------------------
 //
 // No usable oid/uid or email in any spelling → 400 before
-// any DB work.
+// any DB work, naming the attributes that DID arrive so a
+// release policy with unknown names is diagnosable.
 // -----------------------------------------------------------
 
-test("assert: no oid or email in any scheme → 400, no queries", async () => {
-  nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { givenName: "Anonimas" } };
+test("assert: no oid or email in any scheme → 400 naming what arrived, no queries", async () => {
+  nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { cn: "Anonimas", eduPersonAffiliation: "staff" } };
 
   const res = await post("/auth/saml/assert");
   assert.equal(res.status, 400);
-  assert.equal(await res.text(), "SAML assertion missing oid or email attributes");
+  assert.equal(await res.text(), "SAML assertion missing oid or email attributes (received: cn, eduPersonAffiliation)");
   assert.equal(queryLog().length, 0);
 });
 

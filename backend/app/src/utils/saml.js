@@ -104,7 +104,9 @@ export const SP_INFO = {
 // Every name each identity field may arrive under, in
 // priority order: the OIDs VU SSO releases (uid, mail,
 // givenName, sn), then their friendly names in case the IdP
-// is ever configured to send those instead.
+// is ever configured to send those instead. Friendly names
+// match case-insensitively — VU's own description spells the
+// personnel number "UID".
 //
 // Used by:
 //   - mapSamlAttributes (below)
@@ -195,9 +197,13 @@ function firstValue(value) {
 
 export function mapSamlAttributes(attrs) {
   const bag = attrs || {};
+  // Friendly names compare case-insensitively (OIDs are
+  // already all-lowercase, so the same fold serves both)
+  const byLowerName = new Map(Object.keys(bag).map((k) => [k.toLowerCase(), k]));
   const pick = (field) => {
-    for (const key of ATTRIBUTE_ALIASES[field]) {
-      const v = firstValue(bag[key]);
+    for (const alias of ATTRIBUTE_ALIASES[field]) {
+      const key = byLowerName.get(alias.toLowerCase());
+      const v = key === undefined ? null : firstValue(bag[key]);
       if (v !== null) return v;
     }
     return null;
