@@ -68,6 +68,31 @@ export const SAML_BASE_PATH = "/auth/saml";
 
 
 // -----------------------------------------------------------
+// CLOCK_DRIFT_MS
+// -----------------------------------------------------------
+//
+// Tolerance for the assertion's validity window (Conditions
+// NotBefore / NotOnOrAfter), applied on both edges. samlify's
+// default is zero: an assertion whose NotBefore is a single
+// second ahead of our clock is refused as
+// ERR_SUBJECT_UNCONFIRMED — which is exactly what happened
+// against VU's test IdP, whose clock runs slightly ahead of
+// the hosting server's. Five minutes is the conventional SAML
+// allowance; the window itself stays the IdP's.
+//
+// Used by:
+//   - createSamlSetup (below) — every SP's clockDrifts
+// -----------------------------------------------------------
+
+export const CLOCK_DRIFT_MS = 5 * 60 * 1000;
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // SP_INFO
 // -----------------------------------------------------------
 //
@@ -436,6 +461,7 @@ export async function createSamlSetup() {
       authnRequestsSigned: true,
       wantAssertionsSigned: true,
       isAssertionEncrypted: true,
+      clockDrifts: [-CLOCK_DRIFT_MS, CLOCK_DRIFT_MS],
       privateKey: spPrivateKey,
       signingCert: spCert,
       encPrivateKey: spPrivateKey,

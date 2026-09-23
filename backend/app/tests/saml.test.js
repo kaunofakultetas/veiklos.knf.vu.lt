@@ -27,6 +27,7 @@ import { once } from "node:events";
 import * as saml from "samlify";
 import {
   SAML_BASE_PATH,
+  CLOCK_DRIFT_MS,
   SP_INFO,
   ATTRIBUTE_ALIASES,
   mapSamlAttributes,
@@ -141,8 +142,10 @@ function fakeIdp({ encrypted }) {
   });
   fs.writeFileSync(FAKE_IDP_FILE, idp.getMetadata());
 
-  const loginResponseFor = async (sp, { audience, attributes }) => {
-    const now = new Date();
+  const loginResponseFor = async (sp, { audience, attributes, skewMs = 0 }) => {
+    // skewMs shifts the IdP's clock: its "now" and the whole
+    // validity window move together
+    const now = new Date(Date.now() + skewMs);
     const later = new Date(now.getTime() + 5 * 60 * 1000);
     const acs = sp.entityMeta.getAssertionConsumerService("post");
     const attrs = Object.entries(attributes)
@@ -398,6 +401,42 @@ test("encrypted + signed assertion from the fake IdP decrypts into attributes an
     lastName: "Jonaitis",
     name: "Jonas Jonaitis",
   });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// encrypted assertion — clock skew
+// -----------------------------------------------------------
+//
+// The IdP's clock a couple of minutes AHEAD of ours puts the
+// assertion's NotBefore in our future; within CLOCK_DRIFT_MS
+// it is accepted, beyond it refused. samlify's zero default
+// refused VU's real assertions for a skew of seconds.
+// -----------------------------------------------------------
+
+test("clock skew: an assertion from an IdP 2 min ahead is accepted, 10 min ahead is refused", async () => {
+  const { loginResponseFor } = fakeIdp({ encrypted: true });
+  process.env.IDP_METADATA = FAKE_IDP_FILE;
+  const setup = await createSamlSetup();
+  const sp = setup.spFor("https://veiklos.knf.vu.lt");
+  const attributes = { uid: "u1", mail: "u1@vu.lt" };
+
+  assert.equal(CLOCK_DRIFT_MS, 5 * 60 * 1000);
+
+  const ahead2 = await loginResponseFor(sp, { attributes, skewMs: 2 * 60 * 1000 });
+  const ok = await sp.parseLoginResponse(setup.idp, "post", { body: { SAMLResponse: ahead2 } });
+  assert.equal(ok.extract.attributes.uid, "u1");
+
+  const ahead10 = await loginResponseFor(sp, { attributes, skewMs: 10 * 60 * 1000 });
+  await assert.rejects(
+    () => sp.parseLoginResponse(setup.idp, "post", { body: { SAMLResponse: ahead10 } }),
+    /ERR_SUBJECT_UNCONFIRMED/
+  );
 });
 
 
