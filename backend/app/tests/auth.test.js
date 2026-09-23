@@ -113,6 +113,13 @@ test("verifySamlSession: maps VU SSO attributes onto req.user", async () => {
 
   assert.equal(called, true);
   assert.deepEqual(req.user, { oid: "jonas.jonaitis", email: "jonas.jonaitis@knf.vu.lt", name: "Jonas Jonaitis" });
+
+  // The account key /assert resolved wins over the attributes'
+  // identifier (an adopted account keeps its old oid)
+  req.session.samlUser.oid = "vu00001";
+  verifySamlSession(req, fakeRes(), () => {});
+  assert.equal(req.user.oid, "vu00001");
+  assert.equal(req.user.email, "jonas.jonaitis@knf.vu.lt");
 });
 
 

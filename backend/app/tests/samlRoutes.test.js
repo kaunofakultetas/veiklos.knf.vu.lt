@@ -180,6 +180,7 @@ beforeEach(() => {
 // -----------------------------------------------------------
 
 function stubReturningUser() {
+  onQuery(/SELECT 1 FROM users WHERE oid = \$1 LIMIT 1/, [{ "?column?": 1 }]);
   onQuery(/INSERT INTO users \(oid, email, full_name, last_login_at\)/, { rowCount: 1 });
   onQuery(/SELECT 1 FROM user_roles WHERE user_oid = \$1 LIMIT 1/, [{ "?column?": 1 }]);
 }
@@ -216,9 +217,11 @@ test("assert: OID attributes → upsert by uid, session stored, redirect /", asy
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("location"), "/");
 
-  const upsert = queryLog()[0];
+  // The identifier is known, so the upsert follows the lookup
+  const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
   assert.deepEqual(upsert.params, ["jonas.jonaitis", "jonas.jonaitis@knf.vu.lt", "Jonas Jonaitis"]);
   assert.equal(lastSession.samlUser.nameID, "transient-1");
+  assert.equal(lastSession.samlUser.oid, upsert.params[0]);
   assert.equal(lastSession.samlUser.attributes["urn:oid:2.5.4.42"], "Jonas");
 });
 
@@ -238,6 +241,9 @@ test("assert: OID attributes → upsert by uid, session stored, redirect /", asy
 
 test("assert: first sign-in auto-grants Darbuotojas", async () => {
   nextExtract = { audience: audienceOf(),  nameID: "n", sessionIndex: "s", attributes: { uid: "new-1", mail: "new@vu.lt" } };
+  // Neither the identifier nor the email is known → a new account
+  onQuery(/SELECT 1 FROM users WHERE oid = \$1 LIMIT 1/, []);
+  onQuery(/SELECT oid FROM users WHERE LOWER\(email\) = LOWER\(\$1\) LIMIT 1/, []);
   onQuery(/INSERT INTO users \(oid, email, full_name, last_login_at\)/, { rowCount: 1 });
   onQuery(/SELECT 1 FROM user_roles WHERE user_oid = \$1 LIMIT 1/, []);
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 3 }]);
@@ -247,7 +253,8 @@ test("assert: first sign-in auto-grants Darbuotojas", async () => {
   assert.equal(res.status, 302);
 
   // name is null when the IdP sent neither part
-  assert.deepEqual(queryLog()[0].params, ["new-1", "new@vu.lt", null]);
+  const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
+  assert.deepEqual(upsert.params, ["new-1", "new@vu.lt", null]);
   const grant = queryLog().find((q) => q.sql.includes("INSERT INTO user_roles"));
   assert.deepEqual(grant.params, ["new-1", 3]);
 });
@@ -362,6 +369,70 @@ test("assert: an empty eduPersonTargetedID is recovered from the assertion and k
   const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
   assert.equal(upsert.params[0], "pairwise-42");
   assert.equal(lastSession.samlUser.attributes["urn:oid:1.3.6.1.4.1.5923.1.1.1.10"], "pairwise-42");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// assert — same person, different identifier
+// -----------------------------------------------------------
+//
+// No row under the IdP's identifier but one under the same
+// email (case-insensitive): that account is adopted — the
+// upsert, the role check and the session all use ITS oid,
+// not the identifier the IdP sent. This is what happens when
+// VU switches from uid to eduPersonTargetedID, or between the
+// test and production IdP; before, it died on the unique
+// email constraint.
+// -----------------------------------------------------------
+
+test("assert: unknown identifier but known email → existing account adopted, its oid in the session", async () => {
+  nextExtract = {
+    audience: audienceOf(), nameID: "n", sessionIndex: "s",
+    attributes: { "urn:oid:1.3.6.1.4.1.5923.1.1.1.10": "pairwise-new", "urn:oid:0.9.2342.19200300.100.1.3": "Jonas@KNF.vu.lt" },
+  };
+  onQuery(/SELECT 1 FROM users WHERE oid = \$1 LIMIT 1/, []);
+  onQuery(/SELECT oid FROM users WHERE LOWER\(email\) = LOWER\(\$1\) LIMIT 1/, [{ oid: "vu12345" }]);
+  onQuery(/INSERT INTO users \(oid, email, full_name, last_login_at\)/, { rowCount: 1 });
+  onQuery(/SELECT 1 FROM user_roles WHERE user_oid = \$1 LIMIT 1/, [{ "?column?": 1 }]);
+
+  const res = await post("/auth/saml/assert");
+  assert.equal(res.status, 302);
+
+  const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
+  assert.equal(upsert.params[0], "vu12345");
+  assert.deepEqual(queryLog().find((q) => q.sql.includes("FROM user_roles")).params, ["vu12345"]);
+  assert.equal(lastSession.samlUser.oid, "vu12345");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// assert — DB failure after a valid assertion
+// -----------------------------------------------------------
+//
+// A Postgres error (five-character SQLSTATE code) once the
+// assertion has already been accepted is ours: 500 with a
+// message that does not blame the assertion.
+// -----------------------------------------------------------
+
+test("assert: a DB error after a valid assertion → 500, not 'parsing failed'", async () => {
+  nextExtract = { audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { uid: "u1", mail: "u1@vu.lt" } };
+  onQuery(/SELECT 1 FROM users WHERE oid = \$1 LIMIT 1/, () => {
+    throw Object.assign(new Error('duplicate key value violates unique constraint "users_email_key"'), { code: "23505" });
+  });
+
+  const res = await post("/auth/saml/assert");
+  assert.equal(res.status, 500);
+  assert.equal(await res.text(), "Login failed on our side; the assertion was fine");
 });
 
 
