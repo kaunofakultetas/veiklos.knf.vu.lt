@@ -296,12 +296,19 @@ export default function ManagerExportPage() {
           );
         }
 
+        // A 200 whose body is not the activities array would
+        // throw on render (activities.filter) and blank the page
+        if (!Array.isArray(actsData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+
         const themesData = await themesRes.json().catch(() => ({}));
         if (!themesRes.ok) {
           throw new Error(
             themesData?.error || `${themesRes.status} ${themesRes.statusText}`
           );
         }
+
+        // The same for the theme tree (themes.map)
+        if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
         setActivities(actsData);
         setThemes(themesData);

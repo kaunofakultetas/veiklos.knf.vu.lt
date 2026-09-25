@@ -26,11 +26,13 @@
 //    Profile         — role selection after sign-in
 //    RoleRoute       — guard for a workspace subtree
 //    RoutesRoot      — session probe + the <Routes> table
-//    App             — BrowserRouter wrapper (default export)
+//    App             — BrowserRouter + error boundary around
+//                      RoutesRoot (default export)
 // -----------------------------------------------------------
 
 import { useEffect, useState, createContext, useContext } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import AppErrorBoundary from "./components/appErrorBoundary.jsx";
 import "./components/appLayout.css";
 import vuLogo from "./assets/VU logo.png";
 
@@ -446,8 +448,10 @@ function RoutesRoot() {
 // App (default export)
 // -----------------------------------------------------------
 //
-// Just the BrowserRouter around RoutesRoot — the session
-// probe and AuthContext live one level down.
+// The BrowserRouter and the error boundary around RoutesRoot
+// — the session probe and AuthContext live one level down. A
+// render that throws anywhere in the tree ends in the
+// boundary's card, not a blank window.
 //
 // Used by:
 //   - main.jsx
@@ -456,7 +460,9 @@ function RoutesRoot() {
 export default function App() {
   return (
     <BrowserRouter>
-      <RoutesRoot />
+      <AppErrorBoundary>
+        <RoutesRoot />
+      </AppErrorBoundary>
     </BrowserRouter>
   );
 }

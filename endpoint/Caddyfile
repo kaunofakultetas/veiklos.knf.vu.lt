@@ -35,6 +35,16 @@
 
 
 
+        # DBGate endpoint
+        redir /dbgate /dbgate/
+        handle /dbgate/* {
+            reverse_proxy veiklos-dbgate:3000 {
+                header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+            }
+        }
+
+
+
         # Backend - SAML single logout endpoint. VU's IdP ends a
         # user's other logins by loading each service's logout
         # endpoint in an iframe on sso.vu.lt (sso.test.vu.lt on

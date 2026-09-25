@@ -748,6 +748,11 @@ export default function ResultsPage() {
           throw new Error(themesData?.error || `${themesRes.status} ${themesRes.statusText}`);
         }
 
+        // A non-list 200 body (an object, null, a string)
+        // would blow up the rows or the modal's theme lookup
+        if (!Array.isArray(actsData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+        if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+
         setItems(actsData);
         setThemes(themesData);
       } catch (e) {

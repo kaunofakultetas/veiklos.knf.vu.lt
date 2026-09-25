@@ -572,6 +572,10 @@ export default function EvaluatePage() {
           throw new Error(data?.error || `${res.status} ${res.statusText}`);
         }
 
+        // A non-list 200 body (an object, null, a string)
+        // would blow up the row map on the next render
+        if (!Array.isArray(data)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+
         setItems(data);
       } catch (e) {
         setMsg(e.message);

@@ -155,6 +155,9 @@ export default function NewActivityPage() {
         if (!res.ok) {
           throw new Error(data?.error || `${res.status} ${res.statusText}`);
         }
+        // Anything but the array (an object, null…) would
+        // blank the page at themes.find() on the next render
+        if (!Array.isArray(data)) throw new Error("Klaida: netikėtas serverio atsakymas.");
         setThemes(data);
         if (data.length > 0) {
           setSelectedThemeId(String(data[0].id));

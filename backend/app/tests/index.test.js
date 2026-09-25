@@ -10,7 +10,8 @@
 //  guarded prefix as MOUNTED in index.js, the SP metadata
 //  endpoint, the boot line, the login redirect target, the
 //  ACS mount, the 404 fallthrough, the debug request
-//  logging, and that uploads/ is NOT served as static files.
+//  logging, that uploads/ is NOT served as static files, and
+//  the JSON error handler for bodies the parser refuses.
 // -----------------------------------------------------------
 
 import { test, before, after } from "node:test";
@@ -320,4 +321,51 @@ test("the debug middleware logs every request to stdout", async () => {
 test("/uploads/<file> → 404 even for a file that exists on disk", async () => {
   const res = await fetch(`${server.base}/uploads/${probeName}`);
   assert.equal(res.status, 404);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// bodies the parser refuses
+// -----------------------------------------------------------
+//
+// A malformed JSON body is answered by our own error handler:
+// 400, JSON, a Lithuanian message and no trace of the
+// SyntaxError — Express's default page would print the stack.
+// One over the parser's limit is a 413 the same way. A body
+// that parses but is not an object is the route's problem,
+// so it passes the parser and meets the session gate first.
+// -----------------------------------------------------------
+
+test("a malformed JSON body → 400 JSON without a stack trace; too large → 413", async () => {
+  let res = await fetch(`${server.base}/api/user-roles/assign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{bad json",
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.headers.get("content-type"), /application\/json/);
+  let text = await res.text();
+  assert.deepEqual(JSON.parse(text), { error: "Neteisingas užklausos formatas" });
+  assert.ok(!/SyntaxError|\bat\s+JSON\.parse/.test(text), "no stack trace in the body");
+
+  res = await fetch(`${server.base}/api/user-roles/assign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "x".repeat(200 * 1024) }),
+  });
+  assert.equal(res.status, 413);
+  assert.deepEqual(await res.json(), { error: "Užklausa per didelė" });
+
+  res = await fetch(`${server.base}/api/user-roles/assign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "[1,2,3]",
+  });
+  assert.equal(res.status, 401);
+  assert.deepEqual(await res.json(), { error: "Neprisijungta" });
 });

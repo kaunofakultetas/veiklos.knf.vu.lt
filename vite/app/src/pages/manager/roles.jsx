@@ -78,6 +78,10 @@ export default function RolesPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Klaida: Nepavyko įkelti naudotojo.");
 
+      // roles is mapped and allRoles filtered on render — a 200
+      // without both arrays blanks the page or shows nothing
+      if (!Array.isArray(data?.roles) || !Array.isArray(data?.allRoles)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+
       setUser(data.user);
       setRoles(data.roles || []);
       setAllRoles(data.allRoles || []);

@@ -769,6 +769,9 @@ export default function MyActivitiesPage() {
             actsData?.error || `${actsRes.status} ${actsRes.statusText}`
           );
         }
+        // Anything but the array (an object, null…) would
+        // blank the page at items.map() on the next render
+        if (!Array.isArray(actsData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
         const themesData = await themesRes.json().catch(() => ({}));
         if (!themesRes.ok) {
@@ -776,6 +779,9 @@ export default function MyActivitiesPage() {
             themesData?.error || `${themesRes.status} ${themesRes.statusText}`
           );
         }
+        // Same for the tree: the modal's pickers run .find()
+        // over it and would blank the page when one opens
+        if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
         setItems(actsData);
         setThemes(themesData);

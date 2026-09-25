@@ -547,6 +547,11 @@ export default function ThemesPage() {
     setMsg("");
     try {
       const data = await apiFetch("/api/themes");
+
+      // A 200 whose body is not the tree array would throw on
+      // render (themes.map) and blank the page — refuse it
+      if (!Array.isArray(data)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+
       setThemes(data);
 
       if (!subParent && data[0]) {

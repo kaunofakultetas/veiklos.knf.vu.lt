@@ -732,12 +732,19 @@ export default function ManagerReviewPage() {
           );
         }
 
+        // A 200 whose body is not the queue array would throw
+        // on render (items.map) and blank the page — refuse it
+        if (!Array.isArray(actsData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+
         const themesData = await themesRes.json().catch(() => ({}));
         if (!themesRes.ok) {
           throw new Error(
             themesData?.error || `${themesRes.status} ${themesRes.statusText}`
           );
         }
+
+        // The same for the theme tree (themes.find in the modal)
+        if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
         setItems(actsData);
         setThemes(themesData);

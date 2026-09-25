@@ -273,6 +273,9 @@ export default function ExportPage() {
               `${themesRes.status} ${themesRes.statusText}`
           );
         }
+        // Anything but the array (an object, null…) would
+        // blank the page at themes.map() on the next render
+        if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
         const actsData = await actsRes.json().catch(() => ({}));
         if (!actsRes.ok) {
@@ -280,6 +283,9 @@ export default function ExportPage() {
             actsData?.error || `${actsRes.status} ${actsRes.statusText}`
           );
         }
+        // Same for the rows: activities.filter() on the next
+        // render would blank the page
+        if (!Array.isArray(actsData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
         setThemes(themesData);
         setActivities(actsData);

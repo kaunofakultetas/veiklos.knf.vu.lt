@@ -605,6 +605,11 @@ export default function CalculatePage() {
           );
         }
 
+        // A non-list 200 body (an object, null, a string)
+        // would blow up the table or the picker on render
+        if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+        if (!Array.isArray(employeesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+
         setThemeTotals(themesData);
         setEmployees(employeesData);
       } catch (e) {
@@ -653,6 +658,10 @@ export default function CalculatePage() {
         if (!res.ok) {
           throw new Error(data?.error || `${res.status} ${res.statusText}`);
         }
+
+        // A non-list 200 body (an object, null, a string)
+        // would blow up the results table on the next render
+        if (!Array.isArray(data)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
         setEmployeeSubthemes(data);
       } catch (e) {

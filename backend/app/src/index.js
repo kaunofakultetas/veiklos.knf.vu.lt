@@ -153,6 +153,44 @@ app.use("/api/themes", themesRouter);
 app.use("/api/activities", activitiesRouter);
 
 
+
+
+
+
+
+// -----------------------------------------------------------
+// error handler
+// -----------------------------------------------------------
+//
+// The last middleware — what a request gets when parsing or
+// a handler throws. A malformed JSON body or one over the
+// parser's limit is the caller's fault (400 / 413, the other
+// body-parser errors keep their own 4xx); anything else is
+// logged here and answered 500. Always JSON with an `error`
+// like every route, never Express's default HTML page, which
+// carries the stack trace outside NODE_ENV=production.
+//
+// Used by:
+//   - express — registered after every route, so it catches
+//     errors from all of them
+// -----------------------------------------------------------
+
+// eslint-disable-next-line no-unused-vars -- express picks the handler by its 4-arg signature
+app.use((err, req, res, _next) => {
+  if (err?.type === "entity.parse.failed") {
+    return res.status(400).json({ error: "Neteisingas užklausos formatas" });
+  }
+  if (err?.type === "entity.too.large") {
+    return res.status(413).json({ error: "Užklausa per didelė" });
+  }
+  if (Number.isInteger(err?.status) && err.status >= 400 && err.status < 500) {
+    return res.status(err.status).json({ error: "Neteisinga užklausa" });
+  }
+  console.error(`${req.method} ${req.url}:`, err);
+  res.status(500).json({ error: "internal error" });
+});
+
+
 const port = process.env.PORT || 4000;
 app.listen(port, "0.0.0.0", () => {
   console.log(`API listening on port ${port}`);

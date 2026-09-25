@@ -94,6 +94,10 @@ export default function LimitsPage() {
           throw new Error(data?.error || `${res.status} ${res.statusText}`);
         }
 
+        // A non-list 200 body (an object, null, a string)
+        // would blow up the forEach below and both tables
+        if (!Array.isArray(data)) throw new Error("Klaida: netikėtas serverio atsakymas.");
+
         setThemes(data);
 
         const initialCaps = {};
