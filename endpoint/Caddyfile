@@ -35,6 +35,19 @@
 
 
 
+        # Backend - SAML single logout endpoint. VU's IdP ends a
+        # user's other logins by loading each service's logout
+        # endpoint in an iframe on sso.vu.lt (sso.test.vu.lt on
+        # test), so those two origins may frame THIS path only;
+        # every other response keeps frame-ancestors 'self'
+        handle /auth/saml/logout/callback {
+            header Content-Security-Policy "frame-ancestors\s+'self';" "frame-ancestors 'self' https://sso.vu.lt https://sso.test.vu.lt;"
+            reverse_proxy veiklos-backend:4000 {
+                header_up X-Forwarded-Proto https
+            }
+        }
+
+
         # Backend - SAML
         handle /auth/saml/* {
             reverse_proxy veiklos-backend:4000 {

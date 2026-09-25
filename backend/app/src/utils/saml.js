@@ -25,7 +25,9 @@
 //  (SimpleSAMLphp's redirect.validate) although its descriptor
 //  never says WantAuthnRequestsSigned — see
 //  requireSignedRequests. The certificate is what VU
-//  registers; rotating it means re-registering.
+//  registers; rotating it means re-registering. In the other
+//  direction VU signs its logout messages, and the SP verifies
+//  them against the IdP certificate from its metadata.
 //
 //  The mdui/organization/contact enrichment exists for the
 //  LitNET FEDI registration: the federation requires SP
@@ -402,6 +404,37 @@ export function enrichSpMetadata(rawXml) {
 
 
 // -----------------------------------------------------------
+// logoutOctetString
+// -----------------------------------------------------------
+//
+// The signed part of a redirect-binding logout message, for
+// samlify's signature check: the raw query string exactly as
+// it arrived (SAMLRequest|SAMLResponse[&RelayState]&SigAlg)
+// minus the Signature parameter. It has to be cut from the
+// original URL, not rebuilt from req.query — re-encoding a
+// single character would break the signature.
+//
+// Used by:
+//   - routes/saml.js — GET /logout/callback (the IdP's
+//     LogoutResponse and an IdP-initiated LogoutRequest)
+// -----------------------------------------------------------
+
+export function logoutOctetString(req) {
+  const raw = req.originalUrl ?? req.url ?? "";
+  const qs = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
+  return qs
+    .split("&")
+    .filter((p) => !p.startsWith("Signature="))
+    .join("&");
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // createSamlSetup
 // -----------------------------------------------------------
 //
@@ -428,10 +461,15 @@ export async function createSamlSetup() {
   // isAssertionEncrypted here describes the IdP: samlify reads
   // it from the SENDER when deciding to decrypt, so without it
   // an encrypted response is judged unsigned and refused
+  // wantLogout*Signed on the IdP object decide what samlify
+  // SIGNS on the way out — our LogoutRequest and, for an
+  // IdP-initiated logout, our LogoutResponse — not what it
+  // verifies (that is the SP's pair below)
   const idp = saml.IdentityProvider({
     metadata: requireSignedRequests(idpMetadata),
     isAssertionEncrypted: true,
     wantLogoutRequestSigned: true,
+    wantLogoutResponseSigned: true,
   });
   const spPrivateKey = readRequiredFile(cfg.spPrivateKeyPath, "SP_PRIVATE_KEY_PATH");
   const spCert = readRequiredFile(cfg.spCertPath, "SP_CERT_PATH");
@@ -457,6 +495,11 @@ export async function createSamlSetup() {
       authnRequestsSigned: true,
       wantAssertionsSigned: true,
       isAssertionEncrypted: true,
+      // Verify VU's signature on the logout messages it sends
+      // us (its LogoutResponse and any IdP-initiated
+      // LogoutRequest); samlify reads these on the RECEIVER
+      wantLogoutRequestSigned: true,
+      wantLogoutResponseSigned: true,
       clockDrifts: [-CLOCK_DRIFT_MS, CLOCK_DRIFT_MS],
       privateKey: spPrivateKey,
       signingCert: spCert,

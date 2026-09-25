@@ -9,7 +9,12 @@
 //  the whole encrypted-assertion path against a FAKE IdP
 //  built from a throwaway key pair, the missing-metadata and
 //  missing-key boot errors, the attribute mapper for VU's
-//  OIDs and friendly names, and the LitNET FEDI enrichment.
+//  OIDs and friendly names, the LitNET FEDI enrichment, and
+//  the logout leg with real signatures: our LogoutRequest,
+//  the IdP's LogoutResponse and an IdP-initiated
+//  LogoutRequest verified over the raw octet string
+//  (logoutOctetString), our signed answer verified back at
+//  the fake IdP.
 //
 //  The key pairs in fixtures/ (fake-idp.*, fake-sp.*) are
 //  test-only, generated for this suite — never registered
@@ -33,6 +38,7 @@ import {
   mapSamlAttributes,
   enrichSpMetadata,
   createSamlSetup,
+  logoutOctetString,
 } from "../src/utils/saml.js";
 
 
@@ -115,8 +121,9 @@ beforeEach(() => {
 // (test-only) key pair, assertions encrypted like VU's when
 // `encrypted` is true. Its descriptor is written to
 // FAKE_IDP_FILE so createSamlSetup loads it like the real
-// one. loginResponseFor() mints a signed (and encrypted)
-// response for our SP carrying VU's attribute set.
+// one. Like VU it signs its logout messages and demands
+// signed ones back. loginResponseFor() mints a signed (and
+// encrypted) response for our SP carrying VU's attribute set.
 //
 // Used by:
 //   - the encrypted-assertion tests (below)
@@ -129,6 +136,7 @@ function fakeIdp({ encrypted }) {
     signingCert: FAKE_IDP_CERT,
     isAssertionEncrypted: encrypted,
     wantLogoutRequestSigned: true,
+    wantLogoutResponseSigned: true,
     nameIDFormat: ["urn:oasis:names:tc:SAML:2.0:nameid-format:transient"],
     singleSignOnService: [
       { Binding: saml.Constants.namespace.binding.redirect, Location: "https://idp.test.local/sso" },
@@ -602,4 +610,204 @@ test("enrichSpMetadata: mdui, eID+mail required, organization, contact", () => {
   assert.ok(xml.includes("mailto:admin@knf.vu.lt"));
   assert.ok(xml.indexOf("<Extensions>") < xml.indexOf("</SPSSODescriptor>"));
   assert.ok(xml.indexOf("<ContactPerson") < xml.indexOf("</EntityDescriptor>"));
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// redirectMessage
+// -----------------------------------------------------------
+//
+// A redirect-binding URL turned into what the callback route
+// hands samlify: the query as express parses it (decoded)
+// plus the raw octet string cut from the URL by
+// logoutOctetString.
+//
+// Used by:
+//   - the logout tests (below)
+// -----------------------------------------------------------
+
+function redirectMessage(url) {
+  const u = new URL(url);
+  return {
+    query: Object.fromEntries(u.searchParams.entries()),
+    octetString: logoutOctetString({ originalUrl: u.pathname + u.search }),
+  };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// logoutOctetString
+// -----------------------------------------------------------
+//
+// The signed part of a redirect-binding message: the raw
+// query with the Signature parameter dropped and nothing
+// else touched — order and percent-encoding survive, since
+// re-encoding one character would break the signature.
+// -----------------------------------------------------------
+
+test("logoutOctetString: raw query minus Signature, encoding and order untouched", () => {
+  const signed = "SAMLResponse=a%2Bb%3D&RelayState=x%20y&SigAlg=rsa%23sha256";
+  assert.equal(logoutOctetString({ originalUrl: `/auth/saml/logout/callback?${signed}&Signature=zz%2F` }), signed);
+
+  // Signature anywhere in the query; only that parameter goes
+  assert.equal(logoutOctetString({ originalUrl: "/cb?Signature=zz&SAMLRequest=a&SigAlg=b" }), "SAMLRequest=a&SigAlg=b");
+  assert.equal(logoutOctetString({ originalUrl: "/cb?SAMLRequest=a&XSignature=1&SigAlg=b&Signature=zz" }), "SAMLRequest=a&XSignature=1&SigAlg=b");
+
+  // no query at all, and req.url as the fallback
+  assert.equal(logoutOctetString({ originalUrl: "/auth/saml/logout/callback" }), "");
+  assert.equal(logoutOctetString({ url: "/cb?SAMLRequest=a&Signature=s" }), "SAMLRequest=a");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// our LogoutRequest
+// -----------------------------------------------------------
+//
+// What /logout sends the IdP: a signed redirect to its SLO
+// endpoint naming our entity id and the transient NameID
+// from login — and the IdP, holding our certificate,
+// verifies that signature.
+// -----------------------------------------------------------
+
+test("logout request: signed redirect to the IdP's SLO with our entity id and the transient NameID", async () => {
+  const { idp } = fakeIdp({ encrypted: true });
+  process.env.IDP_METADATA = FAKE_IDP_FILE;
+  const setup = await createSamlSetup();
+  const sp = setup.spFor("https://veiklos.knf.vu.lt");
+
+  const { context } = await sp.createLogoutRequest(setup.idp, "redirect", { logoutNameID: "_nameid-1", sessionIndex: "_session-1" });
+  const u = new URL(context);
+  assert.equal(u.origin + u.pathname, "https://idp.test.local/slo");
+  assert.deepEqual([...u.searchParams.keys()], ["SAMLRequest", "SigAlg", "Signature"]);
+  assert.equal(u.searchParams.get("SigAlg"), "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256");
+
+  const xml = zlib.inflateRawSync(Buffer.from(u.searchParams.get("SAMLRequest"), "base64")).toString();
+  assert.ok(xml.includes("<saml:Issuer>https://veiklos.knf.vu.lt/auth/saml/metadata</saml:Issuer>"));
+  assert.ok(xml.includes('<saml:NameID Format="urn:oasis:names:tc:SAML:2.0:nameid-format:transient">_nameid-1</saml:NameID>'));
+
+  const { extract } = await idp.parseLogoutRequest(sp, "redirect", redirectMessage(context));
+  assert.equal(extract.nameID, "_nameid-1");
+  assert.equal(extract.issuer, "https://veiklos.knf.vu.lt/auth/saml/metadata");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// the IdP's LogoutResponse
+// -----------------------------------------------------------
+//
+// The return leg of our logout: the IdP's signed response
+// verifies against the certificate in its descriptor; a
+// tampered octet string or a response stripped of its
+// signature is refused.
+// -----------------------------------------------------------
+
+test("logout response from the IdP: verified; tampered or unsigned → refused", async () => {
+  const { idp } = fakeIdp({ encrypted: true });
+  process.env.IDP_METADATA = FAKE_IDP_FILE;
+  const setup = await createSamlSetup();
+  const sp = setup.spFor("https://veiklos.knf.vu.lt");
+
+  const { context } = idp.createLogoutResponse(sp, { extract: { request: { id: "_our-req-1" } } }, "redirect", "");
+  const message = redirectMessage(context);
+  assert.ok(message.query.Signature, "the fake IdP signs, as VU does");
+
+  const { extract } = await sp.parseLogoutResponse(setup.idp, "redirect", message);
+  assert.equal(extract.response.inResponseTo, "_our-req-1");
+  assert.equal(extract.issuer, FAKE_IDP_ENTITY);
+
+  await assert.rejects(
+    () => sp.parseLogoutResponse(setup.idp, "redirect", { ...message, octetString: message.octetString.replace("SAMLResponse=", "SAMLResponse=A") }),
+    /ERR_FAILED_MESSAGE_SIGNATURE_VERIFICATION/
+  );
+  const { SigAlg, Signature, ...unsigned } = message.query;
+  await assert.rejects(
+    () => sp.parseLogoutResponse(setup.idp, "redirect", { query: unsigned, octetString: message.octetString.replace(/&SigAlg=.*$/, "") }),
+    /ERR_MISSING_SIG_ALG/
+  );
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// IdP-initiated logout
+// -----------------------------------------------------------
+//
+// VU telling us the user signed out elsewhere: its signed
+// LogoutRequest verifies, one signed by a stranger with the
+// same entity id does not, and our answer — a LogoutResponse
+// for that request, Success, the IdP's RelayState echoed,
+// signed with the SP key — verifies back at the IdP.
+// -----------------------------------------------------------
+
+test("IdP-initiated logout: the request verifies, a stranger's does not, our signed answer verifies at the IdP", async () => {
+  const { idp } = fakeIdp({ encrypted: true });
+  process.env.IDP_METADATA = FAKE_IDP_FILE;
+  const setup = await createSamlSetup();
+  const sp = setup.spFor("https://veiklos.knf.vu.lt");
+
+  const { context } = idp.createLogoutRequest(sp, "redirect", { logoutNameID: "_nameid-1" }, "RS-7");
+  const message = redirectMessage(context);
+  assert.equal(message.query.RelayState, "RS-7");
+
+  const parsed = await sp.parseLogoutRequest(setup.idp, "redirect", message);
+  assert.equal(parsed.extract.nameID, "_nameid-1");
+  assert.equal(parsed.extract.issuer, FAKE_IDP_ENTITY);
+  assert.match(parsed.extract.request.id, /^_/);
+
+  // Same entity id, a different key: the SP's own pair
+  // standing in for a stranger
+  const stranger = saml.IdentityProvider({
+    entityID: FAKE_IDP_ENTITY,
+    privateKey: fs.readFileSync(FAKE_SP_KEY, "utf8"),
+    signingCert: fs.readFileSync(FAKE_SP_CERT, "utf8"),
+    wantLogoutRequestSigned: true,
+    singleSignOnService: [
+      { Binding: saml.Constants.namespace.binding.redirect, Location: "https://idp.test.local/sso" },
+    ],
+    singleLogoutService: [
+      { Binding: saml.Constants.namespace.binding.redirect, Location: "https://idp.test.local/slo" },
+    ],
+  });
+  const forged = stranger.createLogoutRequest(sp, "redirect", { logoutNameID: "_nameid-1" }, "RS-7");
+  await assert.rejects(
+    () => sp.parseLogoutRequest(setup.idp, "redirect", redirectMessage(forged.context)),
+    /ERR_FAILED_MESSAGE_SIGNATURE_VERIFICATION/
+  );
+
+  const answer = sp.createLogoutResponse(setup.idp, parsed, "redirect", "RS-7");
+  const u = new URL(answer.context);
+  assert.equal(u.origin + u.pathname, "https://idp.test.local/slo");
+  assert.deepEqual([...u.searchParams.keys()], ["SAMLResponse", "RelayState", "SigAlg", "Signature"]);
+  assert.equal(u.searchParams.get("RelayState"), "RS-7");
+  const xml = zlib.inflateRawSync(Buffer.from(u.searchParams.get("SAMLResponse"), "base64")).toString();
+  assert.ok(xml.includes(`InResponseTo="${parsed.extract.request.id}"`));
+  assert.ok(xml.includes('StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"'));
+  assert.ok(xml.includes("<saml:Issuer>https://veiklos.knf.vu.lt/auth/saml/metadata</saml:Issuer>"));
+
+  const { extract } = await idp.parseLogoutResponse(sp, "redirect", redirectMessage(answer.context));
+  assert.equal(extract.response.inResponseTo, parsed.extract.request.id);
 });

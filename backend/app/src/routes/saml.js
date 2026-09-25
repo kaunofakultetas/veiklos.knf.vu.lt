@@ -4,8 +4,9 @@
 //    GET  /auth/saml/metadata          — the SP's own metadata
 //    GET  /auth/saml/login             — redirect to VU SSO
 //    POST /auth/saml/assert            — VU SSO's callback
-//    GET  /auth/saml/logout            — single logout via IdP
-//    GET  /auth/saml/logout/callback   — IdP's logout return
+//    POST /auth/saml/logout            — single logout via IdP
+//    GET  /auth/saml/logout/callback   — IdP's logout return,
+//                                        and IdP-initiated logout
 //
 //  The whole browser-facing SAML flow. Unlike the other route
 //  files this one exports a FACTORY — index.js builds the
@@ -20,17 +21,23 @@
 //  "Darbuotojas" on first sign-in. Users are keyed by VU's
 //  eID — a login without it is refused. Attributes are
 //  read through mapSamlAttributes, so VU SSO's OIDs (or their
-//  friendly names) both work.
+//  friendly names) both work. The login's SessionIndex and
+//  NameID are filed against the session
+//  (auth/samlSessionIndex.js) so an IdP-initiated logout —
+//  which arrives without the cookie — can still end it.
 //
 //  Used by:
 //    - the browser — App.jsx redirects to /login, VU SSO
-//      POSTs back to /assert; nothing calls these via fetch
+//      POSTs back to /assert and talks to /logout/callback
+//    - components/appHeader.jsx — fetch POST /logout, then a
+//      navigation to the URL it answers with
 // -----------------------------------------------------------
 
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { TBL_USERS, TBL_ROLES, TBL_USER_ROLES } from "../db/tables.js";
-import { enrichSpMetadata, mapSamlAttributes } from "../utils/saml.js";
+import { enrichSpMetadata, logoutOctetString, mapSamlAttributes } from "../utils/saml.js";
+import { rememberSamlSession, forgetSamlSession, samlSessionIdFor } from "../auth/samlSessionIndex.js";
 
 
 
@@ -199,6 +206,14 @@ export default function createSamlRouter({ setup }) {
                     console.error("Session save error:", err);
                     return res.status(500).send("Session save failed");
                 }
+                // Filed for as long as the cookie lives, so an
+                // IdP-initiated logout can find this session
+                // without the cookie
+                rememberSamlSession(
+                    { sessionIndex: extract.sessionIndex, nameID: extract.nameID },
+                    req.sessionID,
+                    req.session.cookie?.maxAge ?? undefined
+                );
                 res.redirect("/");
             });
         } catch (error) {
@@ -216,16 +231,32 @@ export default function createSamlRouter({ setup }) {
     };
     samlRouter.post("/assert", assert);
 
-    // GET /logout — drop the local session FIRST, then try to
-    // log the IdP session out too; any IdP failure still ends
-    // with a signed-out browser at "/"
-    samlRouter.get("/logout", async (req, res) => {
+    // Drop the local session and its cookie; resolves once the
+    // store has forgotten it
+    const endLocalSession = (req, res) =>
+        new Promise((resolve) => {
+            req.session.destroy(() => {
+                res.clearCookie("connect.sid");
+                resolve();
+            });
+        });
+
+    // POST /logout — drop the local session FIRST, then build
+    // the IdP logout and answer its URL as JSON { redirect }
+    // for the SPA to navigate to; no session, or any IdP
+    // failure, answers "/" so the browser still lands signed
+    // out. A POST because a cross-site request cannot carry
+    // the SameSite=Lax cookie — no other page can sign a user
+    // out. JSON + navigation rather than a form POST with a
+    // 302: Chromium enforces the CSP form-action rule on the
+    // redirect to the IdP that would follow a form submission
+    samlRouter.post("/logout", async (req, res) => {
         const samlUser = req.session?.samlUser;
-        await new Promise(resolve => req.session.destroy(resolve));
-        res.clearCookie("connect.sid");
+        if (samlUser) forgetSamlSession(samlUser);
+        await endLocalSession(req, res);
 
         if (!samlUser) {
-            return res.redirect("/");
+            return res.json({ redirect: "/" });
         }
 
         try {
@@ -234,20 +265,77 @@ export default function createSamlRouter({ setup }) {
                 logoutNameID: samlUser.nameID,
                 sessionIndex,
             });
-            res.redirect(context);
+            res.json({ redirect: context });
         } catch (err) {
             console.error("Logout request error:", err);
-            res.redirect("/");
+            res.json({ redirect: "/" });
         }
     });
 
-    // GET /logout/callback — the IdP's return leg; the local
-    // session is already gone, this just makes sure
-    samlRouter.get("/logout/callback", (req, res) => {
-        req.session.destroy(() => {
-            res.clearCookie("connect.sid");
-            res.redirect("/");
-        });
+    // GET /logout/callback — our SingleLogoutService endpoint
+    // (redirect binding), reached in two situations:
+    //
+    //   SAMLResponse — the return leg of OUR logout: the IdP
+    //     confirms it ended its session. Ours is already gone,
+    //     so a bad or non-Success response is only logged
+    //   SAMLRequest  — an IdP-INITIATED logout: the user signed
+    //     out of another VU service and the IdP is telling
+    //     every SP in that session — from an iframe on
+    //     sso.vu.lt, so the SameSite=Lax cookie is NOT sent and
+    //     req.session is a blank. The login's own session is
+    //     found by the request's SessionIndex / NameID in the
+    //     session index and ended through the store; then we
+    //     answer with a signed LogoutResponse (InResponseTo +
+    //     the IdP's RelayState) — without it the IdP's logout
+    //     chain stalls on us. A request that fails verification
+    //     is refused and changes nothing, so a forged link
+    //     cannot log anyone out
+    //
+    // Both messages are signed by VU; samlify verifies them
+    // against the IdP certificate (wantLogout*Signed on the SP)
+    // over the raw query string (logoutOctetString)
+    samlRouter.get("/logout/callback", async (req, res) => {
+        const sp = spOf(req);
+        const message = { query: req.query, octetString: logoutOctetString(req) };
+
+        if (req.query.SAMLRequest) {
+            let parsed;
+            try {
+                parsed = await sp.parseLogoutRequest(idp, "redirect", message);
+            } catch (err) {
+                console.error("SAML logout request rejected:", err);
+                return res.status(400).send("Invalid SAML logout request");
+            }
+
+            const ids = { sessionIndex: parsed.extract?.sessionIndex, nameID: parsed.extract?.nameID };
+            const sid = samlSessionIdFor(ids);
+            if (sid && req.sessionStore) {
+                await new Promise((resolve) => req.sessionStore.destroy(sid, () => resolve()));
+            }
+            forgetSamlSession(ids);
+            await endLocalSession(req, res);
+
+            try {
+                const relayState = typeof req.query.RelayState === "string" ? req.query.RelayState : "";
+                const { context } = sp.createLogoutResponse(idp, parsed, "redirect", relayState);
+                return res.redirect(context);
+            } catch (err) {
+                console.error("SAML logout response error:", err);
+                return res.redirect("/");
+            }
+        }
+
+        if (req.query.SAMLResponse) {
+            try {
+                await sp.parseLogoutResponse(idp, "redirect", message);
+                console.log("SAML logout: IdP confirmed the logout");
+            } catch (err) {
+                console.error("SAML logout: IdP response not accepted:", err);
+            }
+        }
+
+        await endLocalSession(req, res);
+        res.redirect("/");
     });
 
     return samlRouter;

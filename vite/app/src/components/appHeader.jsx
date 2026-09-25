@@ -13,7 +13,10 @@
 //  reload.
 //
 //  Switching roles navigates straight to the chosen role's
-//  workspace.
+//  workspace. Signing out POSTs to /auth/saml/logout and then
+//  navigates to the URL the backend answers with (VU SSO's
+//  logout, or "/") — a POST so that no other site can trigger
+//  it: a cross-site request carries no SameSite=Lax cookie.
 //
 //  Split into (root component last):
 //
@@ -133,9 +136,22 @@ export default function AppHeader({ children }) {
   };
 
 
-  const signOut = () => {
+  // The backend ends the session on the POST and hands back
+  // where to go next; the navigation is a plain top-level one
+  // (a form POST followed by a 302 to VU would trip the CSP
+  // form-action rule in Chromium)
+  const signOut = async () => {
     localStorage.removeItem("activeRole");
-    window.location.href = "/auth/saml/logout";
+    let redirect = "/";
+    try {
+      const res = await fetch("/auth/saml/logout", { method: "POST" });
+      const data = await res.json();
+      if (typeof data.redirect === "string" && data.redirect) redirect = data.redirect;
+    } catch {
+      // backend unreachable or a non-JSON answer: land home,
+      // where the session probe decides what the user sees
+    }
+    window.location.href = redirect;
   };
 
 
