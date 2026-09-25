@@ -38,24 +38,26 @@ vi.mock("xlsx/dist/xlsx.full.min.js", () => ({
 // Two themes; the second's subthemes are listed out of code
 // order on purpose (6.2.10. before 6.2.9.)
 const THEMES = [
-  { id: 1, code: "6.1.", title: "Studijų kokybė", subthemes: [
-    { id: 11, code: "6.1.1.", title: "Paskaitos" },
-    { id: 12, code: "6.1.2.", title: "Seminarai" },
+  { id: 1, code: "6.1.", title: "Studijų kokybė", total_sum: "1000", pointvalue: "2.5", subthemes: [
+    { id: 11, theme_id: 1, code: "6.1.1.", title: "Paskaitos", description: null, cap: "60" },
+    { id: 12, theme_id: 1, code: "6.1.2.", title: "Seminarai", description: null, cap: null },
   ] },
-  { id: 2, code: "6.2.", title: "Mokslas", subthemes: [
-    { id: 22, code: "6.2.10.", title: "Straipsniai" },
-    { id: 21, code: "6.2.9.", title: "Konferencijos" },
+  { id: 2, code: "6.2.", title: "Mokslas", total_sum: "500", pointvalue: "1", subthemes: [
+    { id: 22, theme_id: 2, code: "6.2.10.", title: "Straipsniai", description: null, cap: "40" },
+    { id: 21, theme_id: 2, code: "6.2.9.", title: "Konferencijos", description: null, cap: null },
   ] },
 ];
 
-// An activity with every export column present, overridable
+// An activity with every /api/activities/all column present,
+// overridable
 const activity = (over) => ({
   id: 0, employee_eid: null, full_name: null,
   theme_id: 1, theme_code: "6.1.", theme_title: "Studijų kokybė",
   subtheme_id: 11, subtheme_code: "6.1.1.", subtheme_title: "Paskaitos",
   title: "", description: null, status: "PATEIKTA", score: null,
   rejection_comment: null, manager_comments: null, committee_comments: null,
-  created_at: "2025-03-04T12:00:00Z",
+  attachment_path: null, attachment_original_name: null,
+  created_at: "2025-03-04T12:00:00Z", updated_at: "2025-03-06T08:00:00Z",
   ...over,
 });
 
@@ -536,10 +538,11 @@ test("an empty selection is refused with a message and no workbook", async () =>
 
 test("a 200 whose body is not an array, for either list, shows one message and keeps the page", async () => {
   signInAs("Vadybininkas");
-  // Which list answers with the object; the other is fine
+  // Which list answers with the object; the other is fine.
+  // Wrong shapes on purpose, so neither entry is guarded
   let broken = "activities";
-  onRequest("GET", "/api/activities/all", () => (broken === "activities" ? { status: 200, body: { ok: true } } : ACTIVITIES));
-  onRequest("GET", "/api/themes", () => (broken === "themes" ? { status: 200, body: { ok: true } } : THEMES));
+  onRequest("GET", "/api/activities/all", () => (broken === "activities" ? { status: 200, body: { ok: true } } : ACTIVITIES), { offContract: true });
+  onRequest("GET", "/api/themes", () => (broken === "themes" ? { status: 200, body: { ok: true } } : THEMES), { offContract: true });
   const first = renderPage(ManagerExportPage);
 
   expect(await screen.findByText("Klaida: netikėtas serverio atsakymas.")).toHaveClass("form-status");

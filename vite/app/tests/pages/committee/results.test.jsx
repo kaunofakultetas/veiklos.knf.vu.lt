@@ -25,15 +25,15 @@ import { renderPage, signInAs } from "../../helpers/render.js";
 // second's listed out of code order on purpose), none for the
 // third
 const THEMES = [
-  { id: 1, code: "6.1.", title: "Studijų kokybė", subthemes: [
-    { id: 11, code: "6.1.1.", title: "Paskaitos" },
-    { id: 12, code: "6.1.2.", title: "Seminarai" },
+  { id: 1, code: "6.1.", title: "Studijų kokybė", total_sum: "1000", pointvalue: "25", subthemes: [
+    { id: 11, theme_id: 1, code: "6.1.1.", title: "Paskaitos", description: "Skaitytos paskaitos", cap: "2.5" },
+    { id: 12, theme_id: 1, code: "6.1.2.", title: "Seminarai", description: "Vesti seminarai", cap: null },
   ] },
-  { id: 2, code: "6.2.", title: "Mokslas", subthemes: [
-    { id: 22, code: "6.2.10.", title: "Straipsniai" },
-    { id: 21, code: "6.2.9.", title: "Konferencijos" },
+  { id: 2, code: "6.2.", title: "Mokslas", total_sum: "500", pointvalue: null, subthemes: [
+    { id: 22, theme_id: 2, code: "6.2.10.", title: "Straipsniai", description: "Publikuoti straipsniai", cap: "50" },
+    { id: 21, theme_id: 2, code: "6.2.9.", title: "Konferencijos", description: null, cap: null },
   ] },
-  { id: 3, code: "6.3.", title: "Kita", subthemes: [] },
+  { id: 3, code: "6.3.", title: "Kita", total_sum: null, pointvalue: null, subthemes: [] },
 ];
 
 // Two evaluated activities: one scored with every optional
@@ -43,20 +43,24 @@ const ACT5 = {
   theme_id: 1, theme_code: "6.1.", theme_title: "Studijų kokybė",
   subtheme_id: 12, subtheme_code: "6.1.2.", subtheme_title: "Seminarai",
   title: "Seminaras apie X", description: "Trys seminarai studentams",
-  status: "ĮVERTINTA", score: 0.5, committee_comments: "Gerai", manager_comments: "Tinka",
+  status: "ĮVERTINTA", score: 0.5, rejection_comment: null, committee_comments: "Gerai", manager_comments: "Tinka",
   attachment_path: "uploads/5.pdf", attachment_original_name: "ataskaita.pdf",
-  created_at: "2025-03-04T12:00:00Z",
+  created_at: "2025-03-04T12:00:00Z", updated_at: "2025-03-10T14:20:00Z",
 };
 const ACT6 = {
   id: 6, full_name: "Rasa Šukienė",
   theme_id: 1, theme_code: "6.1.", theme_title: "Studijų kokybė",
   subtheme_id: 11, subtheme_code: "6.1.1.", subtheme_title: "Paskaitos",
   title: "Paskaitų ciklas", description: null,
-  status: "ĮVERTINTA", score: null, committee_comments: null, manager_comments: null,
+  status: "ĮVERTINTA", score: null, rejection_comment: null, committee_comments: null, manager_comments: null,
   attachment_path: null, attachment_original_name: null,
-  created_at: "2025-03-05T09:30:00Z",
+  created_at: "2025-03-05T09:30:00Z", updated_at: "2025-03-11T09:05:00Z",
 };
 const EVALUATED = [ACT5, ACT6];
+
+// The PATCH answers with the full activity row: ACT5's fields
+// plus the employee's eID, which the evaluated list leaves out
+const patched = (over) => ({ ...ACT5, employee_eid: "u10001", ...over });
 
 // An activity reply must be wrapped: the row's own `status`
 // ("ĮVERTINTA") would otherwise be read as the HTTP status
@@ -367,12 +371,11 @@ test("empty and negative people counts are refused without a request", async () 
 // -----------------------------------------------------------
 
 test("saving a re-score: PATCH body with theme ids, row and modal patched in place, message", async () => {
-  const saved = {
-    ...ACT5,
+  const saved = patched({
     theme_id: 2, theme_code: "6.2.", theme_title: "Mokslas",
     subtheme_id: 22, subtheme_code: "6.2.10.", subtheme_title: "Straipsniai",
     score: 0.5, committee_comments: "Labai gerai",
-  };
+  });
   onRequest("PATCH", "/api/activities/5/committee", ok(saved));
   const user = await openRescoring(ACT5);
 
@@ -405,10 +408,10 @@ test("saving a re-score: PATCH body with theme ids, row and modal patched in pla
 });
 
 test("a theme without subthemes saves subtheme_id null", async () => {
-  onRequest("PATCH", "/api/activities/5/committee", ok({
-    ...ACT5, theme_id: 3, theme_code: "6.3.", theme_title: "Kita",
+  onRequest("PATCH", "/api/activities/5/committee", ok(patched({
+    theme_id: 3, theme_code: "6.3.", theme_title: "Kita",
     subtheme_id: null, subtheme_code: null, subtheme_title: null, score: 1,
-  }));
+  })));
   const user = await openRescoring(ACT5);
 
   await pick(user, "Tema", "6.3. — Kita");
@@ -533,11 +536,12 @@ test("a refused download is reported with the Klaida: prefix; opening a row clea
 test("a 200 whose body is not a list — either list — is refused with one message, not a blank page", async () => {
   signInAs("Komisijos narys");
   // `bad` names the list that answers { ok: true } this mount;
-  // the other one is intact
+  // the other one is intact. Each entry answers off the
+  // contract in one of the mounts, so both opt out of the guard
   let bad = "";
   const listOr = (path, list) => () => (bad === path ? { status: 200, body: { ok: true } } : list);
-  onRequest("GET", "/api/activities/evaluated", listOr("/api/activities/evaluated", EVALUATED));
-  onRequest("GET", "/api/themes", listOr("/api/themes", THEMES));
+  onRequest("GET", "/api/activities/evaluated", listOr("/api/activities/evaluated", EVALUATED), { offContract: true });
+  onRequest("GET", "/api/themes", listOr("/api/themes", THEMES), { offContract: true });
 
   for (const path of ["/api/activities/evaluated", "/api/themes"]) {
     bad = path;

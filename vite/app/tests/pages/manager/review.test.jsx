@@ -26,26 +26,27 @@ import { renderPage, signInAs } from "../../helpers/render.js";
 // Three themes: 6.2.'s subthemes are listed out of code
 // order on purpose (6.2.10. before 6.2.2.), 6.3. has none
 const THEMES = [
-  { id: 1, code: "6.1.", title: "Studijų kokybė", subthemes: [
-    { id: 11, code: "6.1.1.", title: "Paskaitos" },
-    { id: 12, code: "6.1.2.", title: "Seminarai" },
+  { id: 1, code: "6.1.", title: "Studijų kokybė", total_sum: "1000", pointvalue: "2.5", subthemes: [
+    { id: 11, theme_id: 1, code: "6.1.1.", title: "Paskaitos", description: null, cap: "60" },
+    { id: 12, theme_id: 1, code: "6.1.2.", title: "Seminarai", description: null, cap: null },
   ] },
-  { id: 2, code: "6.2.", title: "Mokslas", subthemes: [
-    { id: 22, code: "6.2.10.", title: "Publikacijos" },
-    { id: 21, code: "6.2.2.", title: "Konferencijos" },
+  { id: 2, code: "6.2.", title: "Mokslas", total_sum: "500", pointvalue: "1", subthemes: [
+    { id: 22, theme_id: 2, code: "6.2.10.", title: "Publikacijos", description: null, cap: "40" },
+    { id: 21, theme_id: 2, code: "6.2.2.", title: "Konferencijos", description: null, cap: null },
   ] },
-  { id: 3, code: "6.3.", title: "Tuščia", subthemes: [] },
+  { id: 3, code: "6.3.", title: "Tuščia", total_sum: "0", pointvalue: "1", subthemes: [] },
 ];
 
-// Two pending activities: one with an attachment and a
-// description, one with neither but with earlier comments
+// Two pending activities, neither scored yet: one with an
+// attachment and a description, one with neither but with
+// earlier comments
 const ACT1 = {
   id: 1, full_name: "Jonas Jonaitis", status: "PATEIKTA", created_at: "2026-09-01T10:30:00Z",
   theme_id: 1, theme_code: "6.1.", theme_title: "Studijų kokybė",
   subtheme_id: 11, subtheme_code: "6.1.1.", subtheme_title: "Paskaitos",
   title: "Paskaitų ciklas", description: "Aprašymas A",
   attachment_path: "uploads/1.pdf", attachment_original_name: "ataskaita.pdf",
-  manager_comments: "", rejection_comment: "",
+  manager_comments: "", rejection_comment: "", score: null,
 };
 const ACT2 = {
   id: 2, full_name: "Ona Onaitė", status: "PATEIKTA", created_at: "2026-09-02T08:00:00Z",
@@ -53,7 +54,7 @@ const ACT2 = {
   subtheme_id: 21, subtheme_code: "6.2.2.", subtheme_title: "Konferencijos",
   title: "Konferencijos pranešimas", description: "",
   attachment_path: null, attachment_original_name: null,
-  manager_comments: "Senas komentaras", rejection_comment: "Ankstesnis atmetimas",
+  manager_comments: "Senas komentaras", rejection_comment: "Ankstesnis atmetimas", score: null,
 };
 
 // The table row naming an activity (undefined once it left)
@@ -62,10 +63,20 @@ const rowNamed = (text) => screen.getAllByRole("row").find((r) => within(r).quer
 // A modal by its heading
 const modal = (heading) => screen.getByRole("heading", { name: heading }).closest(".employee-modal");
 
-// An activity as a 200 reply: activities carry their own
-// `status` field, which the fake would otherwise read as the
-// HTTP status, so the envelope is spelled out
-const ok = (activity) => ({ status: 200, body: activity });
+// The row a verdict PATCH answers with: the full activity row
+// — the queue's fields plus employee_eid, committee_comments
+// and updated_at — with the verdict's changes on top. A plain
+// row is a 200 reply: the fake tells an activity's own
+// `status` from a reply envelope
+function verdict(activity, changes = {}) {
+  return {
+    ...activity,
+    employee_eid: `u1000${activity.id}`,
+    committee_comments: null,
+    updated_at: "2026-09-02T12:00:00Z",
+    ...changes,
+  };
+}
 
 // The four GETs/PATCHes every test scripts the same way
 function scriptQueue(items = [ACT1, ACT2]) {
@@ -176,7 +187,7 @@ test("a refused theme load shows the backend's text verbatim and keeps the queue
 
 test("approve: the confirm text, PATCH { action: 'approve' } with both headers, the row leaves; cancel sends nothing", async () => {
   scriptQueue();
-  onRequest("PATCH", "/api/activities/1/manager", ok({ ...ACT1, status: "PATVIRTINTA" }));
+  onRequest("PATCH", "/api/activities/1/manager", verdict(ACT1, { status: "PATVIRTINTA" }));
   const { user } = renderPage(ManagerReviewPage);
   await screen.findByText("Paskaitų ciklas");
 
@@ -213,7 +224,7 @@ test("approve: the confirm text, PATCH { action: 'approve' } with both headers, 
 
 test("a PATCH answered with status PATEIKTA replaces the row instead of removing it", async () => {
   scriptQueue();
-  onRequest("PATCH", "/api/activities/1/manager", ok({ ...ACT1, title: "Paskaitų ciklas (patikslintas)", status: "PATEIKTA" }));
+  onRequest("PATCH", "/api/activities/1/manager", verdict(ACT1, { title: "Paskaitų ciklas (patikslintas)", status: "PATEIKTA" }));
   const { user } = renderPage(ManagerReviewPage);
   await screen.findByText("Paskaitų ciklas");
 
@@ -245,7 +256,7 @@ test("a PATCH answered with status PATEIKTA replaces the row instead of removing
 
 test("deny: the modal, an empty comment refused without a request, PATCH { action: 'deny', rejection_comment }, the row leaves", async () => {
   scriptQueue();
-  onRequest("PATCH", "/api/activities/2/manager", ok({ ...ACT2, status: "ATMESTA", rejection_comment: "Trūksta dokumentų" }));
+  onRequest("PATCH", "/api/activities/2/manager", verdict(ACT2, { status: "ATMESTA", rejection_comment: "Trūksta dokumentų" }));
   const { user } = renderPage(ManagerReviewPage);
   await screen.findByText("Konferencijos pranešimas");
 
@@ -297,7 +308,7 @@ test("deny: the modal, an empty comment refused without a request, PATCH { actio
 
 test("return: the modal, Atšaukti, an empty comment refused, PATCH { action: 'return', rejection_comment }, the row leaves", async () => {
   scriptQueue();
-  onRequest("PATCH", "/api/activities/2/manager", ok({ ...ACT2, status: "TIKSLINTI" }));
+  onRequest("PATCH", "/api/activities/2/manager", verdict(ACT2, { status: "TIKSLINTI" }));
   const { user } = renderPage(ManagerReviewPage);
   await screen.findByText("Konferencijos pranešimas");
 
@@ -438,12 +449,12 @@ test("review modal: the activity read-only, Išsaugoti disabled, Uždaryti close
 
 test("edit: the pickers, first-subtheme preselect in code order, PATCH with numeric ids, row patched, back to view mode", async () => {
   scriptQueue();
-  const UPDATED = {
-    ...ACT1, status: "PATEIKTA", manager_comments: "Perkelta į mokslą",
-    theme_id: 2, theme_code: "6.2.", theme_title: "Mokslas",
-    subtheme_id: 22, subtheme_code: "6.2.10.", subtheme_title: "Publikacijos",
-  };
-  onRequest("PATCH", "/api/activities/1/manager", ok(UPDATED));
+  const UPDATED = verdict(ACT1, {
+    status: "PATEIKTA", manager_comments: "Perkelta į mokslą",
+    theme_code: "6.2.", theme_title: "Mokslas",
+    subtheme_code: "6.2.10.", subtheme_title: "Publikacijos",
+  });
+  onRequest("PATCH", "/api/activities/1/manager", UPDATED);
   const { user } = renderPage(ManagerReviewPage);
   await screen.findByText("Paskaitų ciklas");
 
@@ -598,10 +609,11 @@ test("attachment: GET /api/activities/:id/attachment with the header; a refused 
 
 test("a 200 whose body is not an array, for either list, shows one message and keeps the page", async () => {
   signInAs("Vadybininkas");
-  // Which list answers with the object; the other is fine
+  // Which list answers with the object; the other is fine.
+  // Wrong shapes on purpose, so neither entry is guarded
   let broken = "queue";
-  onRequest("GET", "/api/activities/pending", () => (broken === "queue" ? { status: 200, body: { ok: true } } : [ACT1]));
-  onRequest("GET", "/api/themes", () => (broken === "themes" ? { status: 200, body: { ok: true } } : THEMES));
+  onRequest("GET", "/api/activities/pending", () => (broken === "queue" ? { status: 200, body: { ok: true } } : [ACT1]), { offContract: true });
+  onRequest("GET", "/api/themes", () => (broken === "themes" ? { status: 200, body: { ok: true } } : THEMES), { offContract: true });
   const first = renderPage(ManagerReviewPage);
 
   expect(await screen.findByText("Klaida: netikėtas serverio atsakymas.")).toHaveClass("form-status");

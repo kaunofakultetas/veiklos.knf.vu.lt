@@ -27,14 +27,14 @@ import { renderPage, signInAs } from "../../helpers/render.js";
 // Three themes: two with subthemes, one without (the edit
 // modal's "(potemių nėra)" case)
 const THEMES = [
-  { id: 1, code: "1.", title: "Studijos", subthemes: [
-    { id: 11, code: "1.1.", title: "Paskaitos" },
-    { id: 12, code: "1.2.", title: "Seminarai" },
+  { id: 1, code: "1.", title: "Studijos", total_sum: "1000", pointvalue: "2.5", subthemes: [
+    { id: 11, theme_id: 1, code: "1.1.", title: "Paskaitos", description: "Skaitytos paskaitos", cap: "10" },
+    { id: 12, theme_id: 1, code: "1.2.", title: "Seminarai", description: "", cap: null },
   ] },
-  { id: 2, code: "2.", title: "Mokslas", subthemes: [
-    { id: 21, code: "2.1.", title: "Straipsniai" },
+  { id: 2, code: "2.", title: "Mokslas", total_sum: "500", pointvalue: null, subthemes: [
+    { id: 21, theme_id: 2, code: "2.1.", title: "Straipsniai", description: "Publikuoti straipsniai", cap: "20" },
   ] },
-  { id: 3, code: "3.", title: "Kita", subthemes: [] },
+  { id: 3, code: "3.", title: "Kita", total_sum: null, pointvalue: null, subthemes: [] },
 ];
 
 // One activity per status: A submitted with a named
@@ -43,19 +43,19 @@ const THEMES = [
 // description, E approved
 const ACTIVITIES = [
   { id: 101, theme_id: 1, subtheme_id: 11, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.1.", subtheme_title: "Paskaitos",
-    title: "Kursas A", description: "Aprašas A", status: "PATEIKTA", rejection_comment: null, score: null,
+    title: "Kursas A", description: "Aprašas A", status: "PATEIKTA", rejection_comment: null, manager_comments: null, score: null,
     attachment_path: "uploads/1_1.1_ataskaita.pdf", attachment_original_name: "ataskaita.pdf", created_at: "2026-03-05T10:20:00Z" },
   { id: 102, theme_id: 1, subtheme_id: 12, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.2.", subtheme_title: "Seminarai",
-    title: "Seminaras B", description: "", status: "TIKSLINTI", rejection_comment: "Patikslinkite datą", score: null,
+    title: "Seminaras B", description: "", status: "TIKSLINTI", rejection_comment: "Patikslinkite datą", manager_comments: null, score: null,
     attachment_path: null, attachment_original_name: null, created_at: "2026-03-06T09:00:00Z" },
   { id: 103, theme_id: 2, subtheme_id: 21, theme_code: "2.", theme_title: "Mokslas", subtheme_code: "2.1.", subtheme_title: "Straipsniai",
-    title: "Straipsnis C", description: "Aprašas C", status: "ĮVERTINTA", rejection_comment: null, score: 4.5,
+    title: "Straipsnis C", description: "Aprašas C", status: "ĮVERTINTA", rejection_comment: null, manager_comments: "Tinka", score: "4.5",
     attachment_path: "uploads/2_2.1_x.pdf", attachment_original_name: null, created_at: "2026-03-07T12:00:00Z" },
   { id: 104, theme_id: 2, subtheme_id: 21, theme_code: "2.", theme_title: "Mokslas", subtheme_code: "2.1.", subtheme_title: "Straipsniai",
-    title: "Projektas D", description: null, status: "ATMESTA", rejection_comment: "Netinka temai", score: null,
+    title: "Projektas D", description: null, status: "ATMESTA", rejection_comment: "Netinka temai", manager_comments: null, score: null,
     attachment_path: null, attachment_original_name: null, created_at: "2026-03-08T12:00:00Z" },
   { id: 105, theme_id: 1, subtheme_id: 11, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.1.", subtheme_title: "Paskaitos",
-    title: "Renginys E", description: "Aprašas E", status: "PATVIRTINTA", rejection_comment: null, score: null,
+    title: "Renginys E", description: "Aprašas E", status: "PATVIRTINTA", rejection_comment: null, manager_comments: "Patvirtinta", score: null,
     attachment_path: null, attachment_original_name: null, created_at: "2026-03-09T12:00:00Z" },
 ];
 
@@ -76,9 +76,14 @@ const dropdown = () => document.querySelector(".app-select-dropdown");
 const selects = () => [...modal().querySelectorAll(".app-select-trigger")];
 const fileInput = () => document.querySelector('input[type="file"]');
 
-// Activity-shaped replies carry a `status` field, which the
-// fake would read as an envelope — so they are wrapped in one
-const activityReply = (act) => ({ status: 200, body: act });
+// PATCH and /resubmit answer with the employee's own row: a
+// listed row with the given changes plus its updated_at, in an
+// explicit { status, body } envelope since the row carries a
+// `status` column of its own
+const ownRowReply = (act, changes = {}) => ({
+  status: 200,
+  body: { ...act, ...changes, updated_at: "2026-03-10T12:00:00Z" },
+});
 
 const mountPage = (activities = ACTIVITIES) => {
   signInAs("Darbuotojas");
@@ -355,8 +360,7 @@ test("a refused DELETE shows the prefixed reason and keeps the row", async () =>
 // -----------------------------------------------------------
 
 test("Pateikti confirms, POSTs /resubmit with the role header and replaces the row and the open modal", async () => {
-  const fresh = { ...ACTIVITIES[1], status: "PATEIKTA", rejection_comment: null };
-  onRequest("POST", "/api/activities/102/resubmit", activityReply(fresh));
+  onRequest("POST", "/api/activities/102/resubmit", ownRowReply(ACTIVITIES[1], { status: "PATEIKTA", rejection_comment: null }));
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -478,13 +482,11 @@ test("Peržiūrėti opens the modal with the row's values; Uždaryti and the bac
 // -----------------------------------------------------------
 
 test("Redaguoti → Išsaugoti PATCHes multipart with the codes before the file and refreshes the row and modal", async () => {
-  const updated = {
-    ...ACTIVITIES[1],
+  onRequest("PATCH", "/api/activities/102", ownRowReply(ACTIVITIES[1], {
     theme_id: 2, subtheme_id: 21, theme_code: "2.", theme_title: "Mokslas", subtheme_code: "2.1.", subtheme_title: "Straipsniai",
     title: "Seminaras B2", description: "Naujas aprašas",
     attachment_path: "uploads/2_2.1_naujas.pdf", attachment_original_name: "naujas.pdf",
-  };
-  onRequest("PATCH", "/api/activities/102", activityReply(updated));
+  }));
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -553,7 +555,7 @@ test("Redaguoti → Išsaugoti PATCHes multipart with the codes before the file 
 });
 
 test("an edit without a file keeps the current attachment: no attachment field, hint names the current file", async () => {
-  onRequest("PATCH", "/api/activities/101", activityReply({ ...ACTIVITIES[0], title: "Kursas A1" }));
+  onRequest("PATCH", "/api/activities/101", ownRowReply(ACTIVITIES[0], { title: "Kursas A1" }));
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -742,12 +744,13 @@ test("a refused PATCH shows the prefixed reason and keeps the draft in edit mode
 // A 200 whose body is not an array — from either GET in turn
 // — is refused with the page's fixed message in the status
 // line instead of blanking the page on the next render;
-// nothing is listed, as after a failed GET.
+// nothing is listed, as after a failed GET. Both answers are
+// off the contract on purpose, so the guard is told so.
 // -----------------------------------------------------------
 
 test("a non-array activities or theme reply is refused with a clear message instead of a blank page", async () => {
   signInAs("Darbuotojas");
-  onRequest("GET", "/api/activities/my", { status: 200, body: { ok: true } });
+  onRequest("GET", "/api/activities/my", { status: 200, body: { ok: true } }, { offContract: true });
   onRequest("GET", "/api/themes", THEMES);
   const { unmount } = renderPage(MyActivitiesPage);
 
@@ -761,7 +764,7 @@ test("a non-array activities or theme reply is refused with a clear message inst
   // The same page again, now with the theme tree misshapen
   resetFakeFetch();
   onRequest("GET", "/api/activities/my", ACTIVITIES);
-  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } });
+  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } }, { offContract: true });
   renderPage(MyActivitiesPage);
 
   expect(await screen.findByText("Klaida: netikėtas serverio atsakymas.")).toHaveClass("form-status");

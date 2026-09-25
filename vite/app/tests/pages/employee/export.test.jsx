@@ -44,25 +44,29 @@ beforeEach(() => vi.clearAllMocks());
 // Two themes whose subthemes arrive out of numeric order
 // ("1.10." before "1.2.") so the option sort is visible
 const THEMES = [
-  { id: 1, code: "1.", title: "Studijos", subthemes: [
-    { id: 11, code: "1.10.", title: "Dešimta" },
-    { id: 12, code: "1.2.", title: "Antra" },
+  { id: 1, code: "1.", title: "Studijos", total_sum: "1000", pointvalue: "2.5", subthemes: [
+    { id: 11, theme_id: 1, code: "1.10.", title: "Dešimta", description: "Dešimta potemė", cap: "10" },
+    { id: 12, theme_id: 1, code: "1.2.", title: "Antra", description: "", cap: null },
   ] },
-  { id: 2, code: "2.", title: "Mokslas", subthemes: [
-    { id: 21, code: "2.1.", title: "Straipsniai" },
+  { id: 2, code: "2.", title: "Mokslas", total_sum: "500", pointvalue: null, subthemes: [
+    { id: 21, theme_id: 2, code: "2.1.", title: "Straipsniai", description: "Publikuoti straipsniai", cap: "20" },
   ] },
 ];
 
-// Three activities: unscored, scored, and one scored 0 with
-// no timestamp (the falsy edge cases of the score and date
-// cells)
+// Three activities: unscored, scored, and one scored "0" with
+// no timestamp (the edge cases of the score and date cells: a
+// zero score is shown and written, a missing date is blank).
+// Scores arrive as strings, as pg returns NUMERIC
 const ACTIVITIES = [
   { id: 101, theme_id: 1, subtheme_id: 11, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.10.", subtheme_title: "Dešimta",
-    title: "Kursas A", description: "Aprašas A", status: "PATEIKTA", score: null, created_at: "2026-03-05T10:20:00Z" },
+    title: "Kursas A", description: "Aprašas A", status: "PATEIKTA", rejection_comment: null, manager_comments: null, score: null,
+    attachment_path: "uploads/1_1.10_ataskaita.pdf", attachment_original_name: "ataskaita.pdf", created_at: "2026-03-05T10:20:00Z" },
   { id: 102, theme_id: 2, subtheme_id: 21, theme_code: "2.", theme_title: "Mokslas", subtheme_code: "2.1.", subtheme_title: "Straipsniai",
-    title: "Straipsnis B", description: null, status: "ĮVERTINTA", score: 4.5, created_at: "2026-04-01T08:00:00Z" },
+    title: "Straipsnis B", description: null, status: "ĮVERTINTA", rejection_comment: null, manager_comments: "Tinka", score: "4.5",
+    attachment_path: null, attachment_original_name: null, created_at: "2026-04-01T08:00:00Z" },
   { id: 103, theme_id: 1, subtheme_id: 12, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.2.", subtheme_title: "Antra",
-    title: "Seminaras C", description: "Aprašas C", status: "ATMESTA", score: 0, created_at: null },
+    title: "Seminaras C", description: "Aprašas C", status: "ATMESTA", rejection_comment: "Netinka temai", manager_comments: null, score: "0",
+    attachment_path: null, attachment_original_name: null, created_at: null },
 ];
 
 // The exact column names the page writes into the workbook
@@ -307,9 +311,10 @@ test("the trigger reports aria-expanded and Escape closes the menu, keeping the 
 //
 // "Eksportuoti" builds one array-of-arrays — the exact header
 // row, then one row per filtered activity with the formatted
-// date, codes, titles, description, status and score ("" for
-// null) — appends the sheet as "Veiklos" to a new book and
-// writes veiklos-eksportas-<timestamp>.xlsx.
+// date, codes, titles, description, status and score (the
+// NUMERIC string as it arrived, "" for null) — appends the
+// sheet as "Veiklos" to a new book and writes
+// veiklos-eksportas-<timestamp>.xlsx.
 // -----------------------------------------------------------
 
 test("Eksportuoti writes the header row and every row into a \"Veiklos\" sheet", async () => {
@@ -322,8 +327,8 @@ test("Eksportuoti writes the header row and every row into a \"Veiklos\" sheet",
   expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith([
     HEADER,
     [fmt("2026-03-05T10:20:00Z"), "1.", "Studijos", "1.10.", "Dešimta", "Kursas A", "Aprašas A", "PATEIKTA", ""],
-    [fmt("2026-04-01T08:00:00Z"), "2.", "Mokslas", "2.1.", "Straipsniai", "Straipsnis B", "", "ĮVERTINTA", 4.5],
-    ["", "1.", "Studijos", "1.2.", "Antra", "Seminaras C", "Aprašas C", "ATMESTA", 0],
+    [fmt("2026-04-01T08:00:00Z"), "2.", "Mokslas", "2.1.", "Straipsniai", "Straipsnis B", "", "ĮVERTINTA", "4.5"],
+    ["", "1.", "Studijos", "1.2.", "Antra", "Seminaras C", "Aprašas C", "ATMESTA", "0"],
   ]);
 
   const sheet = XLSX.utils.aoa_to_sheet.mock.results[0].value;
@@ -352,7 +357,7 @@ test("the export honours the filters: only the filtered rows are written", async
 
   expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith([
     HEADER,
-    ["", "1.", "Studijos", "1.2.", "Antra", "Seminaras C", "Aprašas C", "ATMESTA", 0],
+    ["", "1.", "Studijos", "1.2.", "Antra", "Seminaras C", "Aprašas C", "ATMESTA", "0"],
   ]);
   expect(XLSX.utils.book_append_sheet).toHaveBeenCalledWith(expect.anything(), expect.anything(), "Veiklos");
   expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
@@ -446,11 +451,13 @@ test("a failed theme load shows the error verbatim and keeps no activities", asy
 // — is refused with the page's fixed message in the error
 // status line instead of blanking the page on the next
 // render; the preview stays empty, as after a failed GET.
+// Both answers are off the contract on purpose, so the guard
+// is told so.
 // -----------------------------------------------------------
 
 test("a non-array theme or activities reply is refused with a clear message instead of a blank page", async () => {
   signInAs("Darbuotojas");
-  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } });
+  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } }, { offContract: true });
   onRequest("GET", "/api/activities/my", ACTIVITIES);
   const { unmount } = renderPage(ExportPage);
 
@@ -465,7 +472,7 @@ test("a non-array theme or activities reply is refused with a clear message inst
   // The same page again, now with the activities misshapen
   resetFakeFetch();
   onRequest("GET", "/api/themes", THEMES);
-  onRequest("GET", "/api/activities/my", { status: 200, body: { ok: true } });
+  onRequest("GET", "/api/activities/my", { status: 200, body: { ok: true } }, { offContract: true });
   renderPage(ExportPage);
 
   expect(await screen.findByText("Klaida: netikėtas serverio atsakymas.")).toHaveClass("form-status", "form-status--error");

@@ -20,8 +20,10 @@ import { onRequest, requestsTo, requestLog } from "../helpers/fakeFetch.js";
 import { renderRouted, signInAs } from "../helpers/render.js";
 
 
-// The full /api/me answer: three roles
+// The full /api/me answer: three roles; and the answer for a
+// caller who owns no role at all
 const ME = { name: "Jonas Jonaitis", email: "jonas@vu.lt", eid: "u100", roles: ["Darbuotojas", "Vadybininkas", "Komisijos narys"] };
+const NO_ROLES = { name: "Ona Onaitė", email: "ona@vu.lt", eid: "u200", roles: [] };
 
 // A nav child that prints the router's path, so a navigation
 // the header triggers shows up in the DOM
@@ -94,7 +96,9 @@ test("loads /api/me on mount: name, the switcher for several roles, the nav chil
 });
 
 test("one role: no switcher, the role as text; { name } objects and a missing name are tolerated", async () => {
-  onRequest("GET", "/api/me", { eid: "u1", roles: [{ name: "Darbuotojas" }] });
+  // Off the contract on purpose: /api/session/check's { name }
+  // role objects and no name at all, which the header tolerates
+  onRequest("GET", "/api/me", { eid: "u1", roles: [{ name: "Darbuotojas" }] }, { offContract: true });
   renderHeader();
   expect(screen.getByText("Kraunama…")).toHaveClass("app-role-value");
 
@@ -145,7 +149,7 @@ test("a stored role the caller no longer owns is replaced by the first role", as
 
 test("no roles: activeRole is removed and the bar shows (nėra); the logo then goes to /", async () => {
   signInAs("Vadybininkas");
-  onRequest("GET", "/api/me", { name: "Ona Onaitė", roles: [] });
+  onRequest("GET", "/api/me", NO_ROLES);
   const { user } = renderHeader("/manager/roles");
   expect(screen.getByText("Vadybininkas")).toHaveClass("app-role-value");
 
@@ -167,7 +171,7 @@ test("no roles and nothing stored: Kraunama… only until /api/me answers, then 
   expect(screen.getByText("Kraunama…")).toHaveClass("app-role-value");
   expect(screen.queryByText("(nėra)")).not.toBeInTheDocument();
 
-  await act(async () => { answer({ name: "Ona Onaitė", roles: [] }); });
+  await act(async () => { answer(NO_ROLES); });
   expect(await screen.findByText("(nėra)")).toHaveClass("app-role-value");
   expect(screen.queryByText("Kraunama…")).not.toBeInTheDocument();
   expect(localStorage.getItem("activeRole")).toBeNull();
@@ -288,7 +292,9 @@ test("Atsijungti clears activeRole, POSTs /auth/saml/logout and goes where a 2xx
 test("a refused logout answer lands on / even when its body carries a redirect", async () => {
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
-  onRequest("POST", "/auth/saml/logout", { status: 500, body: { redirect: "https://sso.vu.lt/logout?id=abc" } });
+  // Off the contract on purpose: an error answer whose body is
+  // not { error } but carries a redirect the header must ignore
+  onRequest("POST", "/auth/saml/logout", { status: 500, body: { redirect: "https://sso.vu.lt/logout?id=abc" } }, { offContract: true });
   const { user } = renderHeader();
   await screen.findByText("Jonas Jonaitis");
 
@@ -303,7 +309,8 @@ test("a refused logout answer lands on / even when its body carries a redirect",
 test("a non-JSON logout answer lands on /", async () => {
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
-  onRequest("POST", "/auth/saml/logout", "Bye");
+  // Off the contract on purpose: a text answer where JSON is due
+  onRequest("POST", "/auth/saml/logout", "Bye", { offContract: true });
   const { user } = renderHeader();
   await screen.findByText("Jonas Jonaitis");
 

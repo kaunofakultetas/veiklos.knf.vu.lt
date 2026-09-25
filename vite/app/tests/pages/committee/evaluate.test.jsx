@@ -27,22 +27,22 @@ import { renderPage, signInAs } from "../../helpers/render.js";
 // filled (description, attachment, manager comments), one
 // with none of them
 const ACT1 = {
-  id: 1, full_name: "Jonas Jonaitis",
+  id: 1, employee_eid: "u10001", full_name: "Jonas Jonaitis",
   theme_id: 1, theme_code: "6.1.", theme_title: "Studijų kokybė",
   subtheme_id: 12, subtheme_code: "6.1.2.", subtheme_title: "Seminarai",
   title: "Seminaras apie X", description: "Trys seminarai studentams",
-  status: "PATVIRTINTA", score: null, committee_comments: null, manager_comments: "Tinka",
+  status: "PATVIRTINTA", score: null, rejection_comment: null, committee_comments: null, manager_comments: "Tinka",
   attachment_path: "uploads/1.pdf", attachment_original_name: "ataskaita.pdf",
-  created_at: "2025-03-04T12:00:00Z",
+  created_at: "2025-03-04T12:00:00Z", updated_at: "2025-03-06T08:15:00Z",
 };
 const ACT2 = {
-  id: 2, full_name: "Rasa Šukienė",
+  id: 2, employee_eid: "u10002", full_name: "Rasa Šukienė",
   theme_id: 1, theme_code: "6.1.", theme_title: "Studijų kokybė",
   subtheme_id: 11, subtheme_code: "6.1.1.", subtheme_title: "Paskaitos",
   title: "Paskaitų ciklas", description: null,
-  status: "PATVIRTINTA", score: null, committee_comments: null, manager_comments: null,
+  status: "PATVIRTINTA", score: null, rejection_comment: null, committee_comments: null, manager_comments: null,
   attachment_path: null, attachment_original_name: null,
-  created_at: "2025-03-05T09:30:00Z",
+  created_at: "2025-03-05T09:30:00Z", updated_at: "2025-03-07T10:00:00Z",
 };
 const QUEUE = [ACT1, ACT2];
 
@@ -514,7 +514,7 @@ test("a refused download is reported with the Klaida: prefix", async () => {
 
 test("a 200 whose body is not a list is refused with one message, not a blank page", async () => {
   signInAs("Komisijos narys");
-  onRequest("GET", "/api/activities/committee", { status: 200, body: { ok: true } });
+  onRequest("GET", "/api/activities/committee", { status: 200, body: { ok: true } }, { offContract: true });
   renderPage(EvaluatePage);
 
   expect(await screen.findByText("Klaida: netikėtas serverio atsakymas.")).toHaveClass("form-status--error");

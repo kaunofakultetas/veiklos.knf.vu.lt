@@ -21,10 +21,12 @@ import { renderPage, signInAs } from "../../helpers/render.js";
 
 
 // The catalog as the backend orders it (by name), a looked-up
-// employee, and the manager doing the editing
+// employee, the manager doing the editing as /api/me answers,
+// and the bodiless 204 that assign and remove answer with
 const ALL = ["Darbuotojas", "Komisijos narys", "Vadybininkas"];
 const USER = { id: 7, email: "jonas.jonaitis@knf.vu.lt", full_name: "Jonas Jonaitis" };
-const ME = { email: "vadybininke@knf.vu.lt" };
+const ME = { name: "Vaida Vadybininkė", email: "vadybininke@knf.vu.lt", eid: "u10007", roles: ["Darbuotojas", "Vadybininkas"] };
+const DONE = { status: 204 };
 
 const lookup = (roles) => ({ user: USER, roles, allRoles: ALL });
 
@@ -179,7 +181,7 @@ test("assign: POST { email, role } with Content-Type only, pill added, next role
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
   onRequest("GET", "/api/user-roles", lookup(["Darbuotojas"]));
-  onRequest("POST", "/api/user-roles/assign", { ok: true });
+  onRequest("POST", "/api/user-roles/assign", DONE);
   const onUpdated = vi.fn();
   window.addEventListener("app:roles-updated", onUpdated);
   const { user } = renderPage(RolesPage);
@@ -222,7 +224,7 @@ test("assigning the last role sorts the pill into place and shows the all-roles 
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
   onRequest("GET", "/api/user-roles", lookup(["Darbuotojas", "Vadybininkas"]));
-  onRequest("POST", "/api/user-roles/assign", { ok: true });
+  onRequest("POST", "/api/user-roles/assign", DONE);
   const { user } = renderPage(RolesPage);
   await lookUp(user, "jonas.jonaitis@knf.vu.lt");
   await screen.findByText("Turimos rolės:");
@@ -259,7 +261,7 @@ test("remove: ✕ POSTs { email, role } without a confirm, the pill goes, the ro
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
   onRequest("GET", "/api/user-roles", lookup(ALL));
-  onRequest("POST", "/api/user-roles/remove", { ok: true });
+  onRequest("POST", "/api/user-roles/remove", DONE);
   const onUpdated = vi.fn();
   window.addEventListener("app:roles-updated", onUpdated);
   const { user } = renderPage(RolesPage);
@@ -301,9 +303,9 @@ test("remove: ✕ POSTs { email, role } without a confirm, the pill goes, the ro
 
 test("self-revoke: my own Vadybininkas asks the exact confirm; cancel sends nothing, OK POSTs", async () => {
   signInAs("Vadybininkas");
-  onRequest("GET", "/api/me", { email: "JONAS.JONAITIS@knf.vu.lt" });
+  onRequest("GET", "/api/me", { name: "Jonas Jonaitis", email: "JONAS.JONAITIS@knf.vu.lt", eid: "u10001", roles: ALL });
   onRequest("GET", "/api/user-roles", lookup(ALL));
-  onRequest("POST", "/api/user-roles/remove", { ok: true });
+  onRequest("POST", "/api/user-roles/remove", DONE);
   const { user } = renderPage(RolesPage);
   await lookUp(user, "Jonas.Jonaitis@knf.vu.lt");
   await screen.findByText("Turimos rolės:");
@@ -347,7 +349,7 @@ test("when /api/me is refused the self-revoke confirm never triggers", async () 
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", { status: 401, body: { error: "unauthorized" } });
   onRequest("GET", "/api/user-roles", lookup(ALL));
-  onRequest("POST", "/api/user-roles/remove", { ok: true });
+  onRequest("POST", "/api/user-roles/remove", DONE);
   const { user } = renderPage(RolesPage);
   await lookUp(user, "jonas.jonaitis@knf.vu.lt");
   await screen.findByText("Turimos rolės:");
@@ -377,11 +379,13 @@ test("when /api/me is refused the self-revoke confirm never triggers", async () 
 test("lookup errors: the backend's text, the fallback, and the previous user is cleared", async () => {
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
+  // The reasonless refusal answers {} on purpose, not the
+  // contract's { error }, so this entry is not guarded
   onRequest("GET", "/api/user-roles", (req) => {
     if (req.url.includes("nera")) return { status: 404, body: { error: "Klaida: Vartotojas nerastas" } };
     if (req.url.includes("blogas")) return { status: 500, body: {} };
     return lookup(["Darbuotojas"]);
-  });
+  }, { offContract: true });
   const { user } = renderPage(RolesPage);
 
   await lookUp(user, "jonas.jonaitis@knf.vu.lt");
@@ -509,13 +513,14 @@ test("remove errors: the backend's reason verbatim, then the fallback; the pill 
 test("a 200 without the two role arrays is refused with one message and clears the user", async () => {
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
+  // Wrong shapes on purpose, so this entry is not guarded
   onRequest("GET", "/api/user-roles", (req) => {
     if (req.url.includes("objektas")) return { status: 200, body: { ok: true } };
     if (req.url.includes("nulis")) return { status: 200, body: "null" };
     if (req.url.includes("tekstas")) return { status: 200, body: "\"tekstas\"" };
     if (req.url.includes("eilute")) return { user: USER, roles: "Darbuotojas", allRoles: ALL };
     return lookup(["Darbuotojas"]);
-  });
+  }, { offContract: true });
   const { user } = renderPage(RolesPage);
 
   await lookUp(user, "jonas.jonaitis@knf.vu.lt");

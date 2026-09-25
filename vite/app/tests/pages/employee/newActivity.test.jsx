@@ -25,12 +25,25 @@ import { renderPage, signInAs } from "../../helpers/render.js";
 // ("1.10." before "1.2.") so the sort is visible, one without
 // subthemes
 const THEMES = [
-  { id: 1, code: "1.", title: "Studijos", subthemes: [
-    { id: 11, code: "1.10.", title: "Dešimta potemė", description: "Dešimtos potemės aprašymas" },
-    { id: 12, code: "1.2.", title: "Antra potemė", description: "" },
+  { id: 1, code: "1.", title: "Studijos", total_sum: "1000", pointvalue: "2.5", subthemes: [
+    { id: 11, theme_id: 1, code: "1.10.", title: "Dešimta potemė", description: "Dešimtos potemės aprašymas", cap: "10" },
+    { id: 12, theme_id: 1, code: "1.2.", title: "Antra potemė", description: "", cap: null },
   ] },
-  { id: 2, code: "2.", title: "Mokslas", subthemes: [] },
+  { id: 2, code: "2.", title: "Mokslas", total_sum: null, pointvalue: null, subthemes: [] },
 ];
+
+// The 201 answer to a POST: the created row as inserted (no
+// theme join yet), echoing the submitted fields; the page only
+// checks that the answer is ok
+const createdReply = (overrides) => ({
+  status: 201,
+  body: {
+    id: 7, employee_eid: "u10001", theme_id: 1, subtheme_id: 12, title: "Konferencija", description: "Pranešimas konferencijoje",
+    status: "PATEIKTA", rejection_comment: null, manager_comments: null, score: null, attachment_path: null, attachment_original_name: null,
+    created_at: "2026-03-05T10:20:00Z", updated_at: "2026-03-05T10:20:00Z",
+    ...overrides,
+  },
+});
 
 const ATTACHMENT_ACCEPT =
   ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.csv,.jpg,.jpeg,.png,.gif,.webp";
@@ -189,7 +202,7 @@ test("a theme switch re-sorts the subthemes and preselects the first; none → d
 test("submits multipart with the fields in order and only the role header; resets the text fields", async () => {
   signInAs("Darbuotojas");
   onRequest("GET", "/api/themes", THEMES);
-  onRequest("POST", "/api/activities", { status: 200, body: { id: 7, status: "PATEIKTA" } });
+  onRequest("POST", "/api/activities", createdReply({ id: 7 }));
   const { user } = renderPage(NewActivityPage);
   await themesLoaded();
 
@@ -238,7 +251,10 @@ test("submits multipart with the fields in order and only the role header; reset
 test("an attachment is appended after the codes and cleared after a successful submit", async () => {
   signInAs("Darbuotojas");
   onRequest("GET", "/api/themes", THEMES);
-  onRequest("POST", "/api/activities", { status: 200, body: { id: 8, status: "PATEIKTA" } });
+  onRequest("POST", "/api/activities", createdReply({
+    id: 8, subtheme_id: 11, title: "Seminaras", description: "Seminaro aprašymas",
+    attachment_path: "uploads/1_1.10_ataskaita.pdf", attachment_original_name: "ataskaita.pdf",
+  }));
   const { user } = renderPage(NewActivityPage);
   await themesLoaded();
 
@@ -349,7 +365,7 @@ test("an empty theme tree leaves both pickers disabled and the submit refused", 
 test("an oversized pick is refused on the spot and never sent", async () => {
   signInAs("Darbuotojas");
   onRequest("GET", "/api/themes", THEMES);
-  onRequest("POST", "/api/activities", { status: 200, body: { id: 9, status: "PATEIKTA" } });
+  onRequest("POST", "/api/activities", createdReply({ id: 9, description: "Aprašymas" }));
   const { user } = renderPage(NewActivityPage);
   await themesLoaded();
 
@@ -431,12 +447,13 @@ test("a failed theme load shows the backend's error verbatim and disables the pi
 // A 200 whose body is not the theme array (an object here)
 // is refused with the page's fixed message in the status
 // line instead of blanking the page on the next render; the
-// pickers stay disabled on their placeholders.
+// pickers stay disabled on their placeholders. The answer is
+// off the contract on purpose, so the guard is told so.
 // -----------------------------------------------------------
 
 test("a non-array theme reply is refused with a clear message instead of a blank page", async () => {
   signInAs("Darbuotojas");
-  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } });
+  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } }, { offContract: true });
   renderPage(NewActivityPage);
 
   expect(await screen.findByText("Klaida: netikėtas serverio atsakymas.")).toHaveClass("form-status");

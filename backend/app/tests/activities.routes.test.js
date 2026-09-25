@@ -689,7 +689,7 @@ function stubManagerPatch(status = "PATEIKTA") {
   onQuery(/SELECT a\.title, a\.rejection_comment, u\.email, u\.full_name/, [
     { title: "Konferencija", rejection_comment: "Blogai", email: "jonas@vu.lt", full_name: "Jonas" },
   ]);
-  onQuery(/SELECT a\.id, a\.title, a\.description/, [{ id: 10, status: "updated" }]);
+  onQuery(/SELECT a\.id, a\.employee_eid, a\.theme_id/, [{ id: 10, status: "updated" }]);
 }
 
 

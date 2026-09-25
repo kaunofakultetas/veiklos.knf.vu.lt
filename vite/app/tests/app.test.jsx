@@ -19,12 +19,14 @@ import { onRequest, requestsTo, requestLog } from "./helpers/fakeFetch.js";
 import { signInAs } from "./helpers/render.js";
 
 
-// The signed-in user, the /api/me answer the workspace
-// headers fetch, and the two probe outcomes
-const USER = { eid: "u100", name: "Jonas Jonaitis", email: "jonas@vu.lt" };
+// The signed-in user as /api/session/check sends it, the
+// /api/me answer the workspace headers fetch, and the two
+// probe outcomes; session(names) is the 200 answer, whose
+// roles are { name } objects
+const USER = { eid: "u100", email: "jonas@vu.lt", full_name: "Jonas Jonaitis", created_at: "2025-09-01T08:00:00Z", last_login_at: "2026-09-25T07:30:00Z" };
 const ME = { name: "Jonas Jonaitis", email: "jonas@vu.lt", eid: "u100", roles: ["Darbuotojas", "Vadybininkas", "Komisijos narys"] };
 const SIGNED_OUT = { status: 401, body: { error: "Neprisijungta" } };
-const session = (roles) => ({ user: USER, roles });
+const session = (names) => ({ user: USER, roles: names.map((name) => ({ name })) });
 
 // The App under its own BrowserRouter, with the browser at
 // `at` before it mounts
@@ -134,7 +136,7 @@ test("one role picks itself: activeRole stored, its workspace opened, /api/me fe
 });
 
 test("several roles open the picker; Patvirtinti stores the choice and opens its workspace", async () => {
-  onRequest("GET", "/api/session/check", session([{ name: "Darbuotojas" }, { name: "Komisijos narys" }]));
+  onRequest("GET", "/api/session/check", session(["Darbuotojas", "Komisijos narys"]));
   onRequest("GET", "/api/me", ME);
   const { user } = renderApp("/");
 

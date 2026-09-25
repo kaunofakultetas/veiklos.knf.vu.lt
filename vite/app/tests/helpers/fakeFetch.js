@@ -7,12 +7,18 @@
 //  method, the path, the X-Active-Role header, the body — and
 //  how the page renders what comes back. Like the backend's
 //  fake pool, an unscripted request throws loudly instead of
-//  hanging the page.
+//  hanging the page. Every request and answer also passes the
+//  contract guard (helpers/contractGuard.js), and the JSON a
+//  page gets back is wrapped so a read outside the contract
+//  is caught.
 // -----------------------------------------------------------
 
+import { guardRequest, guardReply } from "./contractGuard.js";
 
-// The script: [{ method, path (string or RegExp), reply }]
-// in registration order; the first match answers
+
+// The script: [{ method, path (string or RegExp), reply,
+// offContract }] in registration order; the first match
+// answers
 const routes = [];
 
 // Every request made since the last reset, in order:
@@ -34,6 +40,12 @@ const requests = [];
 // onRequest("PATCH", /^\/api\/activities\/\d+$/,
 //           { status: 400, body: { error: "…" } })  — any status
 // onRequest("GET", "/api/x", (req) => reply)         — computed
+// onRequest("GET", "/api/x", { ok: true },
+//           { offContract: true })                  — a wrong shape
+//                                                     on purpose
+//                                                     (robustness
+//                                                     tests), not
+//                                                     guarded
 //
 // `reply` may be a plain JSON value (200), an envelope
 // { status, body, headers } — recognised only when it holds
@@ -47,8 +59,8 @@ const requests = [];
 //   - every page test
 // -----------------------------------------------------------
 
-export function onRequest(method, path, reply) {
-  routes.push({ method: method.toUpperCase(), path, reply });
+export function onRequest(method, path, reply, { offContract = false } = {}) {
+  routes.push({ method: method.toUpperCase(), path, reply, offContract });
 }
 
 
@@ -176,6 +188,7 @@ async function fakeFetch(input, init = {}) {
   const path = url.split("?")[0];
   const req = { method, path, url, headers, body };
   requests.push(req);
+  const contract = guardRequest(req);
 
   const route = routes.find((r) => r.method === method && (r.path instanceof RegExp ? r.path.test(path) : r.path === path));
   if (!route) throw new Error(`fakeFetch: no script for ${method} ${url}`);
@@ -188,13 +201,21 @@ async function fakeFetch(input, init = {}) {
   const extraHeaders = isEnvelope ? (reply.headers ?? {}) : {};
 
   if (payload instanceof Blob) {
+    guardReply(contract, status, payload, route);
     return new Response(await payload.arrayBuffer(), { status, headers: { "Content-Type": payload.type || "application/octet-stream", ...extraHeaders } });
   }
   if (typeof payload === "string") {
+    guardReply(contract, status, payload, route);
     return new Response(payload, { status, headers: { "Content-Type": "text/plain; charset=utf-8", ...extraHeaders } });
   }
   if (payload === undefined || payload === null) {
+    guardReply(contract, status, null, route);
     return new Response(null, { status, headers: extraHeaders });
   }
-  return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json", ...extraHeaders } });
+  // The page gets the JSON through the guard's read tracker:
+  // json() hands back the wrapped object, not a fresh parse
+  const tracked = guardReply(contract, status, payload, route);
+  const response = new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json", ...extraHeaders } });
+  response.json = async () => tracked;
+  return response;
 }

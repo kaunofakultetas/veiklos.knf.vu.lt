@@ -22,11 +22,11 @@ import { renderPage, signInAs } from "../../helpers/render.js";
 // Two themes: one with a total and two capped/uncapped
 // subthemes, one with nothing set
 const THEMES = [
-  { id: 1, code: "6.1.", title: "Studijų kokybė", total_sum: "1000", subthemes: [
-    { id: 11, code: "6.1.1.", title: "Paskaitos", cap: "2.5" },
-    { id: 12, code: "6.1.2.", title: "Seminarai", cap: null },
+  { id: 1, code: "6.1.", title: "Studijų kokybė", total_sum: "1000", pointvalue: "25", subthemes: [
+    { id: 11, theme_id: 1, code: "6.1.1.", title: "Paskaitos", description: "Skaitytos paskaitos", cap: "2.5" },
+    { id: 12, theme_id: 1, code: "6.1.2.", title: "Seminarai", description: null, cap: null },
   ] },
-  { id: 2, code: "6.2.", title: "Mokslas", total_sum: null, subthemes: [] },
+  { id: 2, code: "6.2.", title: "Mokslas", total_sum: null, pointvalue: null, subthemes: [] },
 ];
 
 // The table row whose first cells name the theme / subtheme
@@ -88,7 +88,7 @@ test("loads the tree with X-Active-Role and renders both tables", async () => {
 test("saves a theme total: PATCH body, updated cell, reset draft, message", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/themes", THEMES);
-  onRequest("PATCH", "/api/themes/2/total-sum", { id: 2, total_sum: 12.5 });
+  onRequest("PATCH", "/api/themes/2/total-sum", { id: 2, code: "6.2.", title: "Mokslas", total_sum: "12.5" });
   const { user } = renderPage(LimitsPage);
   await screen.findByRole("heading", { name: "Temų bendros sumos" });
 
@@ -122,7 +122,7 @@ test("saves a theme total: PATCH body, updated cell, reset draft, message", asyn
 test("saves a subtheme cap: PATCH body and updated cell", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/themes", THEMES);
-  onRequest("PATCH", "/api/themes/subthemes/12/cap", { id: 12, cap: 3 });
+  onRequest("PATCH", "/api/themes/subthemes/12/cap", { id: 12, theme_id: 1, code: "6.1.2.", title: "Seminarai", description: null, cap: "3" });
   const { user } = renderPage(LimitsPage);
   await screen.findByRole("heading", { name: "Potemių limitai" });
 
@@ -239,7 +239,7 @@ test("a refused PATCH shows the backend's reason and keeps the old value", async
 
 test("a 200 whose body is not a list is refused with one message, not a blank page", async () => {
   signInAs("Komisijos narys");
-  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } });
+  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } }, { offContract: true });
   renderPage(LimitsPage);
 
   expect(await screen.findByText("Klaida: netikėtas serverio atsakymas.")).toHaveClass("form-status--error");

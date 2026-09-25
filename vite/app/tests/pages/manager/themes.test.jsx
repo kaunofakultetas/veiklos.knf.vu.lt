@@ -21,16 +21,20 @@ import { renderPage, signInAs } from "../../helpers/render.js";
 
 
 // Two themes: the first with three subthemes listed out of
-// code order (6.1.10. first), one of them described; the
-// second with none
+// code order (6.1.10. first), one of them described and
+// capped; the second with none
 const THEMES = [
-  { id: 1, code: "6.1.", title: "Studijų kokybė", subthemes: [
-    { id: 13, code: "6.1.10.", title: "Konsultacijos", description: null },
-    { id: 12, code: "6.1.2.", title: "Seminarai", description: "Seminarų vedimas" },
-    { id: 11, code: "6.1.1.", title: "Paskaitos", description: null },
+  { id: 1, code: "6.1.", title: "Studijų kokybė", total_sum: "1000", pointvalue: "2.5", subthemes: [
+    { id: 13, theme_id: 1, code: "6.1.10.", title: "Konsultacijos", description: null, cap: null },
+    { id: 12, theme_id: 1, code: "6.1.2.", title: "Seminarai", description: "Seminarų vedimas", cap: "60" },
+    { id: 11, theme_id: 1, code: "6.1.1.", title: "Paskaitos", description: null, cap: null },
   ] },
-  { id: 2, code: "6.2.", title: "Mokslas", subthemes: [] },
+  { id: 2, code: "6.2.", title: "Mokslas", total_sum: "0", pointvalue: "1", subthemes: [] },
 ];
+
+// The subtheme row a create answers with: the posted fields
+// under a fresh id and their parent, no cap yet
+const created = (id, themeId, body) => ({ id, theme_id: themeId, ...body, cap: null });
 
 const HEADER_ONLY = { "x-active-role": "Vadybininkas" };
 const WITH_BODY = { "x-active-role": "Vadybininkas", "content-type": "application/json" };
@@ -248,7 +252,7 @@ test("expand and collapse: per theme and all at once, subthemes in code order, (
 test("create theme: disabled until filled, POST { code, title }, reload, fields cleared, Tema sukurta.", async () => {
   const state = scriptTree();
   onRequest("POST", "/api/themes", (req) => {
-    state.tree = [...THEMES, { id: 3, code: req.body.code, title: req.body.title, subthemes: [] }];
+    state.tree = [...THEMES, { id: 3, code: req.body.code, title: req.body.title, total_sum: "0", pointvalue: "1", subthemes: [] }];
     return { id: 3, ...req.body };
   });
   const { user } = renderPage(ThemesPage);
@@ -295,8 +299,9 @@ test("create theme: disabled until filled, POST { code, title }, reload, fields 
 test("create subtheme: parent picked, POST { code, title, description: null }, reload with the parent expanded", async () => {
   const state = scriptTree();
   onRequest("POST", "/api/themes/2/subthemes", (req) => {
-    state.tree = [THEMES[0], { ...THEMES[1], subthemes: [{ id: 21, ...req.body }] }];
-    return { id: 21, ...req.body };
+    const row = created(21, 2, req.body);
+    state.tree = [THEMES[0], { ...THEMES[1], subthemes: [row] }];
+    return row;
   });
   const { user } = renderPage(ThemesPage);
   await loaded();
@@ -348,8 +353,9 @@ test("create subtheme: parent picked, POST { code, title, description: null }, r
 test("create subtheme under the seeded parent with a description", async () => {
   const state = scriptTree();
   onRequest("POST", "/api/themes/1/subthemes", (req) => {
-    state.tree = [{ ...THEMES[0], subthemes: [...THEMES[0].subthemes, { id: 14, ...req.body }] }, THEMES[1]];
-    return { id: 14, ...req.body };
+    const row = created(14, 1, req.body);
+    state.tree = [{ ...THEMES[0], subthemes: [...THEMES[0].subthemes, row] }, THEMES[1]];
+    return row;
   });
   const { user } = renderPage(ThemesPage);
   await loaded();
@@ -552,7 +558,8 @@ test("refused deletes show the backend's reason and reload nothing", async () =>
 
 test("a 200 whose body is not an array shows one message and keeps the page", async () => {
   signInAs("Vadybininkas");
-  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } });
+  // The wrong shape on purpose, so this entry is not guarded
+  onRequest("GET", "/api/themes", { status: 200, body: { ok: true } }, { offContract: true });
   renderPage(ThemesPage);
 
   expect(await screen.findByText("Klaida: netikėtas serverio atsakymas.")).toHaveClass("form-status");

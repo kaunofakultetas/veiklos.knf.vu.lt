@@ -46,6 +46,10 @@ const SUBTHEMES = [
   { theme_id: 3, theme_code: "6.3.", theme_title: "Sklaida", subtheme_id: 31, subtheme_code: "6.3.1.", subtheme_title: "Renginiai", total_score: "2", subtheme_cap: "0", theme_pointvalue: "1.5" },
 ];
 
+// Theme 1 as PATCH /api/themes/:id/pointvalue answers it once
+// "Skaičiuoti" saved 1000 / 30
+const THEME1_SAVED = { id: 1, code: "6.1.", title: "Studijų kokybė", total_sum: "1000", pointvalue: "33.33" };
+
 const ROLE = { "x-active-role": "Komisijos narys" };
 
 // The page with both mount requests scripted and answered
@@ -190,7 +194,7 @@ test("picking a theme fills the read-only sums; Skaičiuoti is enabled only for 
 // -----------------------------------------------------------
 
 test("Skaičiuoti PATCHes the rounded point value and shows it only after the save", async () => {
-  onRequest("PATCH", "/api/themes/1/pointvalue", { id: 1, pointvalue: 33.33 });
+  onRequest("PATCH", "/api/themes/1/pointvalue", THEME1_SAVED);
   const { user, container } = await renderLoaded();
   await user.selectOptions(themeSelect(), "1");
   expect(resultBox(container)).toHaveTextContent("—");
@@ -215,7 +219,7 @@ test("Skaičiuoti PATCHes the rounded point value and shows it only after the sa
 
 test("while the PATCH is pending the button reads Saugoma… and is disabled", async () => {
   let release;
-  onRequest("PATCH", "/api/themes/1/pointvalue", () => new Promise((resolve) => { release = () => resolve({ id: 1, pointvalue: 33.33 }); }));
+  onRequest("PATCH", "/api/themes/1/pointvalue", () => new Promise((resolve) => { release = () => resolve(THEME1_SAVED); }));
   const { user } = await renderLoaded();
   await user.selectOptions(themeSelect(), "1");
 
@@ -229,10 +233,12 @@ test("while the PATCH is pending the button reads Saugoma… and is disabled", a
 });
 
 test("a refused PATCH shows the backend's reason in the error box and leaves the result blank", async () => {
+  // The second attempt's body is deliberately not JSON, so the
+  // entry opts out of the contract guard
   let attempt = 0;
   onRequest("PATCH", "/api/themes/1/pointvalue", () => (++attempt === 1
     ? { status: 403, body: { error: "Neturite teisės keisti balo vertės" } }
-    : { status: 500, body: "boom" }));
+    : { status: 500, body: "boom" }), { offContract: true });
   const { user, container } = await renderLoaded();
   await user.selectOptions(themeSelect(), "1");
 
@@ -430,12 +436,14 @@ test("a refused subthemes load shows the backend's reason", async () => {
 test("a 200 whose body is not a list — any of the three — is refused with one message, not a blank page", async () => {
   signInAs("Komisijos narys");
   // `bad` names the mount list that answers { ok: true } this
-  // time; the other one is intact
+  // time; the other one is intact. Every entry here answers off
+  // the contract in one of the mounts, so all three opt out of
+  // the guard
   let bad = "";
   const listOr = (path, list) => () => (bad === path ? { status: 200, body: { ok: true } } : list);
-  onRequest("GET", "/api/activities/evaluated/theme-totals", listOr("/api/activities/evaluated/theme-totals", THEMES));
-  onRequest("GET", "/api/activities/evaluated/employees", listOr("/api/activities/evaluated/employees", EMPLOYEES));
-  onRequest("GET", "/api/activities/evaluated/employee/e1/subthemes", { status: 200, body: { ok: true } });
+  onRequest("GET", "/api/activities/evaluated/theme-totals", listOr("/api/activities/evaluated/theme-totals", THEMES), { offContract: true });
+  onRequest("GET", "/api/activities/evaluated/employees", listOr("/api/activities/evaluated/employees", EMPLOYEES), { offContract: true });
+  onRequest("GET", "/api/activities/evaluated/employee/e1/subthemes", { status: 200, body: { ok: true } }, { offContract: true });
 
   for (const path of ["/api/activities/evaluated/theme-totals", "/api/activities/evaluated/employees"]) {
     bad = path;
