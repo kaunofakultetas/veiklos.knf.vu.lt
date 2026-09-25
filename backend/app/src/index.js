@@ -42,6 +42,8 @@ import themesRouter from "./routes/themes.js";
 import activitiesRouter from "./routes/activities.js";
 import { createSamlSetup, SAML_BASE_PATH } from './utils/saml.js';
 import { createAccessLog } from './utils/accessLog.js';
+import { pool } from './db/pool.js';
+import { PgSessionStore } from './db/sessionStore.js';
 import createSamlRouter from './routes/saml.js';
 
 // Auth middleware
@@ -91,9 +93,11 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 // urlencoded parsing is for the SAML POST /assert callback;
 // the session cookie is the whole auth state (8 hours,
 // secure + httpOnly, sameSite lax so the IdP redirect back
-// still carries it)
+// still carries it), the session itself lives in Postgres
+// (db/sessionStore.js) so a restart signs nobody out
 app.use(express.urlencoded({ extended: false }));
 app.use(session({
+  store: new PgSessionStore({ pool }),
   secret: process.env.SESSION_SECRET ?? 'replace-me',
   resave: false,
   saveUninitialized: false,

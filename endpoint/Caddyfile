@@ -1,7 +1,4 @@
 :80 {
-    # Access log to the _LOGS/endpoint mount, with the query
-    # string cut off (it carries emails and SAML messages) and
-    # the session cookie dropped from both directions
     log {
         output file /var/log/caddy/access.log {
             roll_size 20MiB

@@ -21,10 +21,11 @@
 //  "Darbuotojas" on first sign-in. Users are keyed by VU's
 //  eID — a login without it is refused. Attributes are
 //  read through mapSamlAttributes, so VU SSO's OIDs (or their
-//  friendly names) both work. The login's SessionIndex and
-//  NameID are filed against the session
-//  (auth/samlSessionIndex.js) so an IdP-initiated logout —
-//  which arrives without the cookie — can still end it.
+//  friendly names) both work. The session stores the login's
+//  SessionIndex and NameID, and the session store can find a
+//  session by them (db/sessionStore.js), so an IdP-initiated
+//  logout — which arrives without the cookie — can still end
+//  it.
 //
 //  Used by:
 //    - the browser — App.jsx redirects to /login, VU SSO
@@ -36,8 +37,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { TBL_USERS, TBL_ROLES, TBL_USER_ROLES } from "../db/tables.js";
-import { enrichSpMetadata, logoutOctetString, logoutRequestTags, mapSamlAttributes } from "../utils/saml.js";
-import { rememberSamlSession, forgetSamlSession, samlSessionIdFor } from "../auth/samlSessionIndex.js";
+import { enrichSpMetadata, logoutOctetString, logoutRequestTags, mapSamlAttributes, sessionIndexOf } from "../utils/saml.js";
 
 
 
@@ -201,12 +201,14 @@ export default function createSamlRouter({ setup }) {
                     return res.status(500).send("Session save failed");
                 }
 
-                // nameID + sessionIndex are kept for single
-                // logout; the RAW attributes feed
-                // verifySamlSession, which maps them the same way
+                // nameID + sessionIndex (as one string) are kept
+                // for single logout — ours, and the IdP's, which
+                // finds this session by them; the RAW attributes
+                // feed verifySamlSession, which maps them the
+                // same way
                 req.session.samlUser = {
                     nameID:       extract.nameID,
-                    sessionIndex: extract.sessionIndex,
+                    sessionIndex: sessionIndexOf(extract.sessionIndex),
                     attributes,
                 };
 
@@ -215,14 +217,6 @@ export default function createSamlRouter({ setup }) {
                         console.error("Session save error:", err);
                         return res.status(500).send("Session save failed");
                     }
-                    // Filed under the NEW id for as long as the
-                    // cookie lives, so an IdP-initiated logout can
-                    // find this session without the cookie
-                    rememberSamlSession(
-                        { sessionIndex: extract.sessionIndex, nameID: extract.nameID },
-                        req.sessionID,
-                        req.session.cookie?.maxAge ?? undefined
-                    );
                     res.redirect("/");
                 });
             });
@@ -262,7 +256,6 @@ export default function createSamlRouter({ setup }) {
     // redirect to the IdP that would follow a form submission
     samlRouter.post("/logout", async (req, res) => {
         const samlUser = req.session?.samlUser;
-        if (samlUser) forgetSamlSession(samlUser);
         await endLocalSession(req, res);
 
         if (!samlUser) {
@@ -270,13 +263,12 @@ export default function createSamlRouter({ setup }) {
         }
 
         try {
-            const sessionIndex = samlUser.sessionIndex?.sessionIndex ?? samlUser.sessionIndex;
             // The template with SessionIndex (utils/saml.js) is
             // only used when a tag replacer is passed along
             const { context } = await spOf(req).createLogoutRequest(
                 idp,
                 "redirect",
-                { logoutNameID: samlUser.nameID, sessionIndex },
+                { logoutNameID: samlUser.nameID, sessionIndex: samlUser.sessionIndex },
                 "",
                 logoutRequestTags
             );
@@ -299,8 +291,8 @@ export default function createSamlRouter({ setup }) {
     //     sso.vu.lt, so the SameSite=Lax cookie is NOT sent and
     //     req.session is a blank. The login's own session is
     //     found by the request's SessionIndex / NameID in the
-    //     session index and ended through the store; then we
-    //     answer with a signed LogoutResponse (InResponseTo +
+    //     session store and ended there; then we answer with
+    //     a signed LogoutResponse (InResponseTo +
     //     the IdP's RelayState) — without it the IdP's logout
     //     chain stalls on us. A request that fails verification
     //     is refused and changes nothing, so a forged link
@@ -323,11 +315,10 @@ export default function createSamlRouter({ setup }) {
             }
 
             const ids = { sessionIndex: parsed.extract?.sessionIndex, nameID: parsed.extract?.nameID };
-            const sid = samlSessionIdFor(ids);
-            if (sid && req.sessionStore) {
+            const sids = req.sessionStore?.sidsForLogin ? await req.sessionStore.sidsForLogin(ids) : [];
+            for (const sid of sids) {
                 await new Promise((resolve) => req.sessionStore.destroy(sid, () => resolve()));
             }
-            forgetSamlSession(ids);
             await endLocalSession(req, res);
 
             try {

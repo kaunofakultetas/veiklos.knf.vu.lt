@@ -41,6 +41,7 @@ import {
   logoutOctetString,
   logoutRequestTags,
   LOGOUT_REQUEST_TEMPLATE,
+  sessionIndexOf,
 } from "../src/utils/saml.js";
 
 
@@ -856,4 +857,29 @@ test("logout request: SessionIndex is sent when the login had one, left out when
   assert.ok(!bare.includes("SessionIndex"));
   const parsedBare = await idp.parseLogoutRequest(sp, "redirect", redirectMessage(without.context));
   assert.equal(parsedBare.extract.nameID, "_nameid-1");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// sessionIndexOf
+// -----------------------------------------------------------
+//
+// One string out of every shape samlify uses for the login's
+// SessionIndex; null when there is none.
+// -----------------------------------------------------------
+
+test("sessionIndexOf: the extract object, a string, arrays; empties are null", () => {
+  assert.equal(sessionIndexOf({ sessionIndex: "_s1", authnContextClassRef: "urn:x" }), "_s1");
+  assert.equal(sessionIndexOf("_s1"), "_s1");
+  assert.equal(sessionIndexOf(["_s1", "_s2"]), "_s1");
+  assert.equal(sessionIndexOf([{ sessionIndex: "_s1" }]), "_s1");
+  assert.equal(sessionIndexOf({ sessionIndex: "" }), null);
+  assert.equal(sessionIndexOf(""), null);
+  assert.equal(sessionIndexOf(undefined), null);
+  assert.equal(sessionIndexOf(null), null);
 });

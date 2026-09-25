@@ -9,7 +9,7 @@
 //  parsers, so /logout/callback's two branches — the IdP's
 //  LogoutResponse and an IdP-initiated LogoutRequest — are
 //  pinned the same way, down to the raw octet string handed
-//  over for the signature check, and the session index that
+//  over for the signature check, and the store lookup that
 //  lets an IdP-initiated logout end a login without its
 //  cookie. A fake express-session (with a fake store) stands
 //  in for the cookie store; the pool is the usual fake.
@@ -21,7 +21,6 @@ import { once } from "node:events";
 import http from "node:http";
 import { resetDb, onQuery, queryLog } from "./helpers/db.js";
 import createSamlRouter from "../src/routes/saml.js";
-import { rememberSamlSession, samlSessionIdFor, resetSamlSessionIndex } from "../src/auth/samlSessionIndex.js";
 
 
 // What the fake SP "parses" out of the next POSTed assertion;
@@ -50,12 +49,21 @@ let lastSession = null;
 
 // The fake session store: every session id destroyed through
 // it, in order — the path an IdP-initiated logout takes when
-// no cookie came along
+// no cookie came along — and the login lookup, scripted per
+// test (loginSids) and recorded (lookups); a destroyed sid
+// drops out of loginSids like a deleted row would
 const fakeStore = {
   destroyed: [],
+  loginSids: [],
+  lookups: [],
   destroy(sid, cb) {
     this.destroyed.push(sid);
+    this.loginSids = this.loginSids.filter((s) => s !== sid);
     cb();
+  },
+  async sidsForLogin(ids) {
+    this.lookups.push(ids);
+    return this.loginSids.slice();
   },
 };
 
@@ -249,7 +257,8 @@ beforeEach(() => {
   lastLogoutRequestArgs = null;
   samlCalls.length = 0;
   fakeStore.destroyed.length = 0;
-  resetSamlSessionIndex();
+  fakeStore.loginSids = [];
+  fakeStore.lookups.length = 0;
   lastSession = null;
   askedOrigins.length = 0;
 });
@@ -295,7 +304,7 @@ function stubReturningUser() {
 test("assert: VU attributes → upsert by eID, session stored, redirect /", async () => {
   nextExtract = {
     audience: audienceOf(),    nameID: "transient-1",
-    sessionIndex: "sidx-1",
+    sessionIndex: { sessionIndex: "sidx-1", authnContextClassRef: "urn:oasis:names:tc:SAML:2.0:ac:classes:Password" },
     attributes: {
       eID: "112546",
       "urn:oid:0.9.2342.19200300.100.1.3": ["jonas.jonaitis@knf.vu.lt"],
@@ -321,9 +330,9 @@ test("assert: VU attributes → upsert by eID, session stored, redirect /", asyn
   assert.notEqual(lastSession.id, lastSession.regeneratedFrom.id);
   assert.equal(lastSession.regeneratedFrom.samlUser, undefined, "nothing was stored on the old session");
 
-  // the login is filed under both identifiers → the NEW session
-  assert.equal(samlSessionIdFor({ sessionIndex: "sidx-1" }), lastSession.id);
-  assert.equal(samlSessionIdFor({ nameID: "transient-1" }), lastSession.id);
+  // the SessionIndex is stored as one string — what the
+  // store searches by and our LogoutRequest sends
+  assert.equal(lastSession.samlUser.sessionIndex, "sidx-1");
 });
 
 
@@ -598,11 +607,6 @@ test("logout: POST answers the next URL — home without a session, the IdP with
   assert.equal(typeof lastLogoutRequestArgs.tagReplacement, "function");
   assert.equal(lastLogoutRequestArgs.relayState, "");
 
-  // the login's index entry goes with the session
-  rememberSamlSession({ sessionIndex: "idx-1", nameID: "name-1" }, "sid-old");
-  await post(true);
-  assert.equal(samlSessionIdFor({ sessionIndex: "idx-1", nameID: "name-1" }), null);
-
   // the IdP URL cannot be built: still signed out, home
   logoutRequestBuildFails = true;
   res = await post(true);
@@ -745,22 +749,22 @@ test("callback: IdP-initiated LogoutRequest ends the session and is answered at 
 // callback — IdP-initiated logout without the cookie
 // -----------------------------------------------------------
 //
-// The iframe case: the request carries no session, but its
-// SessionIndex names a filed login — that session is
-// destroyed through the store, the entry is forgotten, and
-// the IdP is answered. A repeat, or a request naming no filed
-// login, touches the store no further and is still answered.
+// The iframe case: the request carries no session, but the
+// store finds the login by the request's SessionIndex /
+// NameID — every session it names is destroyed there, and
+// the IdP is answered. A repeat, or a request naming no
+// known login, destroys nothing and is still answered.
 // -----------------------------------------------------------
 
-test("callback: cookie-less IdP-initiated logout ends the filed session through the store", async () => {
-  rememberSamlSession({ sessionIndex: "sidx-9", nameID: "nid-9" }, "sid-login");
+test("callback: cookie-less IdP-initiated logout ends the login's sessions through the store", async () => {
+  fakeStore.loginSids = ["sid-login", "sid-login-tab2"];
   nextLogoutRequest = { extract: { request: { id: "_idp-req-3" }, nameID: "nid-9", sessionIndex: "sidx-9" } };
 
   let res = await callback(`${RAW_REQUEST}&Signature=s`, false);
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("location"), "https://idp.test/slo?SAMLResponse=y&RelayState=RS-1");
-  assert.deepEqual(fakeStore.destroyed, ["sid-login"]);
-  assert.equal(samlSessionIdFor({ sessionIndex: "sidx-9", nameID: "nid-9" }), null);
+  assert.deepEqual(fakeStore.lookups, [{ sessionIndex: "sidx-9", nameID: "nid-9" }]);
+  assert.deepEqual(fakeStore.destroyed, ["sid-login", "sid-login-tab2"]);
   assert.equal(lastSession.destroyed, true, "the request's own blank session goes too");
 
   // a repeat, and a request for a login never filed
@@ -769,7 +773,8 @@ test("callback: cookie-less IdP-initiated logout ends the filed session through 
   nextLogoutRequest = { extract: { request: { id: "_idp-req-4" }, nameID: "nid-unknown", sessionIndex: "sidx-unknown" } };
   res = await callback(`${RAW_REQUEST}&Signature=s`, false);
   assert.equal(res.status, 302);
-  assert.deepEqual(fakeStore.destroyed, ["sid-login"]);
+  assert.deepEqual(fakeStore.destroyed, ["sid-login", "sid-login-tab2"]);
+  assert.equal(fakeStore.lookups.length, 3);
 });
 
 

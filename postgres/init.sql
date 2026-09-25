@@ -22,6 +22,20 @@ CREATE TABLE IF NOT EXISTS user_roles (
     PRIMARY KEY (user_eid, role_id)
 );
 
+-- Sessions (express-session through backend db/sessionStore.js):
+-- the serialized session (cookie + the SAML login) and when it
+-- ends; expired rows are ignored and swept by the backend. The
+-- two expression indexes serve single logout, which finds a
+-- login by the SessionIndex / NameID the IdP quotes
+CREATE TABLE IF NOT EXISTS session (
+    sid    VARCHAR PRIMARY KEY,
+    sess   JSONB NOT NULL,
+    expire TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS session_expire_idx ON session (expire);
+CREATE INDEX IF NOT EXISTS session_login_index_idx ON session ((sess->'samlUser'->>'sessionIndex'));
+CREATE INDEX IF NOT EXISTS session_login_nameid_idx ON session ((sess->'samlUser'->>'nameID'));
+
 -- Activity themes
 CREATE TABLE IF NOT EXISTS themes (
     id          SERIAL PRIMARY KEY,

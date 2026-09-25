@@ -462,6 +462,33 @@ export function logoutOctetString(req) {
 
 
 // -----------------------------------------------------------
+// sessionIndexOf
+// -----------------------------------------------------------
+//
+// The login's SessionIndex as one string, from whatever
+// samlify hands over: the login extract's object
+// { sessionIndex, authnContextClassRef }, a plain string, or
+// an array of either; null when there is none. What the
+// session stores, what our LogoutRequest sends, what the
+// store searches by.
+//
+// Used by:
+//   - routes/saml.js — POST /assert
+// -----------------------------------------------------------
+
+export function sessionIndexOf(value) {
+  const first = Array.isArray(value) ? value[0] : value;
+  const text = first && typeof first === "object" ? first.sessionIndex : first;
+  return typeof text === "string" && text ? text : null;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // logoutRequestTags
 // -----------------------------------------------------------
 //
