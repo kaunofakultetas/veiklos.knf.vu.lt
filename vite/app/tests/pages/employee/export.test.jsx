@@ -7,8 +7,10 @@
 //  rows with status pills and "(nėra)" for a missing score,
 //  the three multi-select filters narrow the rows (and the
 //  theme filter narrows the subtheme options and resets the
-//  subtheme picks), "Eksportuoti" hands the exact header row
-//  + filtered rows to aoa_to_sheet, appends the sheet as
+//  subtheme picks), a filter's trigger reports aria-expanded,
+//  its open menu is a group named after the filter and Escape
+//  closes it, "Eksportuoti" hands the exact header row +
+//  filtered rows to aoa_to_sheet, appends the sheet as
 //  "Veiklos" and writes a timestamped file, an empty result
 //  is refused with a message, and backend errors are shown
 //  verbatim.
@@ -235,6 +237,62 @@ test("the status filter offers the five statuses and empties the preview when no
   expect(filterTrigger("Būsena")).toHaveTextContent("TIKSLINTI");
   expect(screen.getByText("(Nėra atitinkančių veiklų.)")).toBeInTheDocument();
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// menu state
+// -----------------------------------------------------------
+//
+// A filter's trigger is a listbox popup button whose
+// aria-expanded follows the menu; the open menu is a group
+// named after the filter's label, its checkboxes named by
+// their option labels. Escape closes the menu from the
+// trigger or from a checkbox, keeps the picks and puts focus
+// back on the trigger; the trigger still toggles afterwards.
+// -----------------------------------------------------------
+
+test("the trigger reports aria-expanded and Escape closes the menu, keeping the picks", async () => {
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const trigger = filterTrigger("Tema");
+  expect(trigger).toHaveAttribute("aria-haspopup", "listbox");
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("group", { name: "Tema" })).not.toBeInTheDocument();
+
+  await user.click(trigger);
+  expect(trigger).toHaveAttribute("aria-expanded", "true");
+  const menu = screen.getByRole("group", { name: "Tema" });
+  expect(menu).toHaveClass("multi-select-menu");
+  expect(within(menu).getAllByRole("checkbox")).toHaveLength(2);
+  expect(screen.getByLabelText("1. — Studijos")).toHaveAttribute("type", "checkbox");
+
+  await user.keyboard("{Escape}");
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("group", { name: "Tema" })).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+
+  await user.click(trigger);
+  await user.click(within(filter("Tema")).getByRole("checkbox", { name: "1. — Studijos" }));
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("group", { name: "Tema" })).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+  expect(trigger).toHaveTextContent("1. — Studijos");
+  expect(screen.getAllByRole("row")).toHaveLength(3);
+
+  await user.click(trigger);
+  expect(trigger).toHaveAttribute("aria-expanded", "true");
+  expect(within(filter("Tema")).getByRole("checkbox", { name: "1. — Studijos" })).toBeChecked();
+  await user.click(trigger);
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("button", { name: "Eksportuoti" })).toBeEnabled();
+  expect(requestLog()).toHaveLength(2);
 });
 
 

@@ -4,7 +4,10 @@
 //  /committee/limits, two tables on one card: each theme's
 //  total sum (its money budget) and each subtheme's score
 //  cap. Every row has its own number input and save button;
-//  saves go one row at a time.
+//  saves go one row at a time. The inputs have no label of
+//  their own, so each is named for assistive tech by its
+//  column and row: "Nauja suma: 6.1.", "Naujas limitas:
+//  6.1.1.".
 //
 //  The inputs are "new value" fields seeded with 0, not with
 //  the current values — the current value sits in its own
@@ -291,6 +294,7 @@ export default function LimitsPage() {
                             <input
                               type="number"
                               min={0}
+                              aria-label={`Nauja suma: ${t.code}`}
                               value={themeTotals[t.id] ?? 0}
                               onChange={(e) =>
                                 handleThemeTotalChange(t.id, e.target.value)
@@ -352,6 +356,7 @@ export default function LimitsPage() {
                               <input
                                 type="number"
                                 min={0}
+                                aria-label={`Naujas limitas: ${s.code}`}
                                 value={caps[s.id] ?? 0}
                                 onChange={(e) =>
                                   handleCapChange(s.id, e.target.value)

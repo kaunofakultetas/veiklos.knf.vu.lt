@@ -70,6 +70,33 @@ export const SAML_BASE_PATH = "/auth/saml";
 
 
 // -----------------------------------------------------------
+// LOGOUT_REQUEST_TEMPLATE
+// -----------------------------------------------------------
+//
+// Our LogoutRequest with the SessionIndex element samlify's
+// stock template leaves out: the IdP is told which of the
+// user's sessions ends. Rendered through logoutRequestTags,
+// which drops the element when a login carried no index.
+//
+// Used by:
+//   - createSamlSetup (below) — the SP's logoutRequestTemplate
+// -----------------------------------------------------------
+
+export const LOGOUT_REQUEST_TEMPLATE =
+  '<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ' +
+  'ID="{ID}" Version="2.0" IssueInstant="{IssueInstant}" Destination="{Destination}">' +
+  "<saml:Issuer>{Issuer}</saml:Issuer>" +
+  '<saml:NameID Format="{NameIDFormat}">{NameID}</saml:NameID>' +
+  "<samlp:SessionIndex>{SessionIndex}</samlp:SessionIndex>" +
+  "</samlp:LogoutRequest>";
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // CLOCK_DRIFT_MS
 // -----------------------------------------------------------
 //
@@ -435,6 +462,36 @@ export function logoutOctetString(req) {
 
 
 // -----------------------------------------------------------
+// logoutRequestTags
+// -----------------------------------------------------------
+//
+// samlify's customTagReplacement for our LogoutRequest:
+// fills LOGOUT_REQUEST_TEMPLATE from the tags samlify
+// supplies (ID, Destination, Issuer, IssueInstant,
+// NameIDFormat, NameID, SessionIndex), first removing the
+// SessionIndex element when there is no index to send. Must
+// be passed to createLogoutRequest — without it samlify
+// ignores the template and uses its own.
+//
+// Used by:
+//   - routes/saml.js — POST /logout
+// -----------------------------------------------------------
+
+export function logoutRequestTags(template, tags) {
+  const context = typeof template === "string" ? template : template.context;
+  const xml = tags.SessionIndex
+    ? context
+    : context.replace("<samlp:SessionIndex>{SessionIndex}</samlp:SessionIndex>", "");
+  return { id: tags.ID, context: saml.SamlLib.replaceTagsByValue(xml, tags) };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // createSamlSetup
 // -----------------------------------------------------------
 //
@@ -524,6 +581,7 @@ export async function createSamlSetup() {
           Location: `${origin}${SAML_BASE_PATH}/logout/callback`,
         },
       ],
+      logoutRequestTemplate: { context: LOGOUT_REQUEST_TEMPLATE },
     });
     sps.set(origin, sp);
     return sp;

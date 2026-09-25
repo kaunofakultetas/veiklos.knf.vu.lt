@@ -8,8 +8,9 @@
 //  user / pill / dropdown rendering, assign and remove with
 //  their exact POST bodies and the "app:roles-updated" window
 //  event, the self-revoke confirm for a manager's own
-//  Vadybininkas role, and backend errors shown verbatim with
-//  the page's own fallbacks.
+//  Vadybininkas role, backend errors shown verbatim with the
+//  page's own fallbacks, and the email field and the role
+//  dropdown reachable by their labels.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -57,8 +58,9 @@ async function lookUp(user, email) {
 // -----------------------------------------------------------
 //
 // One GET /api/me with no headers; the heading and subtitle;
-// Įkelti stays disabled until something is typed and typing
-// alone sends nothing.
+// the email field reachable by its label; Įkelti stays
+// disabled until something is typed and typing alone sends
+// nothing.
 // -----------------------------------------------------------
 
 test("mounts with GET /api/me and no headers; Įkelti waits for an email", async () => {
@@ -75,6 +77,7 @@ test("mounts with GET /api/me and no headers; Įkelti waits for an email", async
 
   const button = screen.getByRole("button", { name: "Įkelti" });
   expect(button).toBeDisabled();
+  expect(screen.getByLabelText("Darbuotojo el.paštas")).toBe(screen.getByPlaceholderText("vardas.pavarde@knf.vu.lt"));
   await user.type(screen.getByPlaceholderText("vardas.pavarde@knf.vu.lt"), "j");
   expect(button).toBeEnabled();
   expect(screen.queryByText("Turimos rolės:")).not.toBeInTheDocument();
@@ -94,7 +97,8 @@ test("mounts with GET /api/me and no headers; Įkelti waits for an email", async
 // Įkelti GETs /api/user-roles?email=<encoded as typed> with
 // no headers and no body; the user's name and email, one pill
 // per owned role (Darbuotojas without a ✕), and the dropdown
-// of the roles not yet owned with the first preselected.
+// of the roles not yet owned — reachable by its label — with
+// the first preselected.
 // -----------------------------------------------------------
 
 test("Įkelti GETs /api/user-roles?email=<encoded> without headers and renders the user", async () => {
@@ -118,6 +122,7 @@ test("Įkelti GETs /api/user-roles?email=<encoded> without headers and renders t
   expect(within(pill("Vadybininkas")).getByTitle("Pašalinti")).toHaveTextContent("✕");
 
   expect(screen.getByText("Pridėti naują rolę:")).toBeInTheDocument();
+  expect(screen.getByLabelText("Pridėti naują rolę:")).toBe(screen.getByRole("combobox"));
   expect(optionValues()).toEqual(["Komisijos narys"]);
   expect(screen.getByRole("combobox").value).toBe("Komisijos narys");
   expect(screen.getByRole("button", { name: "Priskirti rolę" })).toBeEnabled();

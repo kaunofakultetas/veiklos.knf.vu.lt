@@ -9,11 +9,12 @@
 //  blob URL to a temporary link, delete and resubmit ask for
 //  confirmation and patch the list in place, the review modal
 //  shows the row's values and closes from the button or the
-//  backdrop, the edit mode PATCHes multipart with the codes
-//  before the file and refreshes the row and the modal, the
-//  client refuses an incomplete edit and an oversized pick
-//  without a request, and backend errors are shown behind
-//  the page's own prefixes.
+//  backdrop, the edit mode's inputs are named by their
+//  captions and PATCH multipart with the codes before the
+//  file, refreshing the row and the modal, the client refuses
+//  an incomplete edit and an oversized pick without a
+//  request, and backend errors are shown behind the page's
+//  own prefixes.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -577,6 +578,38 @@ test("an edit without a file keeps the current attachment: no attachment field, 
     ["subtheme_code", "1.1."],
   ]);
   expect(within(rowNamed("Kursas A1")).getByRole("button", { name: "ataskaita.pdf" })).toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// edit labels
+// -----------------------------------------------------------
+//
+// In edit mode the title input, the description textarea and
+// the file input are reachable by their captions ("Veiklos
+// pavadinimas", "Veiklos aprašymas", "Priedas") — divs linked
+// through aria-labelledby. The two picker captions are not
+// linked: AppSelect renders a button, and naming it is
+// AppSelect's own business.
+// -----------------------------------------------------------
+
+test("the edit form's title, description and file inputs are reachable by their captions", async () => {
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const m = await openModalFor(user, "Kursas A");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+
+  expect(within(m).getByLabelText("Veiklos pavadinimas")).toBe(m.querySelector("input.field-input"));
+  expect(within(m).getByLabelText("Veiklos pavadinimas")).toHaveValue("Kursas A");
+  expect(within(m).getByLabelText("Veiklos aprašymas")).toBe(m.querySelector("textarea"));
+  expect(within(m).getByLabelText("Priedas")).toBe(fileInput());
+  expect(requestLog()).toHaveLength(2);
 });
 
 

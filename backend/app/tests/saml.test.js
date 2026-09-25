@@ -39,6 +39,8 @@ import {
   enrichSpMetadata,
   createSamlSetup,
   logoutOctetString,
+  logoutRequestTags,
+  LOGOUT_REQUEST_TEMPLATE,
 } from "../src/utils/saml.js";
 
 
@@ -810,4 +812,48 @@ test("IdP-initiated logout: the request verifies, a stranger's does not, our sig
 
   const { extract } = await idp.parseLogoutResponse(sp, "redirect", redirectMessage(answer.context));
   assert.equal(extract.response.inResponseTo, parsed.extract.request.id);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// our LogoutRequest — SessionIndex
+// -----------------------------------------------------------
+//
+// With the tag replacer the request is rendered from
+// LOGOUT_REQUEST_TEMPLATE: the login's SessionIndex travels
+// as its own element and the IdP reads it back; a login that
+// carried none gets no element at all. Both forms still
+// verify at the IdP, so the signature covers the rendered
+// XML.
+// -----------------------------------------------------------
+
+test("logout request: SessionIndex is sent when the login had one, left out when not", async () => {
+  const { idp } = fakeIdp({ encrypted: true });
+  process.env.IDP_METADATA = FAKE_IDP_FILE;
+  const setup = await createSamlSetup();
+  const sp = setup.spFor("https://veiklos.knf.vu.lt");
+  assert.ok(LOGOUT_REQUEST_TEMPLATE.includes("<samlp:SessionIndex>{SessionIndex}</samlp:SessionIndex>"));
+
+  const withIndex = await sp.createLogoutRequest(
+    setup.idp, "redirect", { logoutNameID: "_nameid-1", sessionIndex: "_session-1" }, "", logoutRequestTags
+  );
+  const xml = zlib.inflateRawSync(Buffer.from(new URL(withIndex.context).searchParams.get("SAMLRequest"), "base64")).toString();
+  assert.ok(xml.includes("<samlp:SessionIndex>_session-1</samlp:SessionIndex>"));
+  assert.ok(xml.includes('<saml:NameID Format="urn:oasis:names:tc:SAML:2.0:nameid-format:transient">_nameid-1</saml:NameID>'));
+  const parsed = await idp.parseLogoutRequest(sp, "redirect", redirectMessage(withIndex.context));
+  assert.equal(parsed.extract.sessionIndex, "_session-1");
+  assert.equal(parsed.extract.nameID, "_nameid-1");
+
+  const without = await sp.createLogoutRequest(
+    setup.idp, "redirect", { logoutNameID: "_nameid-1" }, "", logoutRequestTags
+  );
+  const bare = zlib.inflateRawSync(Buffer.from(new URL(without.context).searchParams.get("SAMLRequest"), "base64")).toString();
+  assert.ok(!bare.includes("SessionIndex"));
+  const parsedBare = await idp.parseLogoutRequest(sp, "redirect", redirectMessage(without.context));
+  assert.equal(parsedBare.extract.nameID, "_nameid-1");
 });

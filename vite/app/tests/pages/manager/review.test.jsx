@@ -11,8 +11,9 @@
 //  the row, one still PATEIKTA patches it in place. The
 //  review modal shows the activity read-only, saves theme /
 //  subtheme / manager comments with numeric ids, downloads
-//  the attachment with the header, and every refused request
-//  surfaces as "Klaida: <reason>".
+//  the attachment with the header, every refused request
+//  surfaces as "Klaida: <reason>", and each comment textarea
+//  is reachable by its label.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -235,10 +236,11 @@ test("a PATCH answered with status PATEIKTA replaces the row instead of removing
 // -----------------------------------------------------------
 //
 // Atmesti opens the modal seeded with the activity's earlier
-// rejection_comment; an empty or blank comment is refused
-// with the message and no request; a comment PATCHes
-// { action: "deny", rejection_comment }; ATMESTA drops the
-// row and closes the modal.
+// rejection_comment in a textarea reachable by its label; an
+// empty or blank comment is refused with the message and no
+// request; a comment PATCHes { action: "deny",
+// rejection_comment }; ATMESTA drops the row and closes the
+// modal.
 // -----------------------------------------------------------
 
 test("deny: the modal, an empty comment refused without a request, PATCH { action: 'deny', rejection_comment }, the row leaves", async () => {
@@ -253,6 +255,7 @@ test("deny: the modal, an empty comment refused without a request, PATCH { actio
   expect(within(m).getByText("Konferencijos pranešimas")).toBeInTheDocument();
   expect(within(m).getByText("Atmetimo komentaras")).toBeInTheDocument();
   const comment = within(m).getByPlaceholderText("Paaiškinkite, kodėl veikla atmetama");
+  expect(within(m).getByLabelText("Atmetimo komentaras")).toBe(comment);
   expect(comment.value).toBe("Ankstesnis atmetimas");
 
   await user.clear(comment);
@@ -301,6 +304,7 @@ test("return: the modal, Atšaukti, an empty comment refused, PATCH { action: 'r
   await user.click(within(rowNamed("Konferencijos pranešimas")).getByRole("button", { name: "Grąžinti" }));
   let m = modal("Grąžinti veiklą tikslinimui");
   expect(within(m).getByText("Tikslinimo komentaras")).toBeInTheDocument();
+  expect(within(m).getByLabelText("Tikslinimo komentaras")).toBe(within(m).getByPlaceholderText("Paaiškinkite, ką reikia patikslinti"));
   expect(within(m).getByPlaceholderText("Paaiškinkite, ką reikia patikslinti").value).toBe("");
   await user.click(within(m).getByRole("button", { name: "Atšaukti" }));
   expect(screen.queryByRole("heading", { name: "Grąžinti veiklą tikslinimui" })).not.toBeInTheDocument();
@@ -374,8 +378,8 @@ test("a refused verdict shows Klaida: <reason>, keeps the row and keeps the comm
 // Sukurta line, "code — title" pairs as text, title,
 // description or "(nenurodyta)", status pill, the attachment
 // button named after the file or "(nėra priedo)", a readOnly
-// comments textarea; Išsaugoti is disabled until Redaguoti;
-// Uždaryti closes.
+// comments textarea reachable by its label; Išsaugoti is
+// disabled until Redaguoti; Uždaryti closes.
 // -----------------------------------------------------------
 
 test("review modal: the activity read-only, Išsaugoti disabled, Uždaryti closes", async () => {
@@ -394,6 +398,7 @@ test("review modal: the activity read-only, Išsaugoti disabled, Uždaryti close
   expect(within(m).getByText("PATEIKTA")).toHaveClass("status-pill--submitted");
   expect(within(m).getByRole("button", { name: "ataskaita.pdf" })).toBeEnabled();
   expect(within(m).getByText("Vadybininkės komentarai")).toBeInTheDocument();
+  expect(within(m).getByLabelText("Vadybininkės komentarai")).toBe(within(m).getByRole("textbox"));
   expect(within(m).getByRole("textbox")).toHaveAttribute("readonly");
   expect(within(m).getByRole("textbox").value).toBe("");
   expect(within(m).queryByRole("button", { name: /Pasirinkite/ })).not.toBeInTheDocument();

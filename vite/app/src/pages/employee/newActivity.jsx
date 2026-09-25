@@ -16,6 +16,7 @@
 //
 //    codeToNums       — "1.2.3" → [1,2,3]
 //    compareCodes     — numeric-aware code ordering
+//    sortedSubthemes  — a theme's subthemes in code order
 //    getActiveRole    — activeRole from localStorage
 //    NewActivityPage  — the form (default export)
 // -----------------------------------------------------------
@@ -62,7 +63,7 @@ function codeToNums(code) {
 // localeCompare.
 //
 // Used by:
-//   - NewActivityPage (below) — subtheme dropdown ordering
+//   - sortedSubthemes (below)
 // -----------------------------------------------------------
 
 function compareCodes(a, b) {
@@ -76,6 +77,30 @@ function compareCodes(a, b) {
     if (av !== bv) return av - bv;
   }
   return String(a).localeCompare(String(b));
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// sortedSubthemes
+// -----------------------------------------------------------
+//
+// A theme's subthemes as a new array in code order — the tree
+// itself keeps the API's order. Every reader of a theme's
+// subthemes goes through here, so the dropdown, the preselect
+// on mount and the preselect on a theme pick agree on which
+// subtheme is "first"; a missing theme yields [].
+//
+// Used by:
+//   - NewActivityPage (below) — dropdown and both preselects
+// -----------------------------------------------------------
+
+function sortedSubthemes(theme) {
+  return [...(theme?.subthemes || [])].sort((a, b) => compareCodes(a.code, b.code));
 }
 
 
@@ -111,8 +136,9 @@ function getActiveRole() {
 // -----------------------------------------------------------
 //
 // Loads the theme tree once on mount and preselects the first
-// theme + its first subtheme. Title and description are
-// required in the UI (the backend only requires the title).
+// theme + its first subtheme in code order. Title and
+// description are required in the UI (the backend only
+// requires the title).
 //
 // Used by:
 //   - App.jsx — route /employee/new
@@ -139,7 +165,8 @@ export default function NewActivityPage() {
 
 
   // Load the theme tree once; preselect the first theme and
-  // its first subtheme so the form starts valid
+  // its first subtheme in code order — the same pick a theme
+  // switch makes — so the form starts valid
   useEffect(() => {
     const loadThemes = async () => {
       setLoadingThemes(true);
@@ -161,7 +188,7 @@ export default function NewActivityPage() {
         setThemes(data);
         if (data.length > 0) {
           setSelectedThemeId(String(data[0].id));
-          const firstSub = data[0].subthemes?.[0];
+          const firstSub = sortedSubthemes(data[0])[0];
           if (firstSub) setSelectedSubthemeId(String(firstSub.id));
         }
       } catch (e) {
@@ -175,9 +202,7 @@ export default function NewActivityPage() {
 
 
   const currentTheme = themes.find((t) => String(t.id) === selectedThemeId);
-  const subthemes = [...(currentTheme?.subthemes || [])].sort((a, b) =>
-    compareCodes(a.code, b.code)
-  );
+  const subthemes = sortedSubthemes(currentTheme);
   const currentSubtheme = subthemes.find((s) => String(s.id) === selectedSubthemeId);
 
 
@@ -267,7 +292,10 @@ export default function NewActivityPage() {
             <form onSubmit={onSubmit} className="employee-form">
 
               {/* Theme picker — changing it re-sorts and
-                  preselects the new theme's first subtheme */}
+                  preselects the new theme's first subtheme.
+                  Neither picker label is linked with htmlFor:
+                  AppSelect renders a button, not a native
+                  control, and wiring that up is its job */}
               <div className="field">
                 <label className="field-label">
                   Pasirinkite temą <span className="required-mark">*</span>
@@ -282,10 +310,7 @@ export default function NewActivityPage() {
                       const t = themes.find(
                         (theme) => String(theme.id) === String(val)
                       );
-                      const sorted = [...(t?.subthemes || [])].sort((a, b) =>
-                        compareCodes(a.code, b.code)
-                      );
-                      const firstSub = sorted[0];
+                      const firstSub = sortedSubthemes(t)[0];
                       setSelectedSubthemeId(firstSub ? String(firstSub.id) : "");
                     }}
                     options={themes}
@@ -331,11 +356,12 @@ export default function NewActivityPage() {
 
               {/* Activity title */}
               <div className="field">
-                <label className="field-label">
-                  Registuojamos veiklos pavadinimas{" "}
+                <label className="field-label" htmlFor="new-activity-title">
+                  Registruojamos veiklos pavadinimas{" "}
                   <span className="required-mark">*</span>
                 </label>
                 <input
+                  id="new-activity-title"
                   className="field-input"
                   type="text"
                   value={activityName}
@@ -346,11 +372,12 @@ export default function NewActivityPage() {
 
               {/* Activity description */}
               <div className="field">
-                <label className="field-label">
-                  Registuojamos veiklos aprašymas{" "}
+                <label className="field-label" htmlFor="new-activity-description">
+                  Registruojamos veiklos aprašymas{" "}
                   <span className="required-mark">*</span>
                 </label>
                 <textarea
+                  id="new-activity-description"
                   className="field-textarea"
                   value={activityDescription}
                   onChange={(e) => setActivityDescription(e.target.value)}
@@ -360,10 +387,11 @@ export default function NewActivityPage() {
 
               {/* Optional attachment */}
               <div className="field">
-                <label className="field-label">
+                <label className="field-label" htmlFor="new-activity-attachment">
                   Pridėkite failą (jei reikia)
                 </label>
                 <input
+                  id="new-activity-attachment"
                   key={fileInputKey}
                   type="file"
                   accept={ATTACHMENT_ACCEPT}

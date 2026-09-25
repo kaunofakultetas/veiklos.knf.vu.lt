@@ -323,9 +323,9 @@ function ActivityDetails({ act, downloading, onDownload }) {
 // hands { action: "score", … } to onScore, which resolves
 // with the updated activity or throws (the page has already
 // shown the error). Scoring always leaves PATVIRTINTA, so a
-// successful save closes the modal. Status text goes up
-// through onMessage — including the shipped truncated
-// "Veiklos vykdytojų kiekis" for an empty count.
+// successful save closes the modal. Status text — the
+// validation refusals and the saved confirmation — goes up
+// through onMessage.
 //
 // Used by:
 //   - EvaluatePage (below) — while an activity is selected
@@ -372,7 +372,7 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
     }
 
     if (!peopleNum.trim()) {
-      onMessage("Veiklos vykdytojų kiekis");
+      onMessage("Klaida: Įveskite veiklos vykdytojų kiekį.");
       return;
     }
 
@@ -436,12 +436,19 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
           />
 
           {/* Committee comments — writable only in scoring
-              mode */}
+              mode. The label is forced block: a <label> is
+              inline and .employee-modal-label sets no display,
+              so the control would otherwise sit beside it */}
           <div className="employee-modal-field">
-            <div className="employee-modal-label">
+            <label
+              className="employee-modal-label"
+              htmlFor="evaluate-committee-comments"
+              style={{ display: "block" }}
+            >
               Komisijos nario komentarai
-            </div>
+            </label>
             <textarea
+              id="evaluate-committee-comments"
               className="field-textarea"
               value={editCommitteeComments}
               onChange={(e) =>
@@ -454,10 +461,15 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
           {/* People count → live 1/n score preview */}
           {editingScore && (
             <div className="employee-modal-field">
-              <div className="employee-modal-label">
+              <label
+                className="employee-modal-label"
+                htmlFor="evaluate-people-num"
+                style={{ display: "block" }}
+              >
                 Veiklos vykdytojų kiekis
-              </div>
+              </label>
               <input
+                id="evaluate-people-num"
                 className="field-input"
                 type="number"
                 min="0"
@@ -625,7 +637,7 @@ export default function EvaluatePage() {
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (e) {
-      setMsg(`Nepavyko atsisiųsti priedo: ${e.message}`);
+      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${e.message}`);
     } finally {
       setDownloadingId(null);
     }

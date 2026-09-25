@@ -9,9 +9,11 @@
 //  "return" }, scoring derives 1/n from the people count,
 //  refuses an empty or negative count without a request,
 //  PATCHes { action: "score", … } and closes the modal only
-//  when the status left PATVIRTINTA, backend errors are shown
-//  as "Klaida: …", and the attachment travels through fetch
-//  with the header.
+//  when the status left PATVIRTINTA, backend errors — a
+//  refused download included — are shown as "Klaida: …", the
+//  attachment travels through fetch with the header, and the
+//  modal's comments box and people count answer to their
+//  labels.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -169,9 +171,9 @@ test("a failed load shows the backend's error verbatim", async () => {
 //
 // "Peržiūrėti" opens the read-only review: meta line, the
 // theme pair, description, pill, attachment button, manager
-// comments, a read-only comments box and "(nėra)" for the
-// missing score; the placeholders for a bare row; "Uždaryti"
-// closes it.
+// comments, a read-only comments box (found by its label)
+// and "(nėra)" for the missing score; the placeholders for a
+// bare row; "Uždaryti" closes it.
 // -----------------------------------------------------------
 
 test("Peržiūrėti opens the read-only modal; placeholders for missing fields; Uždaryti closes", async () => {
@@ -193,6 +195,7 @@ test("Peržiūrėti opens the read-only modal; placeholders for missing fields; 
   expect(within(m).getByText("Tinka")).toBeInTheDocument();
   expect(within(m).getByRole("textbox")).toHaveAttribute("readonly");
   expect(within(m).getByRole("textbox")).toHaveValue("");
+  expect(within(m).getByLabelText("Komisijos nario komentarai")).toBe(within(m).getByRole("textbox"));
   expect(within(m).getAllByText("(nėra)")).toHaveLength(1);
   expect(within(m).queryByRole("spinbutton")).not.toBeInTheDocument();
   expect(within(m).getByRole("button", { name: "Uždaryti" })).toBeInTheDocument();
@@ -276,8 +279,8 @@ test("a cancelled confirm sends nothing and keeps the row", async () => {
 // -----------------------------------------------------------
 //
 // "Įvertinti" unlocks the comments box and adds the people
-// count; the read-only score previews 1/n to two decimals
-// (0 people → 0) without any request.
+// count (found by its label); the read-only score previews
+// 1/n to two decimals (0 people → 0) without any request.
 // -----------------------------------------------------------
 
 test("Įvertinti arms scoring: writable comments, people count, score = 1/n preview", async () => {
@@ -290,6 +293,7 @@ test("Įvertinti arms scoring: writable comments, people count, score = 1/n prev
   expect(within(m).getAllByText("Veiklos vykdytojų kiekis")).toHaveLength(1);
 
   const [people, score] = within(m).getAllByRole("spinbutton");
+  expect(within(m).getByLabelText("Veiklos vykdytojų kiekis")).toBe(people);
   expect(people).toHaveValue(null);
   expect(score).toHaveAttribute("readonly");
 
@@ -318,9 +322,9 @@ test("Įvertinti arms scoring: writable comments, people count, score = 1/n prev
 // validation
 // -----------------------------------------------------------
 //
-// An empty count is refused with the shipped truncated line
-// (the same words as the field's label), a negative one with
-// the full sentence; no PATCH leaves the page.
+// An empty count is refused with "Klaida: Įveskite veiklos
+// vykdytojų kiekį.", a negative one with "… turi būti 0 arba
+// teigiamas skaičius."; no PATCH leaves the page.
 // -----------------------------------------------------------
 
 test("empty and negative people counts are refused without a request", async () => {
@@ -328,8 +332,7 @@ test("empty and negative people counts are refused without a request", async () 
   const m = modal();
 
   await user.click(within(m).getByRole("button", { name: "Išsaugoti įvertinimą" }));
-  await waitFor(() => expect(screen.getAllByText("Veiklos vykdytojų kiekis")).toHaveLength(2));
-  expect(screen.getAllByText("Veiklos vykdytojų kiekis").some((el) => el.classList.contains("form-status--error"))).toBe(true);
+  expect(await screen.findByText("Klaida: Įveskite veiklos vykdytojų kiekį.")).toHaveClass("form-status--error");
 
   const [people] = within(m).getAllByRole("spinbutton");
   await user.type(people, "-2");
@@ -453,8 +456,8 @@ test("a refused return shows Klaida: and keeps the row", async () => {
 // with the header only; the file comes back as a text body
 // (jsdom's Blob cannot feed a Response) and jsdom has no
 // object URLs, so the blob URL pair and the anchor click are
-// stubbed. A refused download is reported without the
-// "Klaida: " prefix.
+// stubbed. A refused download is reported with the "Klaida: "
+// prefix, like every other error on the page.
 // -----------------------------------------------------------
 
 test("the attachment button fetches the file with X-Active-Role", async () => {
@@ -478,7 +481,7 @@ test("the attachment button fetches the file with X-Active-Role", async () => {
   expect(screen.queryByText(/Nepavyko atsisiųsti priedo/)).not.toBeInTheDocument();
 });
 
-test("a refused download is reported without the Klaida: prefix", async () => {
+test("a refused download is reported with the Klaida: prefix", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/activities/committee", QUEUE);
   onRequest("GET", "/api/activities/1/attachment", { status: 404, body: { error: "Priedas nerastas" } });
@@ -488,7 +491,7 @@ test("a refused download is reported without the Klaida: prefix", async () => {
   await user.click(within(rowNamed("Seminaras apie X")).getByRole("button", { name: "Peržiūrėti" }));
   await user.click(within(modal()).getByRole("button", { name: "ataskaita.pdf" }));
 
-  expect(await screen.findByText("Nepavyko atsisiųsti priedo: Priedas nerastas")).toHaveClass("form-status--error");
+  expect(await screen.findByText("Klaida: Nepavyko atsisiųsti priedo: Priedas nerastas")).toHaveClass("form-status--error");
   await waitFor(() => expect(within(modal()).getByRole("button", { name: "ataskaita.pdf" })).toBeEnabled());
   expect(requestsTo("GET", "/api/activities/1/attachment")).toHaveLength(1);
 });

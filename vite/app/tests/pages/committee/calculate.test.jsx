@@ -7,9 +7,11 @@
 //  sums, the "Skaičiuoti" disabled rules, the PATCH with the
 //  rounded point value and the result box that fills only
 //  after a save, the employee picker (search, no-match text,
-//  label fallbacks) → the subthemes GET, the results table
-//  math (score × point, caps, "—" rows, "Iš viso"), and the
-//  empty states and error messages verbatim.
+//  label fallbacks, the search box named by aria-label) → the
+//  subthemes GET, the results table math (score × point,
+//  caps, "—" rows, "Iš viso"), the empty states and error
+//  messages verbatim, and the status box: plain form-status
+//  for the saved confirmation, form-status--error for errors.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -179,11 +181,12 @@ test("picking a theme fills the read-only sums; Skaičiuoti is enabled only for 
 // -----------------------------------------------------------
 //
 // "Skaičiuoti" PATCHes { pointvalue } rounded to two decimals
-// with both headers, confirms, and only then fills the
-// "1 balo vertė:" box; picking another theme blanks it again.
-// While the PATCH is pending the button reads "Saugoma…"
-// and is disabled. A refused PATCH shows the backend's
-// reason (or "status statusText" without a JSON body).
+// with both headers, confirms in the plain form-status box,
+// and only then fills the "1 balo vertė:" box; picking
+// another theme blanks it again. While the PATCH is pending
+// the button reads "Saugoma…" and is disabled. A refused
+// PATCH shows the backend's reason (or "status statusText"
+// without a JSON body) in the form-status--error box.
 // -----------------------------------------------------------
 
 test("Skaičiuoti PATCHes the rounded point value and shows it only after the save", async () => {
@@ -193,7 +196,9 @@ test("Skaičiuoti PATCHes the rounded point value and shows it only after the sa
   expect(resultBox(container)).toHaveTextContent("—");
 
   await user.click(calcButton());
-  await screen.findByText("1 balo vertė išsaugota.");
+  const saved = await screen.findByText("1 balo vertė išsaugota.");
+  expect(saved).toHaveClass("form-status");
+  expect(saved).not.toHaveClass("form-status--error");
   const [patch] = requestsTo("PATCH", "/api/themes/1/pointvalue");
   expect(patch.headers).toEqual({ ...ROLE, "content-type": "application/json" });
   expect(patch.body).toEqual({ pointvalue: 33.33 });
@@ -223,7 +228,7 @@ test("while the PATCH is pending the button reads Saugoma… and is disabled", a
   expect(screen.getByRole("button", { name: "Skaičiuoti" })).toBeEnabled();
 });
 
-test("a refused PATCH shows the backend's reason and leaves the box blank", async () => {
+test("a refused PATCH shows the backend's reason in the error box and leaves the result blank", async () => {
   let attempt = 0;
   onRequest("PATCH", "/api/themes/1/pointvalue", () => (++attempt === 1
     ? { status: 403, body: { error: "Neturite teisės keisti balo vertės" } }
@@ -232,12 +237,12 @@ test("a refused PATCH shows the backend's reason and leaves the box blank", asyn
   await user.selectOptions(themeSelect(), "1");
 
   await user.click(calcButton());
-  expect(await screen.findByText("Neturite teisės keisti balo vertės")).toHaveClass("form-status");
+  expect(await screen.findByText("Neturite teisės keisti balo vertės")).toHaveClass("form-status", "form-status--error");
   expect(resultBox(container)).toHaveTextContent("—");
   expect(calcButton()).toBeEnabled();
 
   await user.click(calcButton());
-  expect(await screen.findByText("500")).toHaveClass("form-status");
+  expect(await screen.findByText("500")).toHaveClass("form-status", "form-status--error");
   expect(resultBox(container)).toHaveTextContent("—");
   expect(requestsTo("PATCH", "/api/themes/1/pointvalue")).toHaveLength(2);
 });
@@ -304,8 +309,9 @@ test("empty answers show the two empty states without an error", async () => {
 // employee picker
 // -----------------------------------------------------------
 //
-// The trigger opens the list with the search box; labels
-// fall back full_name → email → eid; the search filters
+// The trigger opens the list with the search box (named
+// "Ieškoti darbuotojo" through aria-label); labels fall back
+// full_name → email → eid; the search filters
 // case-insensitively and reports no match; a pick closes
 // the list, clears the search, shows the label and GETs the
 // employee's subthemes with the header.
@@ -318,6 +324,7 @@ test("the picker: labels, search, no-match text; a pick GETs the subthemes and s
 
   await user.click(pickerTrigger());
   const search = screen.getByPlaceholderText("Ieškoti darbuotojo...");
+  expect(screen.getByLabelText("Ieškoti darbuotojo")).toBe(search);
   expect(pickerOptions(container)).toEqual(["Ona Onaitė", "petras@vu.lt", "e3"]);
 
   await user.type(search, "PET");

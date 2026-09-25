@@ -4,11 +4,12 @@
 //  The limits page against the scripted fetch: the theme
 //  tree is loaded with the committee's X-Active-Role, both
 //  tables render current values (two decimals, "—" for
-//  none), a theme total and a subtheme cap are saved with the
-//  exact PATCH bodies, the row updates and the draft resets,
-//  the client-side validation refuses empty and negative
-//  input without a request, and backend errors are shown as
-//  sent.
+//  none) with every draft input named by column and row
+//  ("Nauja suma: 6.1.", "Naujas limitas: 6.1.1."), a theme
+//  total and a subtheme cap are saved with the exact PATCH
+//  bodies, the row updates and the draft resets, the
+//  client-side validation refuses empty and negative input
+//  without a request, and backend errors are shown as sent.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -43,7 +44,8 @@ const rowNamed = (text) => screen.getAllByRole("row").find((r) => within(r).quer
 //
 // One GET with the header; the theme table shows totals to
 // two decimals and "—" for null; the subtheme table shows
-// "code — title" pairs and caps the same way.
+// "code — title" pairs and caps the same way. Every draft
+// input is named by its column and the row's code.
 // -----------------------------------------------------------
 
 test("loads the tree with X-Active-Role and renders both tables", async () => {
@@ -64,6 +66,8 @@ test("loads the tree with X-Active-Role and renders both tables", async () => {
   expect(within(sub1).getByText("2.50")).toBeInTheDocument();
   expect(within(rowNamed("6.1.2. — Seminarai")).getByText("—")).toBeInTheDocument();
   expect(screen.getAllByRole("spinbutton").map((i) => i.value)).toEqual(["0", "0", "0", "0"]);
+  expect(screen.getByRole("spinbutton", { name: "Nauja suma: 6.1." })).toBe(within(theme1).getByRole("spinbutton"));
+  expect(screen.getByRole("spinbutton", { name: "Naujas limitas: 6.1.1." })).toBe(within(sub1).getByRole("spinbutton"));
 });
 
 
@@ -89,7 +93,7 @@ test("saves a theme total: PATCH body, updated cell, reset draft, message", asyn
   await screen.findByRole("heading", { name: "Temų bendros sumos" });
 
   const row = rowNamed("Mokslas");
-  const input = within(row).getByRole("spinbutton");
+  const input = within(row).getByRole("spinbutton", { name: "Nauja suma: 6.2." });
   await user.clear(input);
   await user.type(input, "12.5");
   await user.click(within(row).getByRole("button", { name: "Išsaugoti" }));
@@ -123,7 +127,7 @@ test("saves a subtheme cap: PATCH body and updated cell", async () => {
   await screen.findByRole("heading", { name: "Potemių limitai" });
 
   const row = rowNamed("6.1.2. — Seminarai");
-  const input = within(row).getByRole("spinbutton");
+  const input = within(row).getByRole("spinbutton", { name: "Naujas limitas: 6.1.2." });
   await user.clear(input);
   await user.type(input, "3");
   await user.click(within(row).getByRole("button", { name: "Išsaugoti" }));

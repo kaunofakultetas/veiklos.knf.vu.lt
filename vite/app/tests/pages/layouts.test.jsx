@@ -145,7 +145,7 @@ test("ManagerPage at /manager: heading, four bullets, the mailto link; a nav cli
   expect(screen.getByRole("heading", { level: 2, name: "Šiame darbalaukyje galėsite:" })).toBeInTheDocument();
   expect(bullets()).toEqual([
     "Pridėti arba pašalinti darbuotojo teises prie sistemos.",
-    "Peržiūrėti ir patvirtinti arba atmesti darbuotojų užregistruotas.",
+    "Peržiūrėti ir patvirtinti arba atmesti darbuotojų užregistruotas veiklas.",
     "Filtruoti darbuotojų veiklas ir eksportuoti jas į Excel dokumentą.",
     "Sukurti arba pašalinti naujas temas ir potemes.",
   ]);
@@ -190,8 +190,8 @@ test("CommitteePage at /committee: heading, four bullets, the mailto link", asyn
   expect(screen.getByRole("heading", { level: 1, name: "Komisijos nario langas" })).toHaveClass("page-title");
   expect(screen.getByRole("heading", { level: 2, name: "Šiame darbalaukyje galėsite:" })).toBeInTheDocument();
   expect(bullets()).toEqual([
-    "Įvertinti veiklas, kurios buvo patvirtinos vadybininko.",
-    "Peržiūrėti įvertintas veiklas ir pakoreguoti įvertinimą esant reikiamybei.",
+    "Įvertinti veiklas, kurios buvo patvirtintos vadybininko.",
+    "Peržiūrėti įvertintas veiklas ir pakoreguoti įvertinimą esant reikalui.",
     "Suskaičiuoti kiekvienos temos balo vertę ir įvertinti darbuotojus.",
     "Nustatyti limitus temom ir potemėm.",
   ]);

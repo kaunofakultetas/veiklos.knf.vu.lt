@@ -4,7 +4,7 @@
 # STEP 1: Create necessary files and directories
 # ==============================================
 mkdir -p ./_DATA/{postgres,uploads}
-mkdir -p ./_LOGS
+mkdir -p ./_LOGS/{backend,endpoint}
 mkdir -p ./_SAML
 sudo chown -R 1000:1000 ./_DATA
 sudo chown -R 1000:1000 ./_LOGS

@@ -36,7 +36,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { TBL_USERS, TBL_ROLES, TBL_USER_ROLES } from "../db/tables.js";
-import { enrichSpMetadata, logoutOctetString, mapSamlAttributes } from "../utils/saml.js";
+import { enrichSpMetadata, logoutOctetString, logoutRequestTags, mapSamlAttributes } from "../utils/saml.js";
 import { rememberSamlSession, forgetSamlSession, samlSessionIdFor } from "../auth/samlSessionIndex.js";
 
 
@@ -192,29 +192,39 @@ export default function createSamlRouter({ setup }) {
                 }
             }
 
-            // nameID + sessionIndex are kept for single
-            // logout; the RAW attributes feed verifySamlSession,
-            // which maps them the same way
-            req.session.samlUser = {
-                nameID:       extract.nameID,
-                sessionIndex: extract.sessionIndex,
-                attributes,
-            };
-
-            req.session.save((err) => {
-                if (err) {
-                    console.error("Session save error:", err);
+            // The login gets a FRESH session id: the one the
+            // browser held while anonymous must not carry over
+            // into the signed-in session (session fixation)
+            req.session.regenerate((regenerateErr) => {
+                if (regenerateErr) {
+                    console.error("Session regenerate error:", regenerateErr);
                     return res.status(500).send("Session save failed");
                 }
-                // Filed for as long as the cookie lives, so an
-                // IdP-initiated logout can find this session
-                // without the cookie
-                rememberSamlSession(
-                    { sessionIndex: extract.sessionIndex, nameID: extract.nameID },
-                    req.sessionID,
-                    req.session.cookie?.maxAge ?? undefined
-                );
-                res.redirect("/");
+
+                // nameID + sessionIndex are kept for single
+                // logout; the RAW attributes feed
+                // verifySamlSession, which maps them the same way
+                req.session.samlUser = {
+                    nameID:       extract.nameID,
+                    sessionIndex: extract.sessionIndex,
+                    attributes,
+                };
+
+                req.session.save((err) => {
+                    if (err) {
+                        console.error("Session save error:", err);
+                        return res.status(500).send("Session save failed");
+                    }
+                    // Filed under the NEW id for as long as the
+                    // cookie lives, so an IdP-initiated logout can
+                    // find this session without the cookie
+                    rememberSamlSession(
+                        { sessionIndex: extract.sessionIndex, nameID: extract.nameID },
+                        req.sessionID,
+                        req.session.cookie?.maxAge ?? undefined
+                    );
+                    res.redirect("/");
+                });
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -261,10 +271,15 @@ export default function createSamlRouter({ setup }) {
 
         try {
             const sessionIndex = samlUser.sessionIndex?.sessionIndex ?? samlUser.sessionIndex;
-            const { context } = await spOf(req).createLogoutRequest(idp, "redirect", {
-                logoutNameID: samlUser.nameID,
-                sessionIndex,
-            });
+            // The template with SessionIndex (utils/saml.js) is
+            // only used when a tag replacer is passed along
+            const { context } = await spOf(req).createLogoutRequest(
+                idp,
+                "redirect",
+                { logoutNameID: samlUser.nameID, sessionIndex },
+                "",
+                logoutRequestTags
+            );
             res.json({ redirect: context });
         } catch (err) {
             console.error("Logout request error:", err);

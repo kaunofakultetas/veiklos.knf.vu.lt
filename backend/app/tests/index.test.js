@@ -9,9 +9,11 @@
 //  health probe, the session gate on /api/me and on every
 //  guarded prefix as MOUNTED in index.js, the SP metadata
 //  endpoint, the boot line, the login redirect target, the
-//  ACS mount, the 404 fallthrough, the debug request
-//  logging, that uploads/ is NOT served as static files, and
-//  the JSON error handler for bodies the parser refuses.
+//  ACS mount, the 404 fallthrough, the access log (a daily
+//  file under LOG_DIR, query strings dropped, stdout quiet),
+//  the absence of CORS headers, that uploads/ is NOT served
+//  as static files, and the JSON error handler for bodies the
+//  parser refuses.
 // -----------------------------------------------------------
 
 import { test, before, after } from "node:test";
@@ -20,6 +22,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import http from "node:http";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 
@@ -34,6 +37,9 @@ const FAKE_SP_CERT = new URL("./fixtures/fake-sp.crt", import.meta.url).pathname
 
 // The real VU SSO IdP descriptor, as a file path
 const VU_FIXTURE = new URL("./fixtures/idp-metadata.xml", import.meta.url).pathname;
+
+// Where the spawned server writes its access log (LOG_DIR)
+const logDir = fs.mkdtempSync(path.join(os.tmpdir(), "veiklos-access-"));
 
 // The file planted in uploads/ to prove it is not served
 const probeName = `regression-static-probe-${Date.now()}.txt`;
@@ -72,6 +78,7 @@ async function startServer() {
       ...process.env,
       PORT: String(port),
       SESSION_SECRET: "test-secret",
+      LOG_DIR: logDir,
       IDP_METADATA: VU_FIXTURE,
       SP_PRIVATE_KEY_PATH: FAKE_SP_KEY,
       SP_CERT_PATH: FAKE_SP_CERT,
@@ -105,6 +112,7 @@ before(async () => {
 
 after(async () => {
   fs.rmSync(probePath, { force: true });
+  fs.rmSync(logDir, { recursive: true, force: true });
   if (!server) return;
   server.child.kill("SIGTERM");
   await once(server.child, "exit").catch(() => {});
@@ -286,21 +294,49 @@ test("unknown route → express default 404", async () => {
 
 
 // -----------------------------------------------------------
-// request logging
+// access log
 // -----------------------------------------------------------
 //
-// The first app.use logs every request; the health call must
-// show up as BACKEND RECEIVED on the child's stdout.
+// With LOG_DIR set (as compose sets it) every request lands
+// as one line in <LOG_DIR>/access-YYYY-MM-DD.log — client,
+// method, PATH, status, duration — with the query string
+// dropped, so an email or a SAML message in a URL never
+// reaches the log; stdout carries no request lines at all.
 // -----------------------------------------------------------
 
-test("the debug middleware logs every request to stdout", async () => {
+test("requests land in the daily access log without their query string; stdout stays quiet", async () => {
   const { base, out } = server;
-  await fetch(`${base}/api/health`);
-  await new Promise((r) => setTimeout(r, 100));
-  assert.ok(
-    out.text.includes("BACKEND RECEIVED: GET /api/health"),
-    "expected the BACKEND RECEIVED debug line; got:\n" + out.text
-  );
+  await fetch(`${base}/api/health?email=slaptas%40knf.vu.lt&SAMLResponse=PHNhbWw`);
+  await new Promise((r) => setTimeout(r, 200));
+
+  const day = new Date().toISOString().slice(0, 10);
+  const log = fs.readFileSync(path.join(logDir, `access-${day}.log`), "utf8");
+  const line = log.split("\n").find((l) => l.includes("GET /api/health"));
+  assert.ok(line, "expected the health request in the access log; got:\n" + log);
+  assert.match(line, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z \S+ GET \/api\/health 200 \d+ms$/);
+  assert.ok(!log.includes("slaptas") && !log.includes("SAMLResponse"), "the query string must not be logged");
+  assert.ok(!out.text.includes("BACKEND RECEIVED") && !out.text.includes("/api/health"), "no request lines on stdout");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// no CORS
+// -----------------------------------------------------------
+//
+// The API is same-origin only: no Access-Control-Allow-Origin
+// on any answer, so a page on another origin cannot read one
+// even with a session it somehow obtained.
+// -----------------------------------------------------------
+
+test("answers carry no CORS header", async () => {
+  const res = await fetch(`${server.base}/api/health`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("access-control-allow-origin"), null);
 });
 
 

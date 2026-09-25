@@ -9,8 +9,8 @@
 //  their exact bodies, the two delete buttons ask their exact
 //  confirms and DELETE, every successful change reloads the
 //  tree (collapsing it — except the parent of a new
-//  subtheme), and backend errors are shown verbatim without a
-//  reload.
+//  subtheme), backend errors are shown verbatim without a
+//  reload, and every native field is reachable by its label.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -79,7 +79,8 @@ const loaded = () => screen.findByRole("button", { name: /^6\.1\. — Studijų k
 // One GET with the header only; both form headings, the tree
 // heading and its two buttons; every theme collapsed with its
 // code, title and subtheme count; the parent picker seeded
-// with the first theme; both create buttons disabled.
+// with the first theme; both create buttons disabled; each
+// native field reachable by its label.
 // -----------------------------------------------------------
 
 test("loads the tree with X-Active-Role only and renders it collapsed", async () => {
@@ -110,6 +111,13 @@ test("loads the tree with X-Active-Role only and renders it collapsed", async ()
 
   expect(screen.getByRole("button", { name: "Sukurti temą" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Sukurti potemę" })).toBeDisabled();
+
+  // The required asterisk is part of each label's text
+  expect(screen.getByLabelText(/^Temos numeris/)).toBe(themeCode());
+  expect(screen.getByLabelText(/^Temos pavadinimas/)).toBe(themeTitle());
+  expect(screen.getByLabelText(/^Potemės numeris/)).toBe(subCode());
+  expect(screen.getByLabelText(/^Potemės pavadinimas/)).toBe(subTitle());
+  expect(screen.getByLabelText(/^Potemės aprašymas/)).toBe(subDescription());
 });
 
 

@@ -5,12 +5,14 @@
 //  mocked xlsx: activities and the theme tree load together
 //  with the manager's X-Active-Role, the preview table renders
 //  every activity, the employee filter lists each employee
-//  once (name or eID, Lithuanian order, no eID → skipped) with
-//  a search box, the theme filter narrows and resets the
-//  subtheme filter, the four filters AND together, the export
-//  hands the exact header and rows to aoa_to_sheet, appends
-//  "Veiklos" and writes a timestamped file, and an empty
-//  selection refuses with "Nėra veiklų eksportui.".
+//  once (name or eID — a numeric one too — Lithuanian order,
+//  no eID → skipped) with a search box, each dropdown
+//  announces its popup state and closes on Escape, the theme
+//  filter narrows and resets the subtheme filter, the four
+//  filters AND together, the export hands the exact header
+//  and rows to aoa_to_sheet, appends "Veiklos" and writes a
+//  timestamped file, and an empty selection refuses with
+//  "Nėra veiklų eksportui.".
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -204,9 +206,10 @@ test("a failed load shows the backend's error verbatim and an empty preview", as
 // -----------------------------------------------------------
 //
 // One option per employee_eid, labelled by full name or the
-// eID, in Lithuanian order (Y sorts with I, before J); a row
-// without an eID gives no option. The search box narrows the
-// list case-insensitively.
+// eID (as text even when the eID is a number), in Lithuanian
+// order (Y sorts with I, before J); a row without an eID
+// gives no option. The search box narrows the list
+// case-insensitively.
 // -----------------------------------------------------------
 
 test("employee options are unique, named by full_name or eID and sorted lt-LT", async () => {
@@ -238,6 +241,77 @@ test("the employee search narrows the options; no match says so", async () => {
   await user.clear(search);
   expect(within(box).getAllByRole("checkbox")).toHaveLength(3);
   expect(within(filterNamed("Tema")).queryByPlaceholderText("Ieškoti…")).not.toBeInTheDocument();
+});
+
+test("a numeric eID without a name labels its option as text and still filters", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/activities/all", [...ACTIVITIES, activity({ id: 6, employee_eid: 10006, full_name: null, title: "Skaitinis eID" })]);
+  onRequest("GET", "/api/themes", THEMES);
+  const { user } = renderPage(ManagerExportPage);
+  await screen.findByText("Skaitinis eID");
+  const box = filterNamed("Darbuotojas");
+
+  await user.click(within(box).getByRole("button"));
+  expect(within(box).getAllByRole("checkbox").map((c) => c.parentElement.textContent)).toEqual([
+    "10006", "Yvona Ylė", "Jonas Jonaitis", "u10004",
+  ]);
+
+  await user.click(within(box).getByRole("checkbox", { name: "10006" }));
+  expect(within(box).getByRole("button")).toHaveTextContent("10006");
+  expect(screen.getAllByRole("row")).toHaveLength(2);
+  expect(screen.getByText("Skaitinis eID")).toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// dropdown accessibility
+// -----------------------------------------------------------
+//
+// The trigger is a listbox popup button that announces
+// whether the menu is open; the open menu is a group named
+// after the filter's label; Escape from inside the menu
+// closes it and puts focus back on the trigger, Escape on a
+// closed dropdown does nothing, and clicks still toggle.
+// -----------------------------------------------------------
+
+test("the trigger announces its popup state, the menu is a group named after the filter, Escape closes it", async () => {
+  const user = await loadPage();
+  const box = filterNamed("Darbuotojas");
+  const trigger = within(box).getByRole("button");
+
+  expect(trigger).toHaveAttribute("aria-haspopup", "listbox");
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(within(box).queryByRole("group")).not.toBeInTheDocument();
+
+  await user.click(trigger);
+  expect(trigger).toHaveAttribute("aria-expanded", "true");
+  const menu = within(box).getByRole("group", { name: "Darbuotojas" });
+  expect(within(menu).getAllByRole("checkbox")).toHaveLength(3);
+
+  await user.click(within(menu).getByPlaceholderText("Ieškoti…"));
+  await user.keyboard("{Escape}");
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(within(box).queryByRole("group")).not.toBeInTheDocument();
+  expect(within(box).queryByRole("checkbox")).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+
+  await user.keyboard("{Escape}");
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await user.click(trigger);
+  expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await user.click(trigger);
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+  await user.click(within(filterNamed("Būsena")).getByRole("button"));
+  expect(within(filterNamed("Būsena")).getByRole("button")).toHaveAttribute("aria-expanded", "true");
+  expect(within(within(filterNamed("Būsena")).getByRole("group", { name: "Būsena" })).getAllByRole("checkbox")).toHaveLength(5);
+  expect(within(filterNamed("Tema")).getByRole("button")).toHaveAttribute("aria-expanded", "false");
+  expect(requestLog()).toHaveLength(2);
 });
 
 

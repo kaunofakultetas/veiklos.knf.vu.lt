@@ -193,7 +193,7 @@ export default function RolesPage() {
 
             {/* Email search */}
             <div className="field">
-              <label className="field-label">Darbuotojo el.paštas</label>
+              <label className="field-label" htmlFor="roles-email">Darbuotojo el.paštas</label>
               <div
                 style={{
                   display: "flex",
@@ -204,6 +204,7 @@ export default function RolesPage() {
                 }}
               >
                 <input
+                  id="roles-email"
                   className="field-input"
                   type="email"
                   placeholder="vardas.pavarde@knf.vu.lt"
@@ -280,7 +281,7 @@ export default function RolesPage() {
 
                 {/* Grant one of the not-yet-owned roles */}
                 <div className="field">
-                  <label className="field-label">Pridėti naują rolę:</label>
+                  <label className="field-label" htmlFor="roles-assign">Pridėti naują rolę:</label>
                   {availableRoles.length === 0 ? (
                     <div className="employee-modal-muted">
                       (Darbuotojas šiuo metu turi visas roles.)
@@ -294,6 +295,7 @@ export default function RolesPage() {
                       }}
                     >
                       <select
+                        id="roles-assign"
                         className="field-select"
                         value={assignRole}
                         onChange={(e) => setAssignRole(e.target.value)}

@@ -26,7 +26,7 @@
 //    ThemesPage      — state, load, mutations (default)
 // -----------------------------------------------------------
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppSelect } from "@/components/appCommon.jsx";
 import "@/components/employee.css";
 
@@ -208,10 +208,11 @@ function NewThemeForm({ onSubmit }) {
       <h2 className="section-title">Nauja tema</h2>
 
       <div className="field">
-        <label className="field-label">
+        <label className="field-label" htmlFor="theme-code">
           Temos numeris <span className="required-mark">*</span>
         </label>
         <input
+          id="theme-code"
           className="field-input"
           value={code}
           onChange={(e) => setCode(e.target.value)}
@@ -220,10 +221,11 @@ function NewThemeForm({ onSubmit }) {
       </div>
 
       <div className="field">
-        <label className="field-label">
+        <label className="field-label" htmlFor="theme-title">
           Temos pavadinimas <span className="required-mark">*</span>
         </label>
         <input
+          id="theme-title"
           className="field-input"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -299,10 +301,11 @@ function NewSubthemeForm({ themes, parentId, onParentChange, onSubmit }) {
       </div>
 
       <div className="field">
-        <label className="field-label">
+        <label className="field-label" htmlFor="subtheme-code">
           Potemės numeris <span className="required-mark">*</span>
         </label>
         <input
+          id="subtheme-code"
           className="field-input"
           value={code}
           onChange={(e) => setCode(e.target.value)}
@@ -311,10 +314,11 @@ function NewSubthemeForm({ themes, parentId, onParentChange, onSubmit }) {
       </div>
 
       <div className="field">
-        <label className="field-label">
+        <label className="field-label" htmlFor="subtheme-title">
           Potemės pavadinimas <span className="required-mark">*</span>
         </label>
         <input
+          id="subtheme-title"
           className="field-input"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -325,10 +329,11 @@ function NewSubthemeForm({ themes, parentId, onParentChange, onSubmit }) {
       {/* Marked required in the UI, but only checked as
           required by neither this form nor the backend */}
       <div className="field">
-        <label className="field-label">
+        <label className="field-label" htmlFor="subtheme-description">
           Potemės aprašymas <span className="required-mark">*</span>
         </label>
         <textarea
+          id="subtheme-description"
           className="field-textarea"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
@@ -541,8 +546,10 @@ export default function ThemesPage() {
 
   // (Re)load the tree; every mutation calls this again.
   // Reloading collapses all themes — expanded is rebuilt as
-  // all-false
-  const load = async () => {
+  // all-false. Stable across renders (useCallback, no deps)
+  // so the mount effect can list it without re-running: it
+  // reads no state — the parent seed goes through the updater
+  const load = useCallback(async () => {
     setLoading(true);
     setMsg("");
     try {
@@ -554,8 +561,10 @@ export default function ThemesPage() {
 
       setThemes(data);
 
-      if (!subParent && data[0]) {
-        setSubParent(String(data[0].id));
+      // The subtheme form's parent is seeded with the first
+      // theme only while nothing has been picked yet
+      if (data[0]) {
+        setSubParent((prev) => prev || String(data[0].id));
       }
 
       const def = Object.fromEntries(data.map((t) => [t.id, false]));
@@ -565,11 +574,11 @@ export default function ThemesPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
 
   const toggleTheme = (id) =>
@@ -583,13 +592,10 @@ export default function ThemesPage() {
 
 
   // The forms hand over their values and a reset callback;
-  // the fields clear only once the POST succeeded
+  // the fields clear only once the POST succeeded. Required
+  // fields are enforced by the forms' disabled buttons
   const createTheme = async ({ code, title }, reset) => {
     setMsg("");
-    if (!code || !title) {
-      setMsg("Įveskite kodą ir pavadinimą.");
-      return;
-    }
     try {
       await apiFetch("/api/themes", {
         method: "POST",
@@ -606,10 +612,6 @@ export default function ThemesPage() {
 
   const createSubtheme = async ({ code, title, description }, reset) => {
     setMsg("");
-    if (!subParent || !code || !title) {
-      setMsg("Užpildykite visus laukus.");
-      return;
-    }
     try {
       await apiFetch(`/api/themes/${subParent}/subthemes`, {
         method: "POST",

@@ -39,7 +39,7 @@ export default function ManagerPage() {
             <h2>Šiame darbalaukyje galėsite:</h2>
             <ul style={{ paddingLeft: "1.25rem", marginBottom: "1.5rem" }}>
               <li>Pridėti arba pašalinti darbuotojo teises prie sistemos.</li>
-              <li>Peržiūrėti ir patvirtinti arba atmesti darbuotojų užregistruotas.</li>
+              <li>Peržiūrėti ir patvirtinti arba atmesti darbuotojų užregistruotas veiklas.</li>
               <li>Filtruoti darbuotojų veiklas ir eksportuoti jas į Excel dokumentą.</li>
               <li>Sukurti arba pašalinti naujas temas ir potemes.</li>
             </ul>

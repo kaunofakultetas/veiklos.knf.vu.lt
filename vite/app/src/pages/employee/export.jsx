@@ -20,7 +20,7 @@
 //    ExportPage          — the page (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
 import "@/components/employee.css";
 
@@ -145,7 +145,10 @@ function statusClass(status) {
 // A checkbox-list dropdown filter. The trigger summarizes the
 // selection: placeholder when empty, the option's label when
 // exactly one, "N pasirinkta" otherwise. No outside-click
-// close — only the trigger toggles it.
+// close — the trigger toggles it and Escape closes it. The
+// trigger carries aria-haspopup / aria-expanded and the open
+// menu is a group named after the filter's label, so a screen
+// reader hears which filter the checkboxes belong to.
 //
 // Used by:
 //   - ExportPage (below) — theme / subtheme / status filters
@@ -160,7 +163,20 @@ function MultiSelectDropdown({
 }) {
   const [open, setOpen] = useState(false);
 
+  // Escape hands focus back to the trigger — the focused
+  // checkbox is about to unmount with the menu
+  const triggerRef = useRef(null);
+
   const toggleOpen = () => setOpen((o) => !o);
+
+  // Escape closes an open menu from anywhere inside the
+  // wrapper (the trigger or a checkbox) and refocuses the
+  // trigger, so keyboard focus does not fall back to <body>
+  const handleKeyDown = (e) => {
+    if (e.key !== "Escape" || !open) return;
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
 
   const handleToggle = (id) => {
     if (selectedIds.includes(id)) {
@@ -179,12 +195,15 @@ function MultiSelectDropdown({
   }
 
   return (
-    <div className="multi-select">
+    <div className="multi-select" onKeyDown={handleKeyDown}>
       <label className="multi-select-label">{label}</label>
 
       <button
         type="button"
+        ref={triggerRef}
         className="multi-select-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
         onClick={toggleOpen}
       >
         <span className="multi-select-summary">{summary}</span>
@@ -192,7 +211,7 @@ function MultiSelectDropdown({
       </button>
 
       {open && (
-        <div className="multi-select-menu">
+        <div className="multi-select-menu" role="group" aria-label={label}>
           {options.length === 0 ? (
             <div className="multi-select-empty">(nėra pasirinkimų)</div>
           ) : (

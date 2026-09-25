@@ -30,7 +30,7 @@
 //    ManagerReviewPage   — queue state, requests (default)
 // -----------------------------------------------------------
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { AppSelect } from "@/components/appCommon.jsx";
 import "@/components/employee.css";
 
@@ -516,10 +516,20 @@ function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClos
             )}
           </div>
 
-          {/* Manager comments — writable only in edit mode */}
+          {/* Manager comments — writable only in edit mode. A
+              real <label> names the textarea for assistive
+              tech; block, so the class's bottom margin still
+              applies */}
           <div className="employee-modal-field">
-            <div className="employee-modal-label">Vadybininkės komentarai</div>
+            <label
+              className="employee-modal-label"
+              htmlFor="review-manager-comments"
+              style={{ display: "block" }}
+            >
+              Vadybininkės komentarai
+            </label>
             <textarea
+              id="review-manager-comments"
               className="field-textarea"
               value={editManagerComments}
               onChange={(e) => setEditManagerComments(e.target.value)}
@@ -601,6 +611,10 @@ function CommentModal({
 
   const act = activity;
 
+  // The deny and return prompts are two instances of this
+  // modal, so the textarea's id cannot be a fixed string
+  const commentId = useId();
+
   const [comment, setComment] = useState(initialComment);
   const [saving, setSaving] = useState(false);
 
@@ -633,9 +647,18 @@ function CommentModal({
           Veikla: <strong>{act.title}</strong>
         </div>
 
+        {/* The label names the textarea for assistive tech;
+            block, so the class's bottom margin still applies */}
         <div className="employee-modal-field">
-          <div className="employee-modal-label">{label}</div>
+          <label
+            className="employee-modal-label"
+            htmlFor={commentId}
+            style={{ display: "block" }}
+          >
+            {label}
+          </label>
           <textarea
+            id={commentId}
             className="field-textarea"
             value={comment}
             onChange={(e) => setComment(e.target.value)}

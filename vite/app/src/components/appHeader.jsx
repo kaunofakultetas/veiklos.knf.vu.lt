@@ -7,16 +7,18 @@
 //
 //  Loads the caller's roles from /api/me on mount and repairs
 //  localStorage("activeRole") when it is missing or no longer
-//  owned (falls back to the first role). Listens for the
-//  window event "app:roles-updated" — manager/roles.jsx fires
-//  it after editing roles so the switcher refreshes without a
-//  reload.
+//  owned (falls back to the first role). Until the answer the
+//  role block shows the stored role or "Kraunama…"; an answer
+//  without roles shows "(nėra)". Listens for the window event
+//  "app:roles-updated" — manager/roles.jsx fires it after
+//  editing roles so the switcher refreshes without a reload.
 //
 //  Switching roles navigates straight to the chosen role's
 //  workspace. Signing out POSTs to /auth/saml/logout and then
-//  navigates to the URL the backend answers with (VU SSO's
-//  logout, or "/") — a POST so that no other site can trigger
-//  it: a cross-site request carries no SameSite=Lax cookie.
+//  navigates to the URL a 2xx answer carries (VU SSO's logout,
+//  or "/"); a refused or failed request lands on "/". A POST
+//  so that no other site can trigger it: a cross-site request
+//  carries no SameSite=Lax cookie.
 //
 //  Split into (root component last):
 //
@@ -77,6 +79,12 @@ export default function AppHeader({ children }) {
   const navigate = useNavigate();
 
   const [roles, setRoles] = useState([]);
+
+  // Whether /api/me has answered: the roles array alone cannot
+  // tell a pending answer ("Kraunama…") from an answer with no
+  // roles ("(nėra)")
+  const [rolesLoaded, setRolesLoaded] = useState(false);
+
   const [activeRole, setActiveRole] = useState(
     () => localStorage.getItem("activeRole") || ""
   );
@@ -100,6 +108,7 @@ export default function AppHeader({ children }) {
 
         setRoles(names);
         setFullName(data.name || "");
+        setRolesLoaded(true);
 
         // Repair a stale/foreign activeRole in localStorage
         const storedActive = localStorage.getItem("activeRole") || "";
@@ -145,8 +154,13 @@ export default function AppHeader({ children }) {
     let redirect = "/";
     try {
       const res = await fetch("/auth/saml/logout", { method: "POST" });
-      const data = await res.json();
-      if (typeof data.redirect === "string" && data.redirect) redirect = data.redirect;
+
+      // Only a 2xx answer's redirect is followed — an error
+      // answer's body is not a place to be sent to
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data.redirect === "string" && data.redirect) redirect = data.redirect;
+      }
     } catch {
       // backend unreachable or a non-JSON answer: land home,
       // where the session probe decides what the user sees
@@ -173,7 +187,8 @@ export default function AppHeader({ children }) {
 
       <div className="app-header-right">
         {/* Role block: a switcher when several roles, plain
-            text when one (or none yet) */}
+            text when one; with no role the text is "Kraunama…"
+            until /api/me answers and "(nėra)" after */}
         <div className="app-role-block">
           <span className="app-role-label">Prisijungta su role:</span>
           {roles.length > 1 ? (
@@ -188,7 +203,7 @@ export default function AppHeader({ children }) {
             </select>
           ) : (
             <b className="app-role-value">
-              {activeRole || (roles.length === 0 ? "Kraunama…" : "(nėra)")}
+              {activeRole || (rolesLoaded ? "(nėra)" : "Kraunama…")}
             </b>
           )}
         </div>

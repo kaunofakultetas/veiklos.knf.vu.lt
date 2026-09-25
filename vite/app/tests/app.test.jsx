@@ -80,7 +80,7 @@ test("shows Kraunama… until the probe answers; a 401 renders the SignIn card",
   expect(screen.getByText("Paslaugai reikalingas Jūsų tapatybės patvirtinimas.")).toBeInTheDocument();
   expect(screen.getByRole("img", { name: "Vilniaus universiteto logotipas" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Prisijungti per VU bendro prisijungimo sistemą" })).toBeInTheDocument();
-  expect(screen.getByText(`© ${new Date().getFullYear()} ISKS'22 Goda Stungurytė. Visos teisės saugomos.`)).toBeInTheDocument();
+  expect(screen.getByText(`© ${new Date().getFullYear()} Goda Stungurytė, ISKS'22. Visos teisės saugomos.`)).toBeInTheDocument();
   expect(screen.queryByText("Kraunama…")).not.toBeInTheDocument();
   expect(requestLog()).toEqual([expect.objectContaining({ method: "GET", path: "/api/session/check", headers: {}, body: null })]);
 });
@@ -116,7 +116,7 @@ test("a probe that fails is treated as signed out", async () => {
 // After a 200: exactly one role stores itself and opens its
 // workspace (whose header then GETs /api/me); several roles
 // open the picker, whose "Patvirtinti" stores the choice;
-// a stored role skips both; no roles stays on "Kraunama…".
+// a stored role skips both; no roles gets a card saying so.
 // -----------------------------------------------------------
 
 test("one role picks itself: activeRole stored, its workspace opened, /api/me fetched", async () => {
@@ -167,13 +167,15 @@ test("a stored activeRole skips the picker and opens its workspace", async () =>
   expect(localStorage.getItem("activeRole")).toBe("Vadybininkas");
 });
 
-test("a session with no roles stays on the Kraunama… card", async () => {
+test("a session with no roles is told so instead of waiting on the Kraunama… card", async () => {
   onRequest("GET", "/api/session/check", session([]));
   renderApp("/");
   await settle();
 
   expect(requestLog()).toHaveLength(1);
-  expect(screen.getByText("Kraunama…")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Jūsų paskyrai nepriskirta jokia rolė." })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "info@knf.vu.lt" })).toHaveAttribute("href", "mailto:info@knf.vu.lt");
+  expect(screen.queryByText("Kraunama…")).not.toBeInTheDocument();
   expect(screen.queryByText("Pasirinkite rolę")).not.toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Vilniaus universiteto veiklos" })).not.toBeInTheDocument();
   expect(window.location.pathname).toBe("/");

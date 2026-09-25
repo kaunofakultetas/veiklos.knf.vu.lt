@@ -36,8 +36,10 @@ let nextLogoutRequest = null;
 let logoutResponseVerifies = true;
 let logoutResponseBuildFails = false;
 
-// Whether building OUR LogoutRequest (POST /logout) throws
+// Whether building OUR LogoutRequest (POST /logout) throws,
+// and the extra arguments the route passed for it
 let logoutRequestBuildFails = false;
+let lastLogoutRequestArgs = null;
 
 // Every samlify logout call the router made, in order, with
 // its arguments and whether the session was already gone
@@ -101,7 +103,8 @@ const fakeSp = {
   getMetadata: () =>
     '<EntityDescriptor entityID="https://app.test"><SPSSODescriptor></SPSSODescriptor></EntityDescriptor>',
   createLoginRequest: async () => ({ context: "https://idp.test/sso?SAMLRequest=x" }),
-  createLogoutRequest: async (_idp, _binding, { logoutNameID }) => {
+  createLogoutRequest: async (_idp, _binding, { logoutNameID }, relayState, tagReplacement) => {
+    lastLogoutRequestArgs = { relayState, tagReplacement };
     if (logoutRequestBuildFails) throw new Error("ERR_GENERATE_REDIRECT_LOGOUT_REQUEST_MISSING_METADATA");
     return { context: `https://idp.test/slo?nameid=${logoutNameID}` };
   },
@@ -139,25 +142,41 @@ const fakeSp = {
 // -----------------------------------------------------------
 //
 // express-session stand-in: a fresh object per request with
-// save/destroy that call back immediately, its id on
-// req.sessionID / session.id, the fake store on
+// save/destroy/regenerate that call back immediately, its id
+// on req.sessionID / session.id, the fake store on
 // req.sessionStore and the cookie's maxAge; remembered in
 // lastSession so tests can read what /assert stored and
-// whether a logout route destroyed it.
+// whether a logout route destroyed it. regenerate() retires
+// the object (destroyed) and hands the request a fresh one
+// with the next id, keeping a link back (regeneratedFrom) —
+// what express-session does at login.
 //
 // Used by:
 //   - the before() hook (below)
 // -----------------------------------------------------------
 
+function makeSession(req, regeneratedFrom = null) {
+  const session = {
+    id: req.sessionID,
+    cookie: { maxAge: 8 * 60 * 60 * 1000 },
+    regeneratedFrom,
+    save: (cb) => cb(),
+    destroy: (cb) => { session.destroyed = true; cb(); },
+    regenerate: (cb) => {
+      session.destroyed = true;
+      req.sessionID = `sid-${++sessionCounter}`;
+      req.session = makeSession(req, session);
+      lastSession = req.session;
+      cb();
+    },
+  };
+  return session;
+}
+
 function fakeSessionMiddleware(req, _res, next) {
   req.sessionID = `sid-${++sessionCounter}`;
   req.sessionStore = fakeStore;
-  req.session = {
-    id: req.sessionID,
-    cookie: { maxAge: 8 * 60 * 60 * 1000 },
-    save: (cb) => cb(),
-    destroy: (cb) => { req.session.destroyed = true; cb(); },
-  };
+  req.session = makeSession(req);
   if (req.headers["x-test-session"] === "signed-in") {
     req.session.samlUser = { nameID: "name-1", sessionIndex: "idx-1", attributes: { eID: "112546" } };
   }
@@ -227,6 +246,7 @@ beforeEach(() => {
   logoutResponseVerifies = true;
   logoutResponseBuildFails = false;
   logoutRequestBuildFails = false;
+  lastLogoutRequestArgs = null;
   samlCalls.length = 0;
   fakeStore.destroyed.length = 0;
   resetSamlSessionIndex();
@@ -295,7 +315,13 @@ test("assert: VU attributes → upsert by eID, session stored, redirect /", asyn
   assert.equal(lastSession.samlUser.nameID, "transient-1");
   assert.equal(lastSession.samlUser.attributes["urn:oid:2.5.4.42"], "Jonas");
 
-  // the login is filed under both identifiers → this session
+  // a fresh session id at login: the anonymous one is retired
+  assert.ok(lastSession.regeneratedFrom, "the session was regenerated at login");
+  assert.equal(lastSession.regeneratedFrom.destroyed, true);
+  assert.notEqual(lastSession.id, lastSession.regeneratedFrom.id);
+  assert.equal(lastSession.regeneratedFrom.samlUser, undefined, "nothing was stored on the old session");
+
+  // the login is filed under both identifiers → the NEW session
   assert.equal(samlSessionIdFor({ sessionIndex: "sidx-1" }), lastSession.id);
   assert.equal(samlSessionIdFor({ nameID: "transient-1" }), lastSession.id);
 });
@@ -568,6 +594,9 @@ test("logout: POST answers the next URL — home without a session, the IdP with
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { redirect: "https://idp.test/slo?nameid=name-1" });
   assert.equal(lastSession.destroyed, true);
+  // the SessionIndex template is only used with a tag replacer
+  assert.equal(typeof lastLogoutRequestArgs.tagReplacement, "function");
+  assert.equal(lastLogoutRequestArgs.relayState, "");
 
   // the login's index entry goes with the session
   rememberSamlSession({ sessionIndex: "idx-1", nameID: "name-1" }, "sid-old");

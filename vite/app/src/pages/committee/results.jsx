@@ -467,8 +467,8 @@ function ActivityDetails({ act, downloading, onDownload }) {
 // theme_id, subtheme_id } to onRescore, which resolves with
 // the updated activity or throws. Re-scoring keeps ĮVERTINTA,
 // so the modal stays open showing the saved values. Status
-// text goes up through onMessage — including the shipped
-// truncated "Veiklos vykdytojų kiekis" for an empty count.
+// text — validation refusals, the saved confirmation and a
+// refused save's "Klaida: …" — goes up through onMessage.
 //
 // Used by:
 //   - ResultsPage (below) — while an activity is selected
@@ -520,7 +520,7 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
     }
 
     if (!peopleNum.trim()) {
-      onMessage("Veiklos vykdytojų kiekis");
+      onMessage("Klaida: Įveskite veiklos vykdytojų kiekį.");
       return;
     }
 
@@ -599,12 +599,20 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
           />
 
           {/* Committee comments — writable only while
-              re-scoring */}
+              re-scoring. The label is forced block: a <label>
+              is inline and .employee-modal-label sets no
+              display, so the control would otherwise sit
+              beside it */}
           <div className="employee-modal-field">
-            <div className="employee-modal-label">
+            <label
+              className="employee-modal-label"
+              htmlFor="results-committee-comments"
+              style={{ display: "block" }}
+            >
               Komisijos nario komentarai
-            </div>
+            </label>
             <textarea
+              id="results-committee-comments"
               className="field-textarea"
               value={editCommitteeComments}
               onChange={(e) =>
@@ -617,10 +625,15 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
           {/* People count → live 1/n score preview */}
           {editingScore && (
             <div className="employee-modal-field">
-              <div className="employee-modal-label">
+              <label
+                className="employee-modal-label"
+                htmlFor="results-people-num"
+                style={{ display: "block" }}
+              >
                 Veiklos vykdytojų kiekis
-              </div>
+              </label>
               <input
+                id="results-people-num"
                 className="field-input"
                 type="number"
                 min="0"

@@ -393,9 +393,12 @@ function EmployeePicker({ employees, loading, selectedEid, onSelect }) {
 
       {open && (
         <div className="app-select-dropdown">
+          {/* The dropdown has no room for a visible label, so
+              the search box is named through aria-label */}
           <div className="multi-select-search-wrapper">
             <input
               type="text"
+              aria-label="Ieškoti darbuotojo"
               placeholder="Ieškoti darbuotojo..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -546,7 +549,10 @@ function EmployeeResultsTable({ rows, loading }) {
 // "Skaičiuoti" computes AND persists the point value. The
 // result box only fills after a successful save
 // (hasCalculated), and picking another theme blanks it again.
-// One error/status line (msg) serves every request.
+// One status line (msg) serves every request; msgIsError
+// picks its box — form-status--error for a refused request
+// or a validation refusal, the plain form-status for the
+// saved confirmation.
 //
 // Used by:
 //   - App.jsx — route /committee/calculate
@@ -564,7 +570,11 @@ export default function CalculatePage() {
   const [employeeSubthemes, setEmployeeSubthemes] = useState([]);
   const [subthemesLoading, setSubthemesLoading] = useState(false);
 
+  // msg is the one status line; msgIsError picks its box —
+  // form-status--error for a refused request or a validation
+  // refusal, the plain form-status for the saved confirmation
   const [msg, setMsg] = useState("");
+  const [msgIsError, setMsgIsError] = useState(false);
   const [savingPoint, setSavingPoint] = useState(false);
   const [hasCalculated, setHasCalculated] = useState(false);
 
@@ -615,6 +625,7 @@ export default function CalculatePage() {
       } catch (e) {
         console.error("Skaičiuoklė load error:", e);
         setMsg(e.message || "Klaida: Nepavyko užkrauti duomenų skaičiuoklei.");
+        setMsgIsError(true);
       } finally {
         setThemesLoading(false);
         setEmployeesLoading(false);
@@ -667,6 +678,7 @@ export default function CalculatePage() {
       } catch (e) {
         console.error("load employee subthemes error:", e);
         setMsg(e.message || "Klaida: Nepavyko užkrauti darbuotojo veiklų skaičiuoklei.");
+        setMsgIsError(true);
       } finally {
         setSubthemesLoading(false);
       }
@@ -700,10 +712,12 @@ export default function CalculatePage() {
   const handleSavePointValue = async () => {
     if (!selectedTheme) {
       setMsg("Pasirinkite temą.");
+      setMsgIsError(true);
       return;
     }
     if (valuePerScore === null || !Number.isFinite(valuePerScore)) {
       setMsg("Klaida: Negalima apskaičiuoti 1 balo vertės.");
+      setMsgIsError(true);
       return;
     }
 
@@ -742,9 +756,11 @@ export default function CalculatePage() {
 
       setHasCalculated(true);
       setMsg("1 balo vertė išsaugota.");
+      setMsgIsError(false);
     } catch (e) {
       console.error("failed to save pointvalue:", e);
       setMsg(e.message || "Klaida: Nepavyko išsaugoti 1 balo vertės.");
+      setMsgIsError(true);
     } finally {
       setSavingPoint(false);
     }
@@ -819,7 +835,13 @@ export default function CalculatePage() {
             </div>
 
             {msg && (
-              <div className="form-status form-status--error">
+              <div
+                className={
+                  msgIsError
+                    ? "form-status form-status--error"
+                    : "form-status"
+                }
+              >
                 {msg}
               </div>
             )}

@@ -20,7 +20,7 @@
 //    ManagerExportPage   — the page (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
 import "@/components/employee.css";
 
@@ -145,9 +145,12 @@ function statusClass(status) {
 // The checkbox-list dropdown filter, here with an optional
 // search box (withSearch) that narrows the visible options —
 // used for the employee list, which can get long. Summary:
-// placeholder / single label / "N pasirinkti". Note this is a
-// diverged copy of the one in employee/export.jsx (that one
-// has no search and says "pasirinkta").
+// placeholder / single label / "N pasirinkti". The trigger
+// announces its popup state (aria-haspopup / aria-expanded),
+// the menu is a group named after `label`, and Escape closes
+// it. Note this is a diverged copy of the one in
+// employee/export.jsx (that one has no search and says
+// "pasirinkta").
 //
 // Used by:
 //   - ManagerExportPage (below) — all four filters
@@ -163,8 +166,18 @@ function MultiSelectDropdown({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const triggerRef = useRef(null);
 
   const toggleOpen = () => setOpen((o) => !o);
+
+  // Escape closes the menu from anywhere inside it (search
+  // box, a checkbox) and hands focus back to the trigger, so
+  // a keyboard user is not left on an element that unmounts
+  const handleKeyDown = (e) => {
+    if (e.key !== "Escape" || !open) return;
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
 
   const visibleOptions = useMemo(() => {
     if (!withSearch || !search.trim()) return options;
@@ -189,20 +202,25 @@ function MultiSelectDropdown({
   }
 
   return (
-    <div className="multi-select">
+    <div className="multi-select" onKeyDown={handleKeyDown}>
       <label className="field-label multi-select-label">{label}</label>
 
       <button
         type="button"
+        ref={triggerRef}
         className="field-select multi-select-trigger"
         onClick={toggleOpen}
+        aria-haspopup="listbox"
+        aria-expanded={open}
       >
         <span className="multi-select-summary">{summary}</span>
         <span className="multi-select-chevron">▼</span>
       </button>
 
+      {/* A named group, so a screen reader says which filter
+          the checkboxes belong to */}
       {open && (
-        <div className="multi-select-menu">
+        <div className="multi-select-menu" role="group" aria-label={label}>
           {withSearch && (
             <div className="multi-select-search-wrapper">
               <input
@@ -339,7 +357,9 @@ export default function ManagerExportPage() {
 
 
   // Distinct employees pulled from the activities, sorted by
-  // name with Lithuanian collation
+  // name with Lithuanian collation. The label is forced to a
+  // string: an eID may arrive numeric, and localeCompare is a
+  // string method
   const employeeOptions = useMemo(() => {
     const map = new Map();
     for (const a of activities) {
@@ -347,7 +367,7 @@ export default function ManagerExportPage() {
       if (!map.has(a.employee_eid)) {
         map.set(a.employee_eid, {
           id: String(a.employee_eid),
-          label: a.full_name || a.employee_eid,
+          label: String(a.full_name || a.employee_eid),
         });
       }
     }

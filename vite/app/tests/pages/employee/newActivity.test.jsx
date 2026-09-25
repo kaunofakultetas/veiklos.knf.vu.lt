@@ -3,14 +3,15 @@
 //
 //  The new-activity form against the scripted fetch: the
 //  theme tree is loaded with the employee's X-Active-Role and
-//  the first theme + its first subtheme are preselected, a
-//  theme switch re-sorts and preselects the subthemes, the
-//  submit POSTs multipart with the fields in the documented
-//  order (codes before the attachment) and only the role
-//  header, a success resets the text fields and the file but
-//  keeps the selection, the client refuses empty required
-//  fields and oversized picks without a request, and backend
-//  errors are shown with the page's own prefix.
+//  the first theme + its first subtheme in code order are
+//  preselected, a theme switch re-sorts and preselects the
+//  subthemes, the text fields and the file input are found by
+//  their labels, the submit POSTs multipart with the fields
+//  in the documented order (codes before the attachment) and
+//  only the role header, a success resets the text fields and
+//  the file but keeps the selection, the client refuses empty
+//  required fields and oversized picks without a request, and
+//  backend errors are shown with the page's own prefix.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -35,9 +36,9 @@ const ATTACHMENT_ACCEPT =
   ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.csv,.jpg,.jpeg,.png,.gif,.webp";
 
 // The two AppSelect triggers (theme, subtheme), the open
-// dropdown, the file input and the text fields — labels are
-// not linked to their inputs, so placeholders and classes
-// do the finding
+// dropdown, the file input and the text fields — the pickers
+// are custom, so classes find them; the native inputs go by
+// placeholder here and by label in the labels test
 const triggers = () => [...document.querySelectorAll(".app-select-trigger")];
 const dropdown = () => document.querySelector(".app-select-dropdown");
 const fileInput = () => document.querySelector('input[type="file"]');
@@ -58,13 +59,14 @@ const themesLoaded = () => waitFor(() => expect(screen.queryByText("Kraunamos te
 // load
 // -----------------------------------------------------------
 //
-// One GET with the header; the first theme and its FIRST
-// subtheme in API order (not the sorted one) are preselected,
-// the subtheme's description fills the info box, the text
-// fields start empty and the submit is enabled.
+// One GET with the header; the first theme and its first
+// subtheme in CODE order ("1.2." before "1.10.", not the
+// API's order) are preselected, that subtheme's empty
+// description leaves the info box on its placeholder, the
+// text fields start empty and the submit is enabled.
 // -----------------------------------------------------------
 
-test("loads the tree with X-Active-Role and preselects the first theme and subtheme", async () => {
+test("loads the tree with X-Active-Role and preselects the first theme and its first subtheme in code order", async () => {
   signInAs("Darbuotojas");
   onRequest("GET", "/api/themes", THEMES);
   renderPage(NewActivityPage);
@@ -78,15 +80,45 @@ test("loads the tree with X-Active-Role and preselects the first theme and subth
   const [theme, subtheme] = triggers();
   expect(theme).toHaveTextContent("1. — Studijos");
   expect(theme).toBeEnabled();
-  expect(subtheme).toHaveTextContent("1.10. — Dešimta potemė");
+  expect(subtheme).toHaveTextContent("1.2. — Antra potemė");
   expect(subtheme).toBeEnabled();
-  expect(screen.getByText("Dešimtos potemės aprašymas")).toBeInTheDocument();
+  expect(screen.getByText("(aprašymas nenurodytas)")).toBeInTheDocument();
+  expect(screen.queryByText("Dešimtos potemės aprašymas")).not.toBeInTheDocument();
 
   expect(titleInput()).toHaveValue("");
   expect(descriptionInput()).toHaveValue("");
   expect(fileInput()).toHaveAttribute("accept", ATTACHMENT_ACCEPT);
   expect(screen.queryByText(/Pasirinktas failas:/)).not.toBeInTheDocument();
   expect(submitButton()).toBeEnabled();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// labels
+// -----------------------------------------------------------
+//
+// The title, description and file inputs are reachable by
+// their labels (htmlFor ↔ id), spelled "Registruojamos …" —
+// the old "Registuojamos" is gone. The two picker labels are
+// not linked: AppSelect renders a button, and naming it is
+// AppSelect's own business.
+// -----------------------------------------------------------
+
+test("the title, description and file inputs are reachable by their labels", async () => {
+  signInAs("Darbuotojas");
+  onRequest("GET", "/api/themes", THEMES);
+  renderPage(NewActivityPage);
+  await themesLoaded();
+
+  expect(screen.getByLabelText("Registruojamos veiklos pavadinimas *")).toBe(titleInput());
+  expect(screen.getByLabelText("Registruojamos veiklos aprašymas *")).toBe(descriptionInput());
+  expect(screen.getByLabelText("Pridėkite failą (jei reikia)")).toBe(fileInput());
+  expect(screen.queryByText(/Registuojamos/)).not.toBeInTheDocument();
 });
 
 
@@ -171,17 +203,17 @@ test("submits multipart with the fields in order and only the role header; reset
   expect(post.body).toBeInstanceOf(FormData);
   expect([...post.body.entries()]).toEqual([
     ["theme_id", "1"],
-    ["subtheme_id", "11"],
+    ["subtheme_id", "12"],
     ["title", "Konferencija"],
     ["description", "Pranešimas konferencijoje"],
     ["theme_code", "1."],
-    ["subtheme_code", "1.10."],
+    ["subtheme_code", "1.2."],
   ]);
 
   expect(titleInput()).toHaveValue("");
   expect(descriptionInput()).toHaveValue("");
   expect(triggers()[0]).toHaveTextContent("1. — Studijos");
-  expect(triggers()[1]).toHaveTextContent("1.10. — Dešimta potemė");
+  expect(triggers()[1]).toHaveTextContent("1.2. — Antra potemė");
   expect(submitButton()).toBeEnabled();
   expect(requestLog()).toHaveLength(2);
 });
@@ -198,8 +230,9 @@ test("submits multipart with the fields in order and only the role header; reset
 //
 // A picked file is named under the input and travels LAST in
 // the FormData, after the codes, as a File with its name and
-// type; the chosen subtheme's id and code go along; after the
-// submit the pick is gone and the input is empty.
+// type; the subtheme picked over the default ("1.10.") goes
+// along by id and code; after the submit the pick is gone and
+// the input is empty.
 // -----------------------------------------------------------
 
 test("an attachment is appended after the codes and cleared after a successful submit", async () => {
@@ -214,7 +247,7 @@ test("an attachment is appended after the codes and cleared after a successful s
   expect(screen.getByText("Pasirinktas failas: ataskaita.pdf")).toBeInTheDocument();
 
   await user.click(triggers()[1]);
-  await user.click(within(dropdown()).getByRole("button", { name: "1.2. — Antra potemė" }));
+  await user.click(within(dropdown()).getByRole("button", { name: "1.10. — Dešimta potemė" }));
   await user.type(titleInput(), "Seminaras");
   await user.type(descriptionInput(), "Seminaro aprašymas");
   await user.click(submitButton());
@@ -228,11 +261,11 @@ test("an attachment is appended after the codes and cleared after a successful s
   ]);
   expect(entries.slice(0, 6)).toEqual([
     ["theme_id", "1"],
-    ["subtheme_id", "12"],
+    ["subtheme_id", "11"],
     ["title", "Seminaras"],
     ["description", "Seminaro aprašymas"],
     ["theme_code", "1."],
-    ["subtheme_code", "1.2."],
+    ["subtheme_code", "1.10."],
   ]);
   const sent = post.body.get("attachment");
   expect(sent).toBeInstanceOf(File);
@@ -242,7 +275,7 @@ test("an attachment is appended after the codes and cleared after a successful s
   expect(screen.queryByText(/Pasirinktas failas:/)).not.toBeInTheDocument();
   expect(fileInput().value).toBe("");
   expect(fileInput().files).toHaveLength(0);
-  expect(triggers()[1]).toHaveTextContent("1.2. — Antra potemė");
+  expect(triggers()[1]).toHaveTextContent("1.10. — Dešimta potemė");
 });
 
 

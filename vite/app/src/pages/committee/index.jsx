@@ -39,8 +39,8 @@ export default function CommitteePage() {
           <div className="card-body">
             <h2>Šiame darbalaukyje galėsite:</h2>
             <ul style={{ paddingLeft: "1.25rem", marginBottom: "1.5rem" }}>
-              <li>Įvertinti veiklas, kurios buvo patvirtinos vadybininko.</li>
-              <li>Peržiūrėti įvertintas veiklas ir pakoreguoti įvertinimą esant reikiamybei.</li>
+              <li>Įvertinti veiklas, kurios buvo patvirtintos vadybininko.</li>
+              <li>Peržiūrėti įvertintas veiklas ir pakoreguoti įvertinimą esant reikalui.</li>
               <li>Suskaičiuoti kiekvienos temos balo vertę ir įvertinti darbuotojus.</li>
               <li>Nustatyti limitus temom ir potemėm.</li>
             </ul>

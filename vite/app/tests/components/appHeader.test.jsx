@@ -3,11 +3,13 @@
 //
 //  The shared top bar against the scripted fetch: /api/me on
 //  mount (roles as strings or { name } objects, the name with
-//  its "—" fallback), the activeRole repair rules, the role
+//  its "—" fallback), the activeRole repair rules and the
+//  "(nėra)" text once an answer holds no roles, the role
 //  switcher only for several roles and its navigation, the
 //  brand click, the "app:roles-updated" refetch, and sign-out
-//  — the POST, the cleared role, and the redirect (backend's
-//  answer, or "/" when it is not JSON or fails).
+//  — the POST, the cleared role, and the redirect (a 2xx
+//  answer's, or "/" when the answer is refused, not JSON, or
+//  the request fails).
 // -----------------------------------------------------------
 
 import { test, expect, vi, afterEach } from "vitest";
@@ -126,8 +128,8 @@ test("a refused /api/me leaves the stored role and the name alone", async () => 
 //
 // A stored role the caller does not own becomes the first
 // owned role; no roles at all removes the stored role and
-// leaves the bar on "Kraunama…" (the "(nėra)" text is never
-// reached).
+// shows "(nėra)" — "Kraunama…" is only the time before
+// /api/me answers, never the answer itself.
 // -----------------------------------------------------------
 
 test("a stored role the caller no longer owns is replaced by the first role", async () => {
@@ -141,19 +143,34 @@ test("a stored role the caller no longer owns is replaced by the first role", as
   expect(within(select).getAllByRole("option").map((o) => o.value)).toEqual(["Darbuotojas", "Komisijos narys"]);
 });
 
-test("no roles: activeRole is removed and the bar keeps showing Kraunama…; the logo then goes to /", async () => {
+test("no roles: activeRole is removed and the bar shows (nėra); the logo then goes to /", async () => {
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", { name: "Ona Onaitė", roles: [] });
   const { user } = renderHeader("/manager/roles");
+  expect(screen.getByText("Vadybininkas")).toHaveClass("app-role-value");
 
   await screen.findByText("Ona Onaitė");
   await waitFor(() => expect(localStorage.getItem("activeRole")).toBeNull());
-  expect(screen.getByText("Kraunama…")).toHaveClass("app-role-value");
+  expect(screen.getByText("(nėra)")).toHaveClass("app-role-value");
   expect(screen.queryByText("Vadybininkas")).not.toBeInTheDocument();
-  expect(screen.queryByText("(nėra)")).not.toBeInTheDocument();
+  expect(screen.queryByText("Kraunama…")).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("img", { name: "VU logo" }));
   expect(path()).toBe("/");
+});
+
+test("no roles and nothing stored: Kraunama… only until /api/me answers, then (nėra)", async () => {
+  let answer;
+  onRequest("GET", "/api/me", () => new Promise((resolve) => { answer = resolve; }));
+  renderHeader();
+  expect(screen.getByText("Kraunama…")).toHaveClass("app-role-value");
+  expect(screen.queryByText("(nėra)")).not.toBeInTheDocument();
+
+  await act(async () => { answer({ name: "Ona Onaitė", roles: [] }); });
+  expect(await screen.findByText("(nėra)")).toHaveClass("app-role-value");
+  expect(screen.queryByText("Kraunama…")).not.toBeInTheDocument();
+  expect(localStorage.getItem("activeRole")).toBeNull();
 });
 
 
@@ -246,11 +263,12 @@ test("app:roles-updated refetches /api/me and refreshes the switcher; unmount st
 //
 // "Atsijungti" removes the stored role, POSTs
 // /auth/saml/logout with no headers or body, and hard-
-// navigates to the answered redirect — or to "/" when the
-// answer is not JSON or the request fails.
+// navigates to the redirect a 2xx answer carries — or to "/"
+// when the answer is refused (even with a redirect in its
+// body), is not JSON, or the request fails.
 // -----------------------------------------------------------
 
-test("Atsijungti clears activeRole, POSTs /auth/saml/logout and goes where the backend says", async () => {
+test("Atsijungti clears activeRole, POSTs /auth/saml/logout and goes where a 2xx answer says", async () => {
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
   onRequest("POST", "/auth/saml/logout", { redirect: "https://sso.vu.lt/logout?id=abc" });
@@ -264,6 +282,21 @@ test("Atsijungti clears activeRole, POSTs /auth/saml/logout and goes where the b
   const [post] = requestsTo("POST", "/auth/saml/logout");
   expect(post.headers).toEqual({});
   expect(post.body).toBeNull();
+  expect(location.assign).not.toHaveBeenCalled();
+});
+
+test("a refused logout answer lands on / even when its body carries a redirect", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/me", ME);
+  onRequest("POST", "/auth/saml/logout", { status: 500, body: { redirect: "https://sso.vu.lt/logout?id=abc" } });
+  const { user } = renderHeader();
+  await screen.findByText("Jonas Jonaitis");
+
+  const location = fakeLocation();
+  await user.click(screen.getByRole("button", { name: "Atsijungti" }));
+  await waitFor(() => expect(location.href).toBe("/"));
+  expect(localStorage.getItem("activeRole")).toBeNull();
+  expect(requestsTo("POST", "/auth/saml/logout")).toHaveLength(1);
   expect(location.assign).not.toHaveBeenCalled();
 });
 

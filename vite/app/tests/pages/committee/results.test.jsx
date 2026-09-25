@@ -9,8 +9,9 @@
 //  first code-ordered subtheme) and the people count, the
 //  save PATCHes { action: "score", …, theme_id, subtheme_id }
 //  and patches the row and the modal in place, validation
-//  refuses empty and negative counts without a request, and
-//  backend errors are shown as "Klaida: …".
+//  refuses empty and negative counts without a request,
+//  backend errors are shown as "Klaida: …", and the modal's
+//  comments box and people count answer to their labels.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -194,8 +195,8 @@ test("a failed load shows the backend's error verbatim", async () => {
 //
 // "Peržiūrėti" opens the read-only review: theme pair as
 // text, details, attachment button, comments box read-only
-// with the saved comment, the score; placeholders for a bare
-// row; "Uždaryti" closes it.
+// with the saved comment (found by its label), the score;
+// placeholders for a bare row; "Uždaryti" closes it.
 // -----------------------------------------------------------
 
 test("Peržiūrėti opens the read-only modal; placeholders for missing fields; Uždaryti closes", async () => {
@@ -218,6 +219,7 @@ test("Peržiūrėti opens the read-only modal; placeholders for missing fields; 
   expect(within(m).getByText("Tinka")).toBeInTheDocument();
   expect(within(m).getByRole("textbox")).toHaveAttribute("readonly");
   expect(within(m).getByRole("textbox")).toHaveValue("Gerai");
+  expect(within(m).getByLabelText("Komisijos nario komentarai")).toBe(within(m).getByRole("textbox"));
   expect(within(m).getByText("0.5")).toBeInTheDocument();
   expect(within(m).queryByRole("spinbutton")).not.toBeInTheDocument();
   expect(within(m).getByRole("button", { name: "Uždaryti" })).toBeInTheDocument();
@@ -246,7 +248,8 @@ test("Peržiūrėti opens the read-only modal; placeholders for missing fields; 
 //
 // "Pervertinti" swaps the theme pair for two AppSelects
 // seeded with the row's ids, unlocks the comments and adds
-// the people count; the read-only score previews 1/n.
+// the people count (found by its label); the read-only score
+// previews 1/n.
 // -----------------------------------------------------------
 
 test("Pervertinti arms re-scoring: seeded selects, writable comments, score = 1/n preview", async () => {
@@ -260,6 +263,7 @@ test("Pervertinti arms re-scoring: seeded selects, writable comments, score = 1/
   expect(within(m).getAllByText("Veiklos vykdytojų kiekis")).toHaveLength(1);
 
   const [people, score] = within(m).getAllByRole("spinbutton");
+  expect(within(m).getByLabelText("Veiklos vykdytojų kiekis")).toBe(people);
   expect(people).toHaveValue(null);
   expect(score).toHaveAttribute("readonly");
   expect(score).toHaveValue(0.5);
@@ -324,9 +328,9 @@ test("changing the theme preselects the first code-ordered subtheme; a subtheme 
 // validation
 // -----------------------------------------------------------
 //
-// An empty count is refused with the shipped truncated line
-// (the same words as the field's label), a negative one with
-// the full sentence; no PATCH leaves the page.
+// An empty count is refused with "Klaida: Įveskite veiklos
+// vykdytojų kiekį.", a negative one with "… turi būti 0 arba
+// teigiamas skaičius."; no PATCH leaves the page.
 // -----------------------------------------------------------
 
 test("empty and negative people counts are refused without a request", async () => {
@@ -334,8 +338,7 @@ test("empty and negative people counts are refused without a request", async () 
   const m = modal();
 
   await user.click(within(m).getByRole("button", { name: "Išsaugoti įvertinimą" }));
-  await waitFor(() => expect(screen.getAllByText("Veiklos vykdytojų kiekis")).toHaveLength(2));
-  expect(screen.getAllByText("Veiklos vykdytojų kiekis").some((el) => el.classList.contains("form-status--error"))).toBe(true);
+  expect(await screen.findByText("Klaida: Įveskite veiklos vykdytojų kiekį.")).toHaveClass("form-status--error");
 
   const [people] = within(m).getAllByRole("spinbutton");
   await user.type(people, "-2");

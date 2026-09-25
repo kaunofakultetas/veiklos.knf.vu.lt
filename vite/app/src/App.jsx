@@ -145,7 +145,7 @@ function SignIn() {
       </div>
       <footer className="app-footer">
         <div className="app-footer-inner">
-          © {new Date().getFullYear()} ISKS'22 Goda Stungurytė. Visos teisės saugomos.
+          © {new Date().getFullYear()} Goda Stungurytė, ISKS'22. Visos teisės saugomos.
         </div>
       </footer>
     </div>
@@ -238,8 +238,10 @@ function HomeGate() {
 //
 // The post-sign-in role flow, driven by the session from
 // AuthContext: exactly one role → auto-select and navigate;
-// several → RolePickerModal. Falls through to a "Kraunama…"
-// card while neither branch has fired.
+// several → RolePickerModal; none → a card saying so (every
+// login is granted Darbuotojas, so this means the role
+// catalog is broken). "Kraunama…" only while a branch is
+// about to fire.
 //
 // Used by:
 //   - HomeGate (below)
@@ -254,7 +256,9 @@ function Profile() {
 
 
   // One role picks itself; several open the picker. Roles
-  // may come as strings or { name } objects — tolerate both
+  // may come as strings or { name } objects — tolerate both.
+  // activeRole is a dependency on purpose: once a role is
+  // set, neither branch fires again
   useEffect(() => {
     if (!session) return;
     const roleNames = (session.roles || []).map((r) => typeof r === "string" ? r : r.name);
@@ -267,7 +271,7 @@ function Profile() {
     } else if (roleNames.length > 1 && !activeRole) {
       setNeedsRoleSelection(true);
     }
-  }, [session]);
+  }, [session, activeRole, navigate]);
 
 
   // Keep localStorage in sync when the role changes
@@ -290,6 +294,22 @@ function Profile() {
     return (
       <div className="page">
         <RolePickerModal roles={roles} initial={roles[0]} onConfirm={confirmRole} />
+      </div>
+    );
+  }
+
+  if (session && roles.length === 0) {
+    return (
+      <div className="page page-centered">
+        <div className="card">
+          <div className="card-body">
+            <h2>Jūsų paskyrai nepriskirta jokia rolė.</h2>
+            <p>
+              Prisijungimas pavyko, bet sistemoje neturite nė vienos rolės. Kreipkitės
+              adresu <a href="mailto:info@knf.vu.lt">info@knf.vu.lt</a>.
+            </p>
+          </div>
+        </div>
       </div>
     );
   }

@@ -439,6 +439,8 @@ function ThemeSubthemeFields({
 // keeps the current attachment, with hints naming the current
 // file and the newly picked one. onFileChange(file, input)
 // gets the input too, so an oversized pick can be cleared.
+// The file input is named by the "Priedas" caption through
+// aria-labelledby — see ActivityModal on why not a <label>.
 //
 // Used by:
 //   - ActivityModal (below)
@@ -464,10 +466,11 @@ function AttachmentField({ act, editing, downloading, onDownload, file, onFileCh
 
   return (
     <div className="employee-modal-field">
-      <div className="employee-modal-label">Priedas</div>
+      <div className="employee-modal-label" id="activity-edit-attachment-label">Priedas</div>
       <div className="employee-modal-file">
         <input
           type="file"
+          aria-labelledby="activity-edit-attachment-label"
           accept={ATTACHMENT_ACCEPT}
           onChange={(e) => onFileChange(e.target.files[0] || null, e.target)}
           className="field-input-file"
@@ -513,6 +516,12 @@ function AttachmentField({ act, editing, downloading, onDownload, file, onFileCh
 // the backend — and hands it to onSave, which resolves with
 // the updated activity or throws. Status text goes up through
 // onMessage.
+//
+// The field captions are divs, not <label>s —
+// .employee-modal-label counts on the div's block display and
+// an inline <label> would share the input's line — so the
+// edit inputs take their accessible names from the captions
+// through aria-labelledby (ids activity-edit-*-label).
 //
 // Used by:
 //   - MyActivitiesPage (below) — while an activity is selected
@@ -621,13 +630,14 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
 
           {/* Title */}
           <div className="employee-modal-field">
-            <div className="employee-modal-label">
+            <div className="employee-modal-label" id="activity-edit-title-label">
               Veiklos pavadinimas
             </div>
             {!editing ? (
               <div className="employee-modal-value">{act.title}</div>
             ) : (
               <input
+                aria-labelledby="activity-edit-title-label"
                 className="field-input"
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
@@ -637,7 +647,7 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
 
           {/* Description */}
           <div className="employee-modal-field">
-            <div className="employee-modal-label">
+            <div className="employee-modal-label" id="activity-edit-description-label">
               Veiklos aprašymas
             </div>
             {!editing ? (
@@ -650,6 +660,7 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
               )
             ) : (
               <textarea
+                aria-labelledby="activity-edit-description-label"
                 className="field-textarea"
                 value={editDescription}
                 onChange={(e) =>

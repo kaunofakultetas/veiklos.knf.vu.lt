@@ -30,7 +30,6 @@
 // -----------------------------------------------------------
 
 import express from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import session from 'express-session';
 
@@ -42,6 +41,7 @@ import sessionRouter from './routes/session.js';
 import themesRouter from "./routes/themes.js";
 import activitiesRouter from "./routes/activities.js";
 import { createSamlSetup, SAML_BASE_PATH } from './utils/saml.js';
+import { createAccessLog } from './utils/accessLog.js';
 import createSamlRouter from './routes/saml.js';
 
 // Auth middleware
@@ -60,14 +60,11 @@ const app = express();
 app.set('trust proxy', 1);
 
 
-// Debug leftover: logs EVERY request to stdout. Kept because
-// it is currently the only request log the backend has
-app.use((req, _res, next) => {
-  console.log("BACKEND RECEIVED:", req.method, req.url);
-  next();
-});
+// Every request as one line in the access log — the path,
+// never the query string (utils/accessLog.js) — in daily
+// files under LOG_DIR (_LOGS/backend in compose) or on stdout
+app.use(createAccessLog({ dir: process.env.LOG_DIR }));
 
-app.use(cors());
 app.use(express.json());
 
 
