@@ -28,6 +28,16 @@ function exchange({ method = "GET", url = "/api/themes", ip = "10.0.0.5", status
 // appendFile is asynchronous — give it a moment
 const flushed = () => new Promise((r) => setTimeout(r, 60));
 
+// The duration is real elapsed time — 0 ms alone, sometimes 1
+// under the full suite's load — so lines written through the
+// middleware are compared with it replaced by "<n>ms", after
+// checking it is a whole number of milliseconds
+const DURATION = / \d+ms$/;
+const withoutDuration = (line) => {
+  assert.match(line, DURATION);
+  return line.replace(DURATION, " <n>ms");
+};
+
 
 
 
@@ -85,14 +95,14 @@ test("file mode: daily files, appended, rolling with the day", async () => {
     await flushed();
     assert.equal(nextCalled, 2);
     const first = fs.readFileSync(path.join(dir, "access-2026-09-25.log"), "utf8").trim().split("\n");
-    assert.deepEqual(first.map((l) => l.split(" ").slice(2).join(" ")), ["GET /api/themes 200 0ms", "GET /api/activities/my 200 0ms"]);
+    assert.deepEqual(first.map((l) => withoutDuration(l.split(" ").slice(2).join(" "))), ["GET /api/themes 200 <n>ms", "GET /api/activities/my 200 <n>ms"]);
 
     clock = new Date("2026-09-26T00:00:01.000Z");
     const { req, res } = exchange({ url: "/api/me", status: 401 });
     middleware(req, res, () => nextCalled++);
     res.emit("finish");
     await flushed();
-    assert.equal(fs.readFileSync(path.join(dir, "access-2026-09-26.log"), "utf8").trim(), "2026-09-26T00:00:01.000Z 10.0.0.5 GET /api/me 401 0ms");
+    assert.equal(withoutDuration(fs.readFileSync(path.join(dir, "access-2026-09-26.log"), "utf8").trim()), "2026-09-26T00:00:01.000Z 10.0.0.5 GET /api/me 401 <n>ms");
     assert.deepEqual(fs.readdirSync(dir).sort(), ["access-2026-09-25.log", "access-2026-09-26.log"]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -125,5 +135,5 @@ test("without LOG_DIR the line is printed to stdout", async () => {
   } finally {
     console.log = original;
   }
-  assert.deepEqual(printed, ["2026-09-25T10:00:00.000Z 10.0.0.5 GET /api/health 200 0ms"]);
+  assert.deepEqual(printed.map(withoutDuration), ["2026-09-25T10:00:00.000Z 10.0.0.5 GET /api/health 200 <n>ms"]);
 });
