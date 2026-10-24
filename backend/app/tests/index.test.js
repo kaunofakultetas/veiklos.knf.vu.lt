@@ -308,20 +308,24 @@ test("unknown route → express default 404", async () => {
 // method, PATH, status, duration — with the query string
 // dropped, so an email or a SAML message in a URL never
 // reaches the log; stdout carries no request lines at all.
+// The container's health probe, every thirty seconds, is the
+// one request kept out of the log.
 // -----------------------------------------------------------
 
-test("requests land in the daily access log without their query string; stdout stays quiet", async () => {
+test("requests land in the daily access log without their query string, the health probe not at all; stdout stays quiet", async () => {
   const { base, out } = server;
-  await fetch(`${base}/api/health?email=slaptas%40knf.vu.lt&SAMLResponse=PHNhbWw`);
+  assert.equal((await fetch(`${base}/api/health`)).status, 200);
+  await fetch(`${base}/api/me?email=slaptas%40knf.vu.lt&SAMLResponse=PHNhbWw`);
   await new Promise((r) => setTimeout(r, 200));
 
   const day = new Date().toISOString().slice(0, 10);
   const log = fs.readFileSync(path.join(logDir, `access-${day}.log`), "utf8");
-  const line = log.split("\n").find((l) => l.includes("GET /api/health"));
-  assert.ok(line, "expected the health request in the access log; got:\n" + log);
-  assert.match(line, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z \S+ GET \/api\/health 200 \d+ms$/);
+  const line = log.split("\n").find((l) => l.includes("GET /api/me"));
+  assert.ok(line, "expected the request in the access log; got:\n" + log);
+  assert.match(line, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z \S+ GET \/api\/me 401 \d+ms$/);
   assert.ok(!log.includes("slaptas") && !log.includes("SAMLResponse"), "the query string must not be logged");
-  assert.ok(!out.text.includes("BACKEND RECEIVED") && !out.text.includes("/api/health"), "no request lines on stdout");
+  assert.ok(!log.includes("/api/health"), "the health probe must not be logged");
+  assert.ok(!out.text.includes("BACKEND RECEIVED") && !out.text.includes("/api/me"), "no request lines on stdout");
 });
 
 

@@ -66,7 +66,8 @@ export function accessLine(req, res, ms, at = new Date()) {
 // injectable for tests.
 //
 // Used by:
-//   - index.js — the first middleware
+//   - index.js — the first middleware after the health probe,
+//     which stays out of the log
 // -----------------------------------------------------------
 
 export function createAccessLog({ dir, now = () => new Date() } = {}) {

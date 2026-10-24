@@ -74,14 +74,6 @@ const app = express();
 app.set('trust proxy', 1);
 
 
-// Every request as one line in the access log — the path,
-// never the query string (utils/accessLog.js) — in daily
-// files under LOG_DIR (_LOGS/backend in compose) or on stdout
-app.use(createAccessLog({ dir: process.env.LOG_DIR }));
-
-app.use(express.json());
-
-
 
 
 
@@ -91,8 +83,10 @@ app.use(express.json());
 // GET /api/health
 // -----------------------------------------------------------
 //
-// Liveness probe — no auth, no DB touch, mounted before the
-// session middleware.
+// Liveness probe — no auth, no DB touch. Answered before the
+// access log and the session middleware: the container's
+// probe every 30 seconds would otherwise put thousands of
+// identical lines a day into the access log.
 //
 // Used by:
 //   - backend/Dockerfile — the HEALTHCHECK probes it every
@@ -100,6 +94,15 @@ app.use(express.json());
 // -----------------------------------------------------------
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+
+// Every other request as one line in the access log — the
+// path, never the query string (utils/accessLog.js) — in
+// daily files under LOG_DIR (_LOGS/backend in compose) or on
+// stdout
+app.use(createAccessLog({ dir: process.env.LOG_DIR }));
+
+app.use(express.json());
 
 
 // Form-encoded bodies are parsed for the SAML routes ONLY —
