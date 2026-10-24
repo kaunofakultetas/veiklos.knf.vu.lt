@@ -49,7 +49,7 @@ const ACT_MY = ["id", "theme_id", "subtheme_id", "title", "description", "status
 const ACT_OWN = ["id", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
 const ACT_FULL = ["id", "employee_eid", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "committee_comments", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
 const ACT_EVALUATED = ["id", "theme_id", "subtheme_id", "title", "description", "status", "created_at", "updated_at", "rejection_comment", "manager_comments", "committee_comments", "score", "attachment_path", "attachment_original_name", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
-const ACT_PENDING = ["id", "theme_id", "subtheme_id", "title", "description", "status", "created_at", "rejection_comment", "manager_comments", "score", "attachment_path", "attachment_original_name", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
+const ACT_PENDING = ["id", "theme_id", "subtheme_id", "title", "description", "status", "created_at", "rejection_comment", "manager_comments", "committee_comments", "score", "attachment_path", "attachment_original_name", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
 const ACT_CREATED = ["id", "employee_eid", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at"];
 const ACT_FORM = ["theme_id", "subtheme_id", "title", "description"];
 const SUBTHEME = ["id", "theme_id", "code", "title", "description", "cap"];
@@ -107,9 +107,7 @@ const SHAPES = {
     sends: "tree", response: { tree: { themes: 0, subthemes: 1 } },
   },
   "POST /api/themes": { file: "routes/themes.js", at: 'router.post("/"', reads: { body: ["code", "title"] }, sql: [{ n: 0, out: ["id", "code", "title"] }], sends: "row201", response: { query: 0 } },
-  "PATCH /api/themes/:id": { file: "routes/themes.js", at: 'router.patch("/:id"', reads: { body: ["code", "title"], bodyFrom: "allowed", params: ["id"] }, sql: [{ n: 0, out: ["id", "code", "title"] }], sends: "row", response: { query: 0 } },
   "POST /api/themes/:themeId/subthemes": { file: "routes/themes.js", at: 'router.post("/:themeId/subthemes"', reads: { body: ["code", "title", "description"], params: ["themeId"] }, sql: [{ n: 0, out: SUBTHEME }], sends: "row201", response: { query: 0 } },
-  "PATCH /api/themes/subthemes/:id": { file: "routes/themes.js", at: 'router.patch("/subthemes/:id"', reads: { body: ["code", "title", "description"], bodyFrom: "allowed", params: ["id"] }, sql: [{ n: 0, out: SUBTHEME }], sends: "row", response: { query: 0 } },
   "PATCH /api/themes/subthemes/:id/cap": { file: "routes/themes.js", at: 'router.patch("/subthemes/:id/cap"', reads: { body: ["cap"], params: ["id"] }, sql: [{ n: 0, out: SUBTHEME }], sends: "row", response: { query: 0 } },
   "PATCH /api/themes/:id/total-sum": { file: "routes/themes.js", at: 'router.patch("/:id/total-sum"', reads: { body: ["total_sum"], params: ["id"] }, sql: [{ n: 0, out: ["id", "code", "title", "total_sum"] }], sends: "row", response: { query: 0 } },
   "PATCH /api/themes/:id/pointvalue": { file: "routes/themes.js", at: 'router.patch("/:id/pointvalue"', reads: { body: ["pointvalue"], params: ["id"] }, sql: [{ n: 0, out: ["id", "code", "title", "total_sum", "pointvalue"] }], sends: "row", response: { query: 0 } },
@@ -144,8 +142,9 @@ const SHAPES = {
   "GET /api/activities/:id/attachment": { file: "routes/activities.js", at: 'router.get("/:id/attachment"', reads: { params: ["id"] }, sql: [{ n: 0, out: ["attachment_path", "attachment_original_name", "employee_eid"] }], sends: "file", response: { blob: true } },
   "PATCH /api/activities/:id": {
     file: "routes/activities.js", at: 'router.patch("/:id"', reads: { body: ACT_FORM, via: ["storage"], viaBody: ["theme_code", "subtheme_code"], file: "attachment", params: ["id"] },
-    sql: [{ n: 0, out: ["employee_eid", "status", "attachment_path"] }, { n: 1, out: null }, { n: 2, out: ACT_OWN }],
-    sends: "row", response: { query: 2 },
+    // the transaction: BEGIN, the locked gate read, the UPDATE, COMMIT; then the answer's select, and ROLLBACK on any refusal
+    sql: [{ n: 0, out: null }, { n: 1, out: ["employee_eid", "status", "attachment_path"] }, { n: 2, out: null }, { n: 3, out: null }, { n: 4, out: ACT_OWN }, { n: 5, out: null }],
+    sends: "row", response: { query: 4 },
   },
   "DELETE /api/activities/:id": { file: "routes/activities.js", at: 'router.delete("/:id"', reads: { params: ["id"] }, sql: [{ n: 0, out: OWNER_STATUS }, { n: 1, out: ["attachment_path"] }], sends: "none", response: { none: true } },
   "POST /api/activities/:id/resubmit": { file: "routes/activities.js", at: 'router.post("/:id/resubmit"', reads: { params: ["id"] }, sql: [{ n: 0, out: OWNER_STATUS }, { n: 1, out: null }, { n: 2, out: ACT_OWN }], sends: "row", response: { query: 2 } },

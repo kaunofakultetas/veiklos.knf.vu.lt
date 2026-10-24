@@ -13,10 +13,10 @@
 //  file under LOG_DIR, query strings dropped, stdout quiet),
 //  the absence of CORS headers, that uploads/ is NOT served
 //  as static files, the JSON error handler for bodies the
-//  parser refuses — and, pinned as expected failures, two
-//  known bugs: a request the error handler answers is logged
-//  with its query string, and the session cookie carries no
-//  __Host- prefix.
+//  parser refuses, and that a request the error handler
+//  answers is logged without its query string — plus, pinned
+//  as an expected failure, the known bug that the session
+//  cookie carries no __Host- prefix.
 // -----------------------------------------------------------
 
 import { test, before, after } from "node:test";
@@ -28,6 +28,7 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { SESSION_COOKIE } from "../src/auth/sessionCookie.js";
 
 
 // The backend root (cwd for the children, and where uploads/
@@ -252,9 +253,9 @@ test("SP metadata carries the identity of the request host", async () => {
 // boot log + login target
 // -----------------------------------------------------------
 //
-// The boot line names the VU IdP, the descriptor file and
-// the derived identity; /login redirects straight to
-// sso.vu.lt.
+// The boot line names the VU IdP, the descriptor file, the
+// derived identity and that a local file's signature is not
+// checked; /login redirects straight to sso.vu.lt.
 // -----------------------------------------------------------
 
 test("boots from the file and logs in at sso.vu.lt", async () => {
@@ -263,6 +264,7 @@ test("boots from the file and logs in at sso.vu.lt", async () => {
     out.text.includes(`SAML IdP https://sso.vu.lt/saml/saml2/idp/metadata.php from ${VU_FIXTURE}; SP identity derived from the request host; SP cert SHA-256 `),
     "expected the boot line; got:\n" + out.text
   );
+  assert.ok(out.text.includes("; IdP metadata signature not checked (local file)"), "the boot line says the file is taken as placed");
 
   const login = await fetch(`${base}/auth/saml/login`, { redirect: "manual" });
   assert.equal(login.status, 302);
@@ -428,29 +430,23 @@ test("a malformed JSON body → 400 JSON without a stack trace; too large → 41
 // the container log just as it stays out of the access log.
 // The test server has no database: a request carrying a
 // validly signed session cookie fails in the session store.
-// The handler logs req.url, query and all: a known bug,
-// pinned as an expected failure until it is fixed.
 // -----------------------------------------------------------
 
-test(
-  "BUG: a 500 from the error handler is logged with its path, never its query string",
-  { todo: "known bug: index.js's error handler logs req.url — a database outage writes staff emails and SAML messages from query strings into the container log" },
-  async () => {
-    const { base, out } = server;
-    const sid = "regression-error-log";
-    const sig = crypto.createHmac("sha256", "test-secret").update(sid).digest("base64").replace(/=+$/, "");
+test("a 500 from the error handler is logged with its path, never its query string", async () => {
+  const { base, out } = server;
+  const sid = "regression-error-log";
+  const sig = crypto.createHmac("sha256", "test-secret").update(sid).digest("base64").replace(/=+$/, "");
 
-    const res = await fetch(`${base}/api/user-roles?email=slaptas.vadybininkas%40knf.vu.lt`, {
-      headers: { Cookie: `connect.sid=${encodeURIComponent(`s:${sid}.${sig}`)}` },
-    });
-    assert.equal(res.status, 500);
-    assert.deepEqual(await res.json(), { error: "internal error" });
+  const res = await fetch(`${base}/api/user-roles?email=slaptas.vadybininkas%40knf.vu.lt`, {
+    headers: { Cookie: `${SESSION_COOKIE}=${encodeURIComponent(`s:${sid}.${sig}`)}` },
+  });
+  assert.equal(res.status, 500);
+  assert.deepEqual(await res.json(), { error: "internal error" });
 
-    await new Promise((r) => setTimeout(r, 200));
-    assert.ok(out.text.includes("GET /api/user-roles"), "expected the error line with the path; got:\n" + out.text);
-    assert.ok(!out.text.includes("slaptas.vadybininkas"), "the query string must not be logged");
-  }
-);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(out.text.includes("GET /api/user-roles"), "expected the error line with the path; got:\n" + out.text);
+  assert.ok(!out.text.includes("slaptas.vadybininkas"), "the query string must not be logged");
+});
 
 
 
@@ -465,29 +461,65 @@ test(
 // A cookie without a name prefix can be set for the whole
 // knf.vu.lt domain by any sibling host — and this server runs
 // dozens of them, students' Node-RED flows and n8n webhooks
-// among them. A connect.sid planted with Domain=knf.vu.lt and
-// Path=/api is sent ahead of the real one, so the user works
-// in the planter's account, or reads as signed out. The
-// __Host- prefix makes the browser refuse any such cookie
-// that carries a Domain. The session middleware and the
-// logout that clears the cookie must agree on that name, and
-// a __Host- cookie can only be cleared with Secure. The
-// cookie is plain connect.sid: a known bug, pinned as an
-// expected failure until it is fixed.
+// among them. A session cookie planted with
+// Domain=knf.vu.lt and Path=/api is sent ahead of the real
+// one, so the user works in the planter's account, or reads
+// as signed out. The __Host- prefix makes the browser refuse
+// any such cookie that carries a Domain. The session
+// middleware and the logout that clears the cookie take its
+// name from auth/sessionCookie.js, and a __Host- cookie is
+// only cleared with Secure, Path=/ and no Domain.
 // -----------------------------------------------------------
 
 test(
-  "BUG: the session cookie carries the __Host- prefix, and logout clears that cookie",
-  { todo: "known bug: the session cookie is the default connect.sid — any *.knf.vu.lt host can plant one for the whole domain" },
+  "the session cookie carries the __Host- prefix, and logout clears that cookie",
   async () => {
+    assert.match(SESSION_COOKIE, /^__Host-/, `the session cookie is named ${SESSION_COOKIE}`);
     const src = fs.readFileSync(path.join(appRoot, "src", "index.js"), "utf8");
     const sessionOptions = src.match(/session\(\{[\s\S]*?\n\}\)\);/)?.[0] ?? "";
-    const name = sessionOptions.match(/\bname:\s*["']([^"']+)["']/)?.[1] ?? "connect.sid";
-    assert.match(name, /^__Host-/, `the session cookie is named ${name}`);
+    assert.match(sessionOptions, /\bname:\s*SESSION_COOKIE\b/, "the session middleware names its cookie SESSION_COOKIE");
 
     const res = await fetch(`${server.base}/auth/saml/logout`, { method: "POST" });
     const cleared = res.headers.get("set-cookie") ?? "";
-    assert.ok(cleared.startsWith(`${name}=`), `logout clears "${cleared.split("=")[0]}", not ${name}`);
+    assert.ok(cleared.startsWith(`${SESSION_COOKIE}=`), `logout clears "${cleared.split("=")[0]}", not ${SESSION_COOKIE}`);
     assert.match(cleared, /;\s*Secure/i, "a __Host- cookie is only cleared with Secure");
+    assert.match(cleared, /;\s*Path=\/(;|$)/i, "and with Path=/");
+    assert.doesNotMatch(cleared, /;\s*Domain=/i, "and without a Domain");
   }
 );
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// no session secret, no backend
+// -----------------------------------------------------------
+//
+// The session cookie is signed with SESSION_SECRET; without
+// one — or with the old built-in placeholder, which anyone
+// can read in the repository — anybody could sign a cookie
+// for any session. Like a missing IdP descriptor, a missing
+// secret stops the boot with an error naming the variable,
+// before anything listens.
+// -----------------------------------------------------------
+
+test("without SESSION_SECRET, or with the old placeholder, the server refuses to start", { timeout: 60_000 }, async (t) => {
+  for (const secret of [undefined, "", "replace-me"]) {
+    const env = { ...process.env, PORT: "0", LOG_DIR: logDir, IDP_METADATA: VU_FIXTURE, SP_PRIVATE_KEY_PATH: FAKE_SP_KEY, SP_CERT_PATH: FAKE_SP_CERT };
+    delete env.SESSION_SECRET;
+    if (secret !== undefined) env.SESSION_SECRET = secret;
+    const child = spawn(process.execPath, ["src/index.js"], { cwd: appRoot, env, stdio: ["ignore", "pipe", "pipe"] });
+    t.after(() => child.kill());
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+
+    const [code] = await once(child, "exit");
+    assert.notEqual(code, 0, `exit code with SESSION_SECRET ${JSON.stringify(secret)}`);
+    assert.match(out, /SESSION_SECRET is required/);
+    assert.doesNotMatch(out, /API listening/);
+  }
+});

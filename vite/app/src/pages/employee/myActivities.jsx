@@ -15,7 +15,6 @@
 //
 //  Split into (root component last):
 //
-//    getActiveRole       — activeRole from localStorage
 //    statusClass         — status → pill css class
 //    formatDate          — ISO → lt-LT date-time
 //    AttachmentButton    — download button with busy label
@@ -30,28 +29,8 @@
 
 import { useEffect, useState } from "react";
 import { AppSelect, ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, ATTACHMENT_TOO_BIG } from "@/components/appCommon.jsx";
+import { getActiveRole } from "@/components/activeRole.js";
 import "@/components/employee.css";
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// getActiveRole
-// -----------------------------------------------------------
-//
-// The active role for the X-Active-Role header, read fresh
-// per request.
-//
-// Used by:
-//   - MyActivitiesPage (below) — every API call
-// -----------------------------------------------------------
-
-function getActiveRole() {
-  return localStorage.getItem("activeRole") || "";
-}
 
 
 

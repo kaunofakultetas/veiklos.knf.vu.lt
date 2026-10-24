@@ -1,8 +1,9 @@
 // -----------------------------------------------------------
 //  [*] Email — activity status notifications
 //
-//  Plain-text Lithuanian emails sent to an employee when a
-//  manager rejects or returns their activity, delivered
+//  Plain-text Lithuanian emails: to an employee when a
+//  manager rejects or returns their activity, and to each
+//  manager when the committee returns one to them; delivered
 //  through Mailjet's SMTP relay (in-v3.mailjet.com:587,
 //  STARTTLS). Mailjet
 //  authenticates the relay with the account's API key /
@@ -12,7 +13,7 @@
 //  hostname is pinned to the veiklos-exit layer4 proxy
 //  (compose extra_hosts), which forwards port 587 out.
 //
-//  Both senders are fire-and-forget from the caller's side —
+//  Every sender is fire-and-forget from the caller's side —
 //  activities.js .catch()es failures and only logs them, so a
 //  broken mail setup never blocks the status change itself.
 // -----------------------------------------------------------
@@ -105,6 +106,48 @@ Vadybininkės komentaras:
 ${comment}
 
 Jei manote, kad tai klaida, susisiekite su vadybininke.
+`;
+
+  await transporter.sendMail({
+    from: `"${FROM_NAME}" <${FROM_ADDRESS}>`,
+    to,
+    subject,
+    text,
+  });
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// sendCommitteeReturnEmail
+// -----------------------------------------------------------
+//
+// "Komisija grąžino veiklą" — sent to a manager when the
+// committee sends an activity back to the manager's queue,
+// naming the employee and carrying the committee's reason,
+// so the manager knows why it is there again.
+//
+// Used by:
+//   - routes/activities.js — notifyManagersOfReturn, after a
+//     PATCH /api/activities/:id/committee return
+// -----------------------------------------------------------
+
+export async function sendCommitteeReturnEmail({ to, fullName, employeeName, title, comment }) {
+    const subject = `Komisija grąžino veiklą: ${title}`;
+    const text = `
+Sveiki, ${fullName || ""}
+
+Komisija grąžino Jums peržiūrėti veiklą "${title}".
+Darbuotojas: ${employeeName || ""}
+
+Komisijos komentaras:
+${comment}
+
+Veikla vėl laukia Jūsų peržiūros sistemoje.
 `;
 
   await transporter.sendMail({

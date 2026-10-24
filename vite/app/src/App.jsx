@@ -11,10 +11,17 @@
 //  in is a full-page redirect to /auth/saml/login, so the SPA
 //  never handles tokens itself.
 //
-//  The active role is the app's central switch. It lives in
-//  localStorage("activeRole"), gates every /manager,
-//  /committee and /employee route (RoleRoute), and the pages
-//  send it to the backend as the X-Active-Role header.
+//  The active role is the app's central switch. It belongs to
+//  the browser tab (components/activeRole.js — a role
+//  switched in one tab leaves the others alone), gates every
+//  /manager, /committee and /employee route (RoleRoute), and
+//  the pages send it to the backend as the X-Active-Role
+//  header.
+//
+//  While signed in, SessionExpired watches the API answers: a
+//  session that ends mid-work (a 401) gets a notice offering
+//  a fresh sign-in in a new tab instead of a page that only
+//  fails.
 //
 //  Split into (root component last):
 //
@@ -33,6 +40,8 @@
 import { useEffect, useState, createContext, useContext } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import AppErrorBoundary from "./components/appErrorBoundary.jsx";
+import SessionExpired from "./components/sessionExpired.jsx";
+import { getActiveRole, setActiveRole as storeActiveRole } from "./components/activeRole.js";
 import "./components/appLayout.css";
 import vuLogo from "./assets/VU logo.png";
 
@@ -219,7 +228,7 @@ function RolePickerModal({ roles, initial, onConfirm }) {
 
 function HomeGate() {
   const { user } = useContext(AuthContext);
-  const activeRole = localStorage.getItem("activeRole") || "";
+  const activeRole = getActiveRole();
 
   if (!user) return <SignIn />;
   if (activeRole) return <Navigate to={roleToPath(activeRole)} replace />;
@@ -251,7 +260,7 @@ function Profile() {
   const { session } = useContext(AuthContext);
   const navigate = useNavigate();
 
-  const [activeRole, setActiveRole] = useState(() => localStorage.getItem("activeRole") || "");
+  const [activeRole, setActiveRole] = useState(() => getActiveRole());
   const [needsRoleSelection, setNeedsRoleSelection] = useState(false);
 
 
@@ -266,7 +275,7 @@ function Profile() {
     if (roleNames.length === 1 && !activeRole) {
       const r = roleNames[0];
       setActiveRole(r);
-      localStorage.setItem("activeRole", r);
+      storeActiveRole(r);
       navigate(roleToPath(r), { replace: true });
     } else if (roleNames.length > 1 && !activeRole) {
       setNeedsRoleSelection(true);
@@ -274,9 +283,9 @@ function Profile() {
   }, [session, activeRole, navigate]);
 
 
-  // Keep localStorage in sync when the role changes
+  // Keep the stored role in step when the role changes
   useEffect(() => {
-    if (activeRole) localStorage.setItem("activeRole", activeRole);
+    if (activeRole) storeActiveRole(activeRole);
   }, [activeRole]);
 
 
@@ -284,7 +293,7 @@ function Profile() {
 
   const confirmRole = (role) => {
     setActiveRole(role);
-    localStorage.setItem("activeRole", role);
+    storeActiveRole(role);
     setNeedsRoleSelection(false);
     navigate(roleToPath(role), { replace: true });
   };
@@ -334,9 +343,9 @@ function Profile() {
 // -----------------------------------------------------------
 //
 // Guard around a workspace subtree: logged out → back to "/",
-// wrong ACTIVE role → the "Netinkama rolė" card. This is
-// UI-level protection only — the backend enforces roles
-// again via the session and X-Active-Role.
+// wrong ACTIVE role (this tab's) → the "Netinkama rolė" card.
+// This is UI-level protection only — the backend enforces
+// roles again via the session and X-Active-Role.
 //
 // Used by:
 //   - RoutesRoot (below) — around each workspace layout
@@ -344,7 +353,7 @@ function Profile() {
 
 function RoleRoute({ required, children }) {
   const { user } = useContext(AuthContext);
-  const activeRole = localStorage.getItem("activeRole") || "";
+  const activeRole = getActiveRole();
 
   if (!user) return <Navigate to="/" replace />;
   if (required?.length && !required.includes(activeRole)) {
@@ -377,7 +386,7 @@ function RoleRoute({ required, children }) {
 // until it answers, then publishes the result through
 // AuthContext and renders the route table: "/" (HomeGate),
 // one guarded subtree per workspace, and a catch-all
-// redirect.
+// redirect — with SessionExpired watching while signed in.
 //
 // Used by:
 //   - App (below)
@@ -417,6 +426,10 @@ function RoutesRoot() {
 
   return (
     <AuthContext.Provider value={authState}>
+      {/* Before the routes on purpose: its fetch watcher is
+          in place before the pages' first requests */}
+      {authState.user && <SessionExpired />}
+
       <Routes>
         <Route path="/" element={<HomeGate />} />
 

@@ -32,7 +32,9 @@ import "@/components/employee.css";
 //
 // Roles are edited optimistically: assign/remove update the
 // local pill list from the 2xx response without re-fetching
-// the user.
+// the user. Both act on the user the card shows, never on
+// the search box, which can be edited after the lookup — and
+// the self-revoke confirm asks about that same user.
 //
 // Used by:
 //   - App.jsx — route /manager/roles
@@ -110,7 +112,7 @@ export default function RolesPage() {
       const res = await fetch("/api/user-roles/assign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role: assignRole }),
+        body: JSON.stringify({ email: user.email, role: assignRole }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -138,7 +140,7 @@ export default function RolesPage() {
     // on the next header refresh — confirm it first
     const isSelf =
       currentUserEmail &&
-      email.trim().toLowerCase() === currentUserEmail;
+      (user.email || "").toLowerCase() === currentUserEmail;
 
     if (role === "Vadybininkas" && isSelf) {
       const ok = window.confirm(
@@ -151,7 +153,7 @@ export default function RolesPage() {
       const res = await fetch("/api/user-roles/remove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role }),
+        body: JSON.stringify({ email: user.email, role }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));

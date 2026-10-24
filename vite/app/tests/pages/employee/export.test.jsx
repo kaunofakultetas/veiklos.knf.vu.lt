@@ -53,6 +53,20 @@ const THEMES = [
   ] },
 ];
 
+// The live catalog's shape: two theme families numbered
+// alike, so their subthemes share codes; each theme's
+// subthemes arrive out of code order
+const FAMILIES = [
+  { id: 1, code: "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.1.", title: "Komunikacija", total_sum: "0", pointvalue: null, subthemes: [
+    { id: 11, theme_id: 1, code: "6.1.2.", title: "Renginiai", description: null, cap: null },
+    { id: 12, theme_id: 1, code: "6.1.1.", title: "Straipsniai", description: null, cap: null },
+  ] },
+  { id: 2, code: "STUDIJŲ KOKYBĖ 6.1.", title: "Dėstymas", total_sum: "0", pointvalue: null, subthemes: [
+    { id: 22, theme_id: 2, code: "6.1.2.", title: "Gerosios praktikos", description: null, cap: null },
+    { id: 21, theme_id: 2, code: "6.1.1.", title: "Mentoriavimas", description: null, cap: null },
+  ] },
+];
+
 // Three activities: unscored, scored, and one scored "0" with
 // no timestamp (the edge cases of the score and date cells: a
 // zero score is shown and written, a missing date is blank).
@@ -213,6 +227,36 @@ test("the theme filter narrows the rows and the subtheme options and resets subt
 
 
 // -----------------------------------------------------------
+// two families sharing subtheme codes
+// -----------------------------------------------------------
+//
+// With no theme ticked, the subtheme options keep each
+// theme's subthemes together, in the order the themes come
+// and in code order within each, instead of setting the two
+// families' equal codes side by side.
+// -----------------------------------------------------------
+
+test("the subtheme options keep each theme's subthemes together when two families share codes", async () => {
+  signInAs("Darbuotojas");
+  onRequest("GET", "/api/themes", FAMILIES);
+  onRequest("GET", "/api/activities/my", []);
+  const { user } = renderPage(ExportPage);
+
+  await user.click(filterTrigger("Potemė"));
+  await within(filter("Potemė")).findAllByRole("checkbox");
+  expect(optionLabels("Potemė")).toEqual([
+    "6.1.1. — Straipsniai", "6.1.2. — Renginiai",
+    "6.1.1. — Mentoriavimas", "6.1.2. — Gerosios praktikos",
+  ]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // status filter
 // -----------------------------------------------------------
 //
@@ -311,10 +355,11 @@ test("the trigger reports aria-expanded and Escape closes the menu, keeping the 
 //
 // "Eksportuoti" builds one array-of-arrays — the exact header
 // row, then one row per filtered activity with the formatted
-// date, codes, titles, description, status and score (the
-// NUMERIC string as it arrived, "" for null) — appends the
-// sheet as "Veiklos" to a new book and writes
-// veiklos-eksportas-<timestamp>.xlsx.
+// date, codes, titles, description, status and score — the
+// score as a number, though pg sends NUMERIC as a string,
+// because a text cell is skipped by Excel's SUM; "" for
+// null — appends the sheet as "Veiklos" to a new book and
+// writes veiklos-eksportas-<timestamp>.xlsx.
 // -----------------------------------------------------------
 
 test("Eksportuoti writes the header row and every row into a \"Veiklos\" sheet", async () => {
@@ -327,8 +372,8 @@ test("Eksportuoti writes the header row and every row into a \"Veiklos\" sheet",
   expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith([
     HEADER,
     [fmt("2026-03-05T10:20:00Z"), "1.", "Studijos", "1.10.", "Dešimta", "Kursas A", "Aprašas A", "PATEIKTA", ""],
-    [fmt("2026-04-01T08:00:00Z"), "2.", "Mokslas", "2.1.", "Straipsniai", "Straipsnis B", "", "ĮVERTINTA", "4.5"],
-    ["", "1.", "Studijos", "1.2.", "Antra", "Seminaras C", "Aprašas C", "ATMESTA", "0"],
+    [fmt("2026-04-01T08:00:00Z"), "2.", "Mokslas", "2.1.", "Straipsniai", "Straipsnis B", "", "ĮVERTINTA", 4.5],
+    ["", "1.", "Studijos", "1.2.", "Antra", "Seminaras C", "Aprašas C", "ATMESTA", 0],
   ]);
 
   const sheet = XLSX.utils.aoa_to_sheet.mock.results[0].value;
@@ -357,7 +402,7 @@ test("the export honours the filters: only the filtered rows are written", async
 
   expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith([
     HEADER,
-    ["", "1.", "Studijos", "1.2.", "Antra", "Seminaras C", "Aprašas C", "ATMESTA", "0"],
+    ["", "1.", "Studijos", "1.2.", "Antra", "Seminaras C", "Aprašas C", "ATMESTA", 0],
   ]);
   expect(XLSX.utils.book_append_sheet).toHaveBeenCalledWith(expect.anything(), expect.anything(), "Veiklos");
   expect(XLSX.writeFile).toHaveBeenCalledTimes(1);

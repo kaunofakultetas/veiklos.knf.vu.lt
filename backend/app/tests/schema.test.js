@@ -39,7 +39,7 @@ const INIT_SQL_CANDIDATES = [
 
 // The backend's table-name constants (db/tables.js), as they
 // appear inside the SQL template literals
-const TABLE_CONSTANTS = { TBL_USERS: "users", TBL_ROLES: "roles", TBL_USER_ROLES: "user_roles" };
+const TABLE_CONSTANTS = { TBL_USERS: "users", TBL_ROLES: "roles", TBL_USER_ROLES: "user_roles", TBL_SAML_ASSERTIONS: "saml_assertions" };
 
 // Words that can sit where a column name would but are not
 // columns
@@ -281,8 +281,7 @@ test("the checker reports phantom columns and tables", () => {
 // -----------------------------------------------------------
 
 test(
-  "BUG: every time column in postgres/init.sql is TIMESTAMPTZ",
-  { todo: "known bug: users.created_at/last_login_at, user_roles.assigned_at and activities.created_at/updated_at are TIMESTAMP — every page and XLSX export shows times 2–3 hours late" },
+  "every time column in postgres/init.sql is TIMESTAMPTZ",
   () => {
     const file = INIT_SQL_CANDIDATES.find((p) => fs.existsSync(p));
     assert.ok(file, "postgres/init.sql not found — runTests.sh mounts it at /app/postgres");
@@ -313,14 +312,14 @@ test(
 // never happen and a second theme with the same code is
 // simply stored (the themes page has no check of its own).
 // Any of the usual forms counts: UNIQUE on the column, a
-// table constraint, a unique index, and for subthemes also
-// unique per theme. Neither table declares it: a known bug,
-// pinned as an expected failure until it is fixed.
+// table constraint, a unique index. A subtheme code is
+// unique within its theme and must not be unique across
+// themes — the two theme families number their subthemes
+// alike, so both have a 6.1.1.
 // -----------------------------------------------------------
 
 test(
-  "BUG: theme codes and subtheme codes are declared unique in postgres/init.sql",
-  { todo: "known bug: themes.code and subthemes.code carry no UNIQUE constraint — the 409 the theme routes promise for a duplicate code never happens and duplicates are stored" },
+  "theme codes are unique, and subtheme codes unique within their theme in postgres/init.sql",
   () => {
     const file = INIT_SQL_CANDIDATES.find((p) => fs.existsSync(p));
     assert.ok(file, "postgres/init.sql not found — runTests.sh mounts it at /app/postgres");
@@ -340,6 +339,60 @@ test(
     };
 
     assert.ok(uniqueIn("themes", [["code"]]), "themes.code is unique");
-    assert.ok(uniqueIn("subthemes", [["code"], ["theme_id", "code"], ["code", "theme_id"]]), "subthemes.code is unique, alone or per theme");
+    assert.ok(uniqueIn("subthemes", [["theme_id", "code"], ["code", "theme_id"]]), "a subtheme code is unique within its theme");
+    assert.ok(!uniqueIn("subthemes", [["code"]]), "a subtheme code is not unique across themes — the families share codes");
   }
 );
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// a theme's point value starts unset
+// -----------------------------------------------------------
+//
+// The point value is what the committee's calculation stores;
+// until then a theme has none, and the calculate page shows
+// "—" for it. A column default would make every new theme
+// claim a point value of 1 that nobody calculated.
+// -----------------------------------------------------------
+
+test("themes.pointvalue has no default: a new theme's point value is unset", () => {
+  const file = INIT_SQL_CANDIDATES.find((p) => fs.existsSync(p));
+  assert.ok(file, "postgres/init.sql not found — runTests.sh mounts it at /app/postgres");
+  const sql = fs.readFileSync(file, "utf8").replace(/--.*$/gm, "");
+
+  const themes = sql.match(/CREATE TABLE IF NOT EXISTS themes\s*\(([\s\S]*?)\);/i)?.[1] ?? "";
+  const column = themes.split("\n").find((line) => /^\s*pointvalue\b/i.test(line));
+  assert.ok(column, "themes.pointvalue exists");
+  assert.doesNotMatch(column, /\bDEFAULT\b/i, column.trim());
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// used login assertions are remembered
+// -----------------------------------------------------------
+//
+// The replay check (routes/saml.js) keeps each used
+// assertion's ID in saml_assertions until the assertion
+// expires: the ID is the primary key, so a second insert of
+// it conflicts, and the expiry carries its zone like every
+// other point in time.
+// -----------------------------------------------------------
+
+test("init.sql keeps used assertion IDs: saml_assertions (id PRIMARY KEY, expire TIMESTAMPTZ NOT NULL)", () => {
+  const file = INIT_SQL_CANDIDATES.find((p) => fs.existsSync(p));
+  assert.ok(file, "postgres/init.sql not found — runTests.sh mounts it at /app/postgres");
+  const sql = fs.readFileSync(file, "utf8").replace(/--.*$/gm, "");
+  const body = sql.match(/CREATE TABLE IF NOT EXISTS saml_assertions\s*\(([\s\S]*?)\);/i)?.[1] ?? "";
+  assert.match(body, /^\s*id\s+VARCHAR\s+PRIMARY KEY/im, "the assertion ID is the key");
+  assert.match(body, /^\s*expire\s+TIMESTAMPTZ\s+NOT NULL/im, "the expiry is a zoned point in time");
+});

@@ -46,7 +46,7 @@ const ACT1 = {
   subtheme_id: 11, subtheme_code: "6.1.1.", subtheme_title: "Paskaitos",
   title: "Paskaitų ciklas", description: "Aprašymas A",
   attachment_path: "uploads/1.pdf", attachment_original_name: "ataskaita.pdf",
-  manager_comments: "", rejection_comment: "", score: null,
+  manager_comments: "", rejection_comment: "", committee_comments: null, score: null,
 };
 const ACT2 = {
   id: 2, full_name: "Ona Onaitė", status: "PATEIKTA", created_at: "2026-09-02T08:00:00Z",
@@ -54,7 +54,7 @@ const ACT2 = {
   subtheme_id: 21, subtheme_code: "6.2.2.", subtheme_title: "Konferencijos",
   title: "Konferencijos pranešimas", description: "",
   attachment_path: null, attachment_original_name: null,
-  manager_comments: "Senas komentaras", rejection_comment: "Ankstesnis atmetimas", score: null,
+  manager_comments: "Senas komentaras", rejection_comment: "Ankstesnis atmetimas", committee_comments: null, score: null,
 };
 
 // The table row naming an activity (undefined once it left)
@@ -64,8 +64,8 @@ const rowNamed = (text) => screen.getAllByRole("row").find((r) => within(r).quer
 const modal = (heading) => screen.getByRole("heading", { name: heading }).closest(".employee-modal");
 
 // The row a verdict PATCH answers with: the full activity row
-// — the queue's fields plus employee_eid, committee_comments
-// and updated_at — with the verdict's changes on top. A plain
+// — the queue's fields plus employee_eid and updated_at —
+// with the verdict's changes on top. A plain
 // row is a 200 reply: the fake tells an activity's own
 // `status` from a reply envelope
 function verdict(activity, changes = {}) {
@@ -631,4 +631,29 @@ test("a 200 whose body is not an array, for either list, shows one message and k
   expect(screen.getByText("(Šiuo metu nėra pateiktų veiklų.)")).toBeInTheDocument();
   expect(screen.queryByText("Paskaitų ciklas")).not.toBeInTheDocument();
   expect(requestLog()).toHaveLength(4);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// a row the committee sent back
+// -----------------------------------------------------------
+//
+// An activity the committee returned is back in PATEIKTA with
+// the committee's reason in committee_comments; the row shows
+// that reason under the title, so the manager knows why it is
+// here again. A row without one shows no note.
+// -----------------------------------------------------------
+
+test("a row the committee sent back shows the committee's reason under its title", async () => {
+  scriptQueue([{ ...ACT1, committee_comments: "Patikslinkite temą" }, ACT2]);
+  renderPage(ManagerReviewPage);
+  await screen.findByText("Paskaitų ciklas");
+
+  expect(within(rowNamed("Paskaitų ciklas")).getByText("Komisijos komentaras: Patikslinkite temą")).toBeInTheDocument();
+  expect(within(rowNamed("Konferencijos pranešimas")).queryByText(/Komisijos komentaras/)).not.toBeInTheDocument();
 });

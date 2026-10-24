@@ -130,3 +130,29 @@ test("check: DB failure → 500 internal error", async () => {
   assert.equal(res.status, 500);
   assert.deepEqual(res.body, { error: "internal error" });
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// check — roles that could not be loaded
+// -----------------------------------------------------------
+//
+// The SPA builds its role state from this answer, so a role
+// lookup that failed must not come back as a session with no
+// roles — the page would forget the active role. It is the
+// strict loader's 500 instead, before the user row is read.
+// -----------------------------------------------------------
+
+test("check: roles that could not be loaded → 500, never a session without roles", async () => {
+  signInAs("eid-1", [], { rolesUnavailable: true });
+  onQuery(/FROM users WHERE eid = \$1/, [{ eid: "eid-1", email: "j@vu.lt", full_name: "Jonas", created_at: null, last_login_at: null }]);
+
+  const res = await api(app.base, "GET", "/api/session/check");
+  assert.equal(res.status, 500);
+  assert.deepEqual(res.body, { error: "internal error" });
+  assert.deepEqual(queryLog(), []);
+});

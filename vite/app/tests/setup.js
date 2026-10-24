@@ -4,7 +4,8 @@
 //  Loaded by vitest before every test file (vite.config.js
 //  → test.setupFiles): the jest-dom matchers on expect,
 //  Testing Library's cleanup after each test, localStorage
-//  wiped, and window.fetch replaced by the scripted fake from
+//  and sessionStorage wiped (the active role lives in both),
+//  and window.fetch replaced by the scripted fake from
 //  helpers/fakeFetch.js so no test can reach a network. After
 //  every test the API contract guard must be clean: a request
 //  or answer off the contract, or a page reading a field the
@@ -22,6 +23,7 @@ expect.extend(matchers);
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   resetFakeFetch();
   resetContractGuard();
   installFakeFetch();

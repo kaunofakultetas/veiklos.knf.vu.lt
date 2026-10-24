@@ -16,33 +16,12 @@
 //
 //  Split into (root component last):
 //
-//    getActiveRole — activeRole from localStorage
 //    LimitsPage    — both tables (default export)
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
+import { getActiveRole } from "@/components/activeRole.js";
 import "@/components/employee.css";
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// getActiveRole
-// -----------------------------------------------------------
-//
-// The active role for the X-Active-Role header, read fresh
-// per request.
-//
-// Used by:
-//   - LimitsPage (below)
-// -----------------------------------------------------------
-
-function getActiveRole() {
-  return localStorage.getItem("activeRole") || "";
-}
 
 
 

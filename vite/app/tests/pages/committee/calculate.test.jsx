@@ -396,6 +396,45 @@ test("the results table: score × point, caps, dashes for zero rows, Iš viso", 
   expect(bodyRows(tableWith("Bendra balų suma"))).toHaveLength(3);
 });
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// a saved point value reaches the open employee
+// -----------------------------------------------------------
+//
+// With an employee's table open, "Skaičiuoti" on a theme
+// stores a new point value — and that employee's rows of the
+// theme must show it at once, results and "Iš viso" included,
+// not the value loaded before the save. No second GET: the
+// saved value is the one the PATCH confirmed.
+// -----------------------------------------------------------
+
+test("a saved point value also updates the open employee's rows of that theme", async () => {
+  onRequest("GET", "/api/activities/evaluated/employee/e1/subthemes", SUBTHEMES);
+  onRequest("PATCH", "/api/themes/1/pointvalue", THEME1_SAVED);
+  const { user } = await renderLoaded();
+  await user.click(pickerTrigger());
+  await user.click(screen.getByRole("button", { name: "Ona Onaitė" }));
+  await screen.findByText("Iš viso: 163.00");
+
+  await user.selectOptions(themeSelect(), "1");
+  await user.click(calcButton());
+  await screen.findByText("1 balo vertė išsaugota.");
+
+  expect(bodyRows(tableWith("Rezultatas"))).toEqual([
+    ["6.1. — Studijų kokybė", "6.1.1. — Paskaitos", "4", "33.33", "133.32"],
+    ["6.1. — Studijų kokybė", "6.1.2. — Seminarai", "10", "33.33", "60.00"],
+    ["6.2. — Mokslas", "6.2.1. — Straipsniai", "3", "—", "—"],
+    ["6.3. — Sklaida", "6.3.1. — Renginiai", "2", "1.50", "3.00"],
+  ]);
+  expect(screen.getByText("Iš viso: 196.32")).toBeInTheDocument();
+  expect(requestsTo("GET", "/api/activities/evaluated/employee/e1/subthemes")).toHaveLength(1);
+});
+
 test("a refused subthemes load shows the backend's reason", async () => {
   let release;
   onRequest("GET", "/api/activities/evaluated/employee/e3/subthemes", () => new Promise((resolve) => {

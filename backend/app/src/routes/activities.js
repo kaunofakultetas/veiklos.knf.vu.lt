@@ -42,7 +42,10 @@ import { verifySamlSession } from "../auth/verifySamlSession.js";
 import { attachRoles } from "../auth/attachRoles.js";
 import { sendRejectionEmail } from "./emailService.js";
 import { sendReturnEmail } from "./emailService.js";
+import { sendCommitteeReturnEmail } from "./emailService.js";
 import { requireActiveRoleIn } from "../auth/requireActiveRole.js";
+import { numberOf, parseId, requireIdParam } from "../utils/input.js";
+import { compareCodes } from "../utils/codes.js";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -96,6 +99,20 @@ const MSG_BAD_TYPE =
   "Klaida: neleistinas priedo tipas. Leidžiami: " +
   Object.keys(ALLOWED_ATTACHMENTS).map((e) => e.slice(1)).join(", ");
 const MSG_TOO_BIG = "Klaida: priedas per didelis (iki 100 MB)";
+const MSG_TOO_MANY_FIELDS = "Klaida: užklausoje per daug laukų";
+const MSG_UNKNOWN_ACTION = "Klaida: nežinomas veiksmas";
+const MSG_BAD_DESCRIPTION = "Klaida: Netinkamas aprašymas";
+
+// The actions each verdict route knows; anything else sent as
+// action is refused rather than skipped
+const MANAGER_ACTIONS = ["approve", "deny", "return"];
+const COMMITTEE_ACTIONS = ["score", "return"];
+
+// The activity form sends six text fields and one file; a
+// body far beyond that is refused before multer holds it all
+// in req.body (each text field may be up to 1 MiB)
+const MAX_FORM_FIELDS = 20;
+const MAX_FORM_PARTS = 25;
 
 
 
@@ -148,9 +165,12 @@ async function loadUserFullName(req, res, next) {
 // -----------------------------------------------------------
 //
 // Makes a value safe for a filename: lowercased, spaces to
-// underscores, everything outside [a-z0-9_.-] dropped. Note
-// Lithuanian letters are dropped too, so "Ž. Kazlauskaitė"
-// becomes ".kazlauskait".
+// underscores, everything outside [a-z0-9_.-] dropped —
+// Lithuanian letters included — and then any leading dots.
+// The stored name starts with the theme code's segment, and
+// send (behind res.download) refuses a name that starts with
+// a dot as a dotfile, so a code beginning with a Lithuanian
+// letter and a dot would leave a file nobody can download.
 //
 // Used by:
 //   - the multer storage filename callback (below)
@@ -162,7 +182,8 @@ function cleanSegment(value, fallback) {
     .toLowerCase()
     .trim()
     .replace(/\s+/g, "_")
-    .replace(/[^a-z0-9_.-]/g, "");
+    .replace(/[^a-z0-9_.-]/g, "")
+    .replace(/^\.+/, "");
 }
 
 
@@ -181,20 +202,23 @@ function cleanSegment(value, fallback) {
 // score in the wrong theme's total). With an activityId the
 // halves not being changed are taken from the row, so a
 // PATCH that sends only one of the two is checked against
-// the other one as stored.
+// the other one as stored. It runs on `db`: the pool, or the
+// client of the transaction holding the activity's row lock
+// (the employee edit), so that check needs no second
+// connection while the lock is held.
 //
 // Used by:
 //   - POST /, PATCH /:id, PATCH /:id/manager,
 //     PATCH /:id/committee (below)
 // -----------------------------------------------------------
 
-async function subthemeMatchesTheme(activityId, themeId, subthemeId) {
+async function subthemeMatchesTheme(activityId, themeId, subthemeId, db = pool) {
   const q = activityId === null
-    ? await pool.query(
+    ? await db.query(
         `SELECT 1 FROM subthemes WHERE id = $1 AND theme_id = $2`,
         [subthemeId, themeId]
       )
-    : await pool.query(
+    : await db.query(
         `SELECT 1
            FROM subthemes s
            JOIN activities a ON a.id = $1
@@ -225,7 +249,9 @@ const MSG_PAIR = "Klaida: potemė nepriklauso pasirinktai temai";
 // cannot both win: the second one's write matches 0 rows.
 // This answers that loser: re-read the row and say why —
 // gone (404), not theirs (403), or the status moved on (409
-// naming the current status, so the UI can refresh).
+// naming the current status, so the UI can refresh). Callers
+// await it inside their try, so a re-read that fails lands
+// in their catch as a 500 instead of an unhandled rejection.
 //
 // Used by:
 //   - PATCH /:id, PATCH /:id/manager, PATCH /:id/committee,
@@ -245,6 +271,60 @@ async function answerLostRace(res, id, ownerEid = null) {
   return res.status(409).json({
     error: `Klaida: veiklos būsena ką tik pasikeitė (dabar: ${q.rows[0].status}) — atnaujinkite puslapį`,
   });
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// notifyManagersOfReturn
+// -----------------------------------------------------------
+//
+// Mails every holder of the manager role that the committee
+// sent an activity back to their queue, naming the employee
+// and quoting the committee's reason as stored — the queue
+// alone would not say why the activity is there again. Each
+// send is fire-and-forget like the employee's mails: a failed
+// one is only logged. The two reads may throw; the caller
+// logs that and the return stands.
+//
+// Used by:
+//   - PATCH /:id/committee (below) — once a return is saved
+// -----------------------------------------------------------
+
+async function notifyManagersOfReturn(activityId) {
+  const { rows: [info] } = await pool.query(
+    `SELECT a.title,
+            a.committee_comments,
+            COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name
+       FROM activities a
+       JOIN users u ON u.eid = a.employee_eid
+      WHERE a.id = $1`,
+    [activityId]
+  );
+  if (!info) return;
+
+  const { rows: managers } = await pool.query(
+    `SELECT u.email, u.full_name
+       FROM users u
+       JOIN user_roles ur ON ur.user_eid = u.eid
+       JOIN roles r ON r.id = ur.role_id
+      WHERE r.name = $1`,
+    ["Vadybininkas"]
+  );
+
+  for (const manager of managers) {
+    sendCommitteeReturnEmail({
+      to: manager.email,
+      fullName: manager.full_name,
+      employeeName: info.full_name,
+      title: info.title,
+      comment: info.committee_comments,
+    }).catch((err) => console.error("Failed to send the committee return email:", err));
+  }
 }
 
 
@@ -316,7 +396,7 @@ function hasExpectedMagic(filePath, ext) {
 
 
 // -----------------------------------------------------------
-// storage / upload — multer disk storage
+// storage / upload — the multer disk engine
 // -----------------------------------------------------------
 //
 // Saves into uploadDir as
@@ -327,34 +407,68 @@ function hasExpectedMagic(filePath, ext) {
 // FormData — the frontend appends attachment last for exactly
 // that reason. The fileFilter refuses any type not in
 // ALLOWED_ATTACHMENTS before a byte is written, and limits
-// cap the size and the count.
+// cap the size, the file count and the number of fields.
+//
+// The engine is multer's disk storage with one difference: a
+// file whose stream dies before its end (the client went
+// away, the connection dropped) has its half-written copy
+// closed and removed — multer's own engine pipes into the
+// file and waits for a finish that never comes, keeping both
+// the partial file and its descriptor. A name that cannot be
+// built (a field sent as a nested object) is handed back to
+// multer as an error, answered like any failed upload.
 //
 // Used by:
 //   - uploadAttachment (below)
 // -----------------------------------------------------------
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const fullName = req.userFullName || "unknown_user";
-    const themeCode = req.body?.theme_code || "unknown_theme_code";
-    const subthemeCode = req.body?.subtheme_code || "unknown_subtheme_code";
+const storage = {
+  _handleFile(req, file, cb) {
+    let finalName;
+    try {
+      const fullName = req.userFullName || "unknown_user";
+      const themeCode = req.body?.theme_code || "unknown_theme_code";
+      const subthemeCode = req.body?.subtheme_code || "unknown_subtheme_code";
 
-    const safeTheme = cleanSegment(themeCode, "no_theme");
-    const safeSubtheme = cleanSegment(subthemeCode, "no_subtheme");
-    const safeFullName = cleanSegment(fullName, "unknown_user");
+      const safeTheme = cleanSegment(themeCode, "no_theme");
+      const safeSubtheme = cleanSegment(subthemeCode, "no_subtheme");
+      const safeFullName = cleanSegment(fullName, "unknown_user");
 
-    const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = attachmentExtension(file.originalname) || "";
+      const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const ext = attachmentExtension(file.originalname) || "";
 
-    const finalName = `${safeTheme}-${safeSubtheme}-${safeFullName}-${unique}${ext}`;
-    cb(null, finalName);
+      finalName = `${safeTheme}-${safeSubtheme}-${safeFullName}-${unique}${ext}`;
+    } catch (err) {
+      return cb(err);
+    }
+
+    const finalPath = path.join(uploadDir, finalName);
+    const out = fs.createWriteStream(finalPath);
+    let ended = false;
+    file.stream.once("end", () => {
+      ended = true;
+    });
+    file.stream.once("close", () => {
+      if (ended) return;
+      out.destroy();
+      fs.unlink(finalPath, () => {});
+    });
+
+    file.stream.pipe(out);
+    out.on("error", cb);
+    out.on("finish", () => {
+      cb(null, { destination: uploadDir, filename: finalName, path: finalPath, size: out.bytesWritten });
+    });
   },
-});
+
+  _removeFile(_req, file, cb) {
+    fs.unlink(file.path, cb);
+  },
+};
 
 const upload = multer({
   storage,
-  limits: { fileSize: MAX_ATTACHMENT_BYTES, files: 1 },
+  limits: { fileSize: MAX_ATTACHMENT_BYTES, files: 1, fields: MAX_FORM_FIELDS, parts: MAX_FORM_PARTS },
   fileFilter: (_req, file, cb) => {
     if (attachmentExtension(file.originalname)) return cb(null, true);
     cb(Object.assign(new Error(MSG_BAD_TYPE), { code: "BAD_ATTACHMENT_TYPE" }));
@@ -372,10 +486,16 @@ const upload = multer({
 // -----------------------------------------------------------
 //
 // The single-file multer middleware with its errors turned
-// into JSON 400s (a refused type, an oversized file) instead
-// of Express' HTML 500, plus the magic-byte check on the
-// stored file — a mismatch unlinks it and answers 400, so
-// nothing mislabelled stays on disk.
+// into JSON 400s (a refused type, an oversized file, too many
+// fields, a broken upload) instead of Express' HTML 500 —
+// except a failed system call while storing (the disk full,
+// the folder unwritable), which is the server's fault and a
+// logged 500. Then the magic-byte check on the stored file —
+// a mismatch unlinks it and answers 400, so nothing
+// mislabelled stays on disk. The check runs inside multer's
+// completion callback, where a throw would escape every
+// handler and end the process, so a filesystem error there
+// unlinks the file and answers 500.
 //
 // Used by:
 //   - POST  /api/activities (below)
@@ -390,13 +510,28 @@ function uploadAttachment(req, res, next) {
       if (err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE") {
         return res.status(400).json({ error: "Klaida: leidžiamas vienas priedas" });
       }
+      if (["LIMIT_FIELD_COUNT", "LIMIT_PART_COUNT", "LIMIT_FIELD_KEY", "LIMIT_FIELD_VALUE"].includes(err.code)) {
+        return res.status(400).json({ error: MSG_TOO_MANY_FIELDS });
+      }
+      // Node sets syscall on a failed system call — the disk,
+      // not the upload; what is left here is a broken upload
       console.error("attachment upload error:", err);
+      if (err.syscall) return res.status(500).json({ error: "internal error" });
       return res.status(400).json({ error: "Klaida: priedo įkelti nepavyko" });
     }
 
     if (req.file) {
       const ext = attachmentExtension(req.file.originalname);
-      if (!hasExpectedMagic(req.file.path, ext)) {
+      let genuine;
+      try {
+        genuine = hasExpectedMagic(req.file.path, ext);
+      } catch (checkErr) {
+        console.error("attachment check error:", checkErr);
+        fs.unlink(req.file.path, () => {});
+        req.file = undefined;
+        return res.status(500).json({ error: "internal error" });
+      }
+      if (!genuine) {
         fs.unlink(req.file.path, () => {});
         req.file = undefined;
         return res.status(400).json({ error: MSG_BAD_TYPE });
@@ -412,6 +547,10 @@ const guard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Darbuotojas
 const managerGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Vadybininkas"])];
 const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Komisijos narys"])];
 
+// An :id that cannot be an activity's int4 id is a 404
+// before any query (and, on the edit, before any upload)
+const requireId = requireIdParam("id");
+
 
 
 
@@ -425,13 +564,19 @@ const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Ko
 // Create an activity (multipart form: theme_id, subtheme_id,
 // title, description, optional attachment file plus
 // theme_code/subtheme_code for the filename). Starts in the
-// DB-default status PATEIKTA.
+// DB-default status PATEIKTA. A title of spaces counts as no
+// title; a description, when sent, must be text (a repeated
+// field arrives as an array), and none is stored as the
+// empty text. multer has stored the attachment before this
+// handler runs, so whatever refuses or fails here removes it
+// again — the file stays only once a row points at it.
 //
 // Used by:
 //   - employee/newActivity.jsx — the submission form
 // -----------------------------------------------------------
 
 router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => {
+    let kept = false;
     try {
       const eid = req.user?.eid || req.user?.sub;
       if (!eid) {
@@ -440,13 +585,16 @@ router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => 
 
       const { theme_id, subtheme_id, title, description } = req.body || {};
 
-      const themeId = parseInt(theme_id, 10);
-      const subthemeId = parseInt(subtheme_id, 10);
+      const themeId = parseId(theme_id);
+      const subthemeId = parseId(subtheme_id);
 
-      if (!themeId || !subthemeId || !title) {
+      if (!themeId || !subthemeId || typeof title !== "string" || !title.trim()) {
         return res
           .status(400)
           .json({ error: "Klaida: Tema, potemė ir pavadinimas yra privalomi" });
+      }
+      if (description != null && typeof description !== "string") {
+        return res.status(400).json({ error: MSG_BAD_DESCRIPTION });
       }
       if (!(await subthemeMatchesTheme(null, themeId, subthemeId))) {
         return res.status(400).json({ error: MSG_PAIR });
@@ -492,11 +640,14 @@ router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => 
           attachmentOriginalName,
         ]
       );
+      kept = true;
 
       res.status(201).json(act.rows[0]);
     } catch (e) {
       console.error("POST /api/activities error:", e);
       res.status(500).json({ error: "internal error" });
+    } finally {
+      if (req.file && !kept) fs.unlink(req.file.path, () => {});
     }
   }
 );
@@ -597,7 +748,7 @@ router.get("/all", managerGuard, async (req, res) => {
          a.attachment_original_name,
          a.created_at,
          a.updated_at,
-         u.full_name,
+         COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name,
          t.code   AS theme_code,
          t.title  AS theme_title,
          s.code   AS subtheme_code,
@@ -655,7 +806,7 @@ router.get("/committee", committeeGuard, async (req, res) => {
          a.attachment_original_name,
          a.created_at,
          a.updated_at,
-         u.full_name,
+         COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name,
          t.code   AS theme_code,
          t.title  AS theme_title,
          s.code   AS subtheme_code,
@@ -713,7 +864,7 @@ router.get("/evaluated", committeeGuard, async (req, res) => {
          a.score,
          a.attachment_path,
          a.attachment_original_name,
-         u.full_name,
+         COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name,
          t.code  AS theme_code,
          t.title AS theme_title,
          s.code  AS subtheme_code,
@@ -747,7 +898,9 @@ router.get("/evaluated", committeeGuard, async (req, res) => {
 // value, and the raw sum of ĮVERTINTA scores. LEFT JOIN, so
 // themes with no evaluated work appear with total_score 0.
 // Note the sum is UNcapped — subtheme caps are applied
-// client-side on the calculate page.
+// client-side on the calculate page. Rows come in code
+// reading order (utils/codes.js), which the page shows as
+// is.
 //
 // Used by:
 //   - committee/calculate.jsx — the theme table
@@ -771,6 +924,7 @@ router.get("/evaluated/theme-totals", committeeGuard, async (req, res) => {
        ORDER BY t.code`
     );
 
+    q.rows.sort((a, b) => compareCodes(a.theme_code, b.theme_code));
     res.json(q.rows);
   } catch (e) {
     console.error("GET /api/activities/evaluated/theme-totals error:", e);
@@ -828,7 +982,8 @@ router.get("/evaluated/employees", committeeGuard, async (req, res) => {
 //
 // One employee's ĮVERTINTA scores grouped per subtheme, with
 // the subtheme cap and theme point value alongside — all the
-// inputs the calculate page needs to figure a bonus.
+// inputs the calculate page needs to figure a bonus — in
+// code reading order (utils/codes.js), theme then subtheme.
 //
 // Used by:
 //   - committee/calculate.jsx — after picking an employee
@@ -867,6 +1022,7 @@ router.get("/evaluated/employee/:eid/subthemes", committeeGuard, async (req, res
       [eid]
     );
 
+    q.rows.sort((a, b) => compareCodes(a.theme_code, b.theme_code) || compareCodes(a.subtheme_code, b.subtheme_code));
     res.json(q.rows);
   } catch (e) {
     console.error("GET /api/activities/evaluated/employee/:eid/subthemes error:", e);
@@ -885,7 +1041,10 @@ router.get("/evaluated/employee/:eid/subthemes", committeeGuard, async (req, res
 // -----------------------------------------------------------
 //
 // The manager's inbox: PATEIKTA activities, oldest first so
-// the queue is worked in submission order.
+// the queue is worked in submission order. committee_comments
+// carries the committee's reason when it sent the activity
+// back. The employee is named by email when VU SSO released
+// no name.
 //
 // Used by:
 //   - manager/review.jsx — the review queue
@@ -904,10 +1063,11 @@ router.get("/pending", managerGuard, async (req, res) => {
          a.created_at,
          a.rejection_comment,
          a.manager_comments,
+         a.committee_comments,
          a.score,
          a.attachment_path,
          a.attachment_original_name,
-         u.full_name,
+         COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name,
          t.code   AS theme_code,
          t.title  AS theme_title,
          s.code   AS subtheme_code,
@@ -947,6 +1107,9 @@ router.get("/pending", managerGuard, async (req, res) => {
 //           absent    → plain edit of the fields below
 //   manager_comments, theme_id, subtheme_id — optional edits.
 //
+// Any other action is a 400 before anything is read or
+// written; a deny/return comment must be text, and a null
+// manager comment clears it, as on the committee route.
 // Only PATEIKTA activities can be touched — everything else
 // is a 400. On deny/return an email goes to the employee,
 // fire-and-forget: a failed send is only logged, the status
@@ -960,10 +1123,14 @@ router.get("/pending", managerGuard, async (req, res) => {
 //     the edit dialog
 // -----------------------------------------------------------
 
-router.patch("/:id/manager", managerGuard, async (req, res) => {
+router.patch("/:id/manager", managerGuard, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const { action, manager_comments, rejection_comment, theme_id, subtheme_id } = req.body || {};
+
+    if (action != null && !MANAGER_ACTIONS.includes(action)) {
+      return res.status(400).json({ error: MSG_UNKNOWN_ACTION });
+    }
 
     // Status gate first — the verdict below only applies to
     // PATEIKTA rows
@@ -993,7 +1160,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
     let newThemeId = null;
     let newSubthemeId = null;
     if (theme_id !== undefined) {
-      const tid = parseInt(theme_id, 10);
+      const tid = parseId(theme_id);
       if (!Number.isNaN(tid)) {
         fields.push(`theme_id = $${i++}`);
         vals.push(tid);
@@ -1002,7 +1169,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
     }
 
     if (subtheme_id !== undefined) {
-      const sid = parseInt(subtheme_id, 10);
+      const sid = parseId(subtheme_id);
       if (!Number.isNaN(sid)) {
         fields.push(`subtheme_id = $${i++}`);
         vals.push(sid);
@@ -1018,7 +1185,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       fields.push(`rejection_comment = $${i++}`);
       vals.push(null);
     } else if (action === "deny") {
-      if (!rejection_comment || !rejection_comment.trim()) {
+      if (typeof rejection_comment !== "string" || !rejection_comment.trim()) {
         return res.status(400).json({ error: "Klaida: Atmetimui privalomas komentaras." });
       }
       fields.push(`status = $${i++}`);
@@ -1026,7 +1193,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
       fields.push(`rejection_comment = $${i++}`);
       vals.push(rejection_comment.trim());
     } else if (action === "return") {
-      if (!rejection_comment || !rejection_comment.trim()) {
+      if (typeof rejection_comment !== "string" || !rejection_comment.trim()) {
         return res.status(400).json({ error: "Klaida: Tikslinimui privalomas komentaras." });
       }
       fields.push(`status = $${i++}`);
@@ -1037,7 +1204,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
 
     if (manager_comments !== undefined) {
       fields.push(`manager_comments = $${i++}`);
-      vals.push(manager_comments.trim());
+      vals.push(manager_comments == null ? null : String(manager_comments).trim());
     }
 
     if (!fields.length) {
@@ -1062,7 +1229,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
           AND status = 'PATEIKTA'`,
       vals
     );
-    if (upd.rowCount === 0) return answerLostRace(res, id);
+    if (upd.rowCount === 0) return await answerLostRace(res, id);
 
     // Notify the employee about deny/return — reading the
     // comment back from the DB so the mail matches what was
@@ -1125,7 +1292,7 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
          a.attachment_original_name,
          a.created_at,
          a.updated_at,
-         u.full_name,
+         COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name,
          t.code   AS theme_code,
          t.title  AS theme_title,
          s.code   AS subtheme_code,
@@ -1157,14 +1324,20 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
 //
 // The committee's verdict. Body:
 //   action: "score"  → sets score, status ĮVERTINTA
-//           "return" → back to PATEIKTA, score cleared
+//           "return" → back to PATEIKTA, score cleared; the
+//                      reason in committee_comments is
+//                      required, and every manager is mailed
+//                      it (notifyManagersOfReturn)
 //   committee_comments, theme_id, subtheme_id — optional.
 //
 // The score is 1/n for n people who carried the activity
 // out (0 for none), so it lives in [0, 1] — the pages derive
 // it, the API enforces the bounds and rounds to 2 decimals,
 // since an out-of-range value would skew every theme total
-// the calculator divides the budget by.
+// the calculator divides the budget by. It must be a number
+// or a decimal written as text (numberOf): a blank string, a
+// boolean or an array is a 400, not a score of 0 or 1. Any
+// action other than score/return is a 400 as well.
 //
 // Works on PATVIRTINTA and ĮVERTINTA rows, so an existing
 // score can be corrected later from the results page.
@@ -1174,10 +1347,14 @@ router.patch("/:id/manager", managerGuard, async (req, res) => {
 //   - committee/results.jsx — corrections
 // -----------------------------------------------------------
 
-router.patch("/:id/committee", committeeGuard, async (req, res) => {
+router.patch("/:id/committee", committeeGuard, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const { action, score, committee_comments, theme_id, subtheme_id } = req.body || {};
+
+    if (action != null && !COMMITTEE_ACTIONS.includes(action)) {
+      return res.status(400).json({ error: MSG_UNKNOWN_ACTION });
+    }
 
     const cur = await pool.query(
       `SELECT status
@@ -1204,7 +1381,7 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
     let newThemeId = null;
     let newSubthemeId = null;
     if (theme_id !== undefined) {
-      const tid = parseInt(theme_id, 10);
+      const tid = parseId(theme_id);
       if (!Number.isNaN(tid)) {
         fields.push(`theme_id = $${i++}`);
         vals.push(tid);
@@ -1213,7 +1390,7 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
     }
 
     if (subtheme_id !== undefined) {
-      const sid = parseInt(subtheme_id, 10);
+      const sid = parseId(subtheme_id);
       if (!Number.isNaN(sid)) {
         fields.push(`subtheme_id = $${i++}`);
         vals.push(sid);
@@ -1225,8 +1402,8 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
       if (score === undefined || score === null || score === "") {
         return res.status(400).json({ error: "Klaida: Įvertinimas privalomas." });
       }
-      const num = Number(score);
-      if (!Number.isFinite(num)) {
+      const num = numberOf(score);
+      if (num === null) {
         return res.status(400).json({ error: "Klaida: Įvertinimas turi būti skaičius." });
       }
       if (num < 0 || num > 1) {
@@ -1239,6 +1416,12 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
       vals.push("ĮVERTINTA");
 
     } else if (action === "return") {
+      // The manager gets the activity back and must see why:
+      // the reason is required, and is stored as the
+      // committee's comment (the block below)
+      if (typeof committee_comments !== "string" || !committee_comments.trim()) {
+        return res.status(400).json({ error: "Klaida: Grąžinimui privalomas komentaras." });
+      }
       // Straight back to the manager's queue — the score is
       // wiped so a re-approval starts clean
       fields.push(`status = $${i++}`);
@@ -1274,7 +1457,17 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
           AND status IN ('PATVIRTINTA', 'ĮVERTINTA')`,
       vals
     );
-    if (upd.rowCount === 0) return answerLostRace(res, id);
+    if (upd.rowCount === 0) return await answerLostRace(res, id);
+
+    // The managers hear of a return, with the committee's
+    // reason; a failure there is logged and the return stands
+    if (action === "return") {
+      try {
+        await notifyManagersOfReturn(id);
+      } catch (err) {
+        console.error("Failed to notify the managers of a return:", err);
+      }
+    }
 
     const q = await pool.query(
       `SELECT
@@ -1293,7 +1486,7 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
          a.attachment_original_name,
          a.created_at,
          a.updated_at,
-         u.full_name,
+         COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name,
          t.code   AS theme_code,
          t.title  AS theme_title,
          s.code   AS subtheme_code,
@@ -1336,7 +1529,7 @@ router.patch("/:id/committee", committeeGuard, async (req, res) => {
 //     the attachment download links
 // -----------------------------------------------------------
 
-router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) => {
+router.get("/:id/attachment", verifySamlSession, attachRoles, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const eid = req.user?.eid || req.user?.sub;
@@ -1389,26 +1582,48 @@ router.get("/:id/attachment", verifySamlSession, attachRoles, async (req, res) =
 //
 // The employee editing their own activity (multipart, same
 // form as POST). Only the owner, and only in PATEIKTA or
-// TIKSLINTI status. A new attachment replaces the old file on
-// disk (best-effort unlink, ENOENT ignored). The replacement's
-// original name gets the same latin1→utf8 re-decode as on
-// POST /, so Lithuanian filenames survive a re-upload.
+// TIKSLINTI status. A title or description that is not text
+// is refused with a 400 naming the field, and a null
+// description stores the empty text. The row is read FOR
+// UPDATE in a transaction the UPDATE commits, so two edits of
+// one activity run one after the other and the second
+// replaces the file the first stored. A new attachment
+// replaces the old file on disk once committed (best-effort
+// unlink, ENOENT ignored). The replacement's original name
+// gets the same
+// latin1→utf8 re-decode as on POST /, so Lithuanian filenames
+// survive a re-upload. multer has stored the new file before
+// this handler runs, so every refusal and failure removes it
+// again (the finally below) — it stays only once the UPDATE
+// has made the row point at it.
 //
 // Used by:
 //   - employee/myActivities.jsx — the edit dialog
 // -----------------------------------------------------------
 
-router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res) => {
+router.patch("/:id", guard, requireId, loadUserFullName, uploadAttachment, async (req, res) => {
+  let kept = false;
+  let client = null;
+  let committed = false;
   try {
     const { id } = req.params;
     const eid = req.user?.eid || req.user?.sub;
     const { theme_id, subtheme_id, title, description } = req.body || {};
 
+    // One edit at a time per activity: the row stays locked
+    // from this read to the COMMIT, so a second edit waits
+    // and then replaces the file this one stores. Without
+    // the lock both would replace the same old file and
+    // leave this one's new file with no row pointing at it
+    client = await pool.connect();
+    await client.query("BEGIN");
+
     // Ownership + status gate before touching anything
-    const cur = await pool.query(
+    const cur = await client.query(
       `SELECT employee_eid, status, attachment_path
          FROM activities
-        WHERE id = $1`,
+        WHERE id = $1
+          FOR UPDATE`,
       [id]
     );
     if (cur.rowCount === 0) return res.status(404).json({ error: "Klaida: Nerasta" });
@@ -1430,27 +1645,30 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
     let newThemeId = null;
     let newSubthemeId = null;
     if (theme_id !== undefined) {
-      const themeId = parseInt(theme_id, 10);
+      const themeId = parseId(theme_id);
       if (!themeId) return res.status(400).json({ error: "Klaida: Netinkama tema" });
       fields.push(`theme_id = $${i++}`);
       vals.push(themeId);
       newThemeId = themeId;
     }
     if (subtheme_id !== undefined) {
-      const subthemeId = parseInt(subtheme_id, 10);
+      const subthemeId = parseId(subtheme_id);
       if (!subthemeId) return res.status(400).json({ error: "Klaida: Netinkama potemė" });
       fields.push(`subtheme_id = $${i++}`);
       vals.push(subthemeId);
       newSubthemeId = subthemeId;
     }
     if (title !== undefined) {
-      if (!title.trim()) return res.status(400).json({ error: "Klaida: Netinkamas pavadinimas" });
+      if (typeof title !== "string" || !title.trim()) return res.status(400).json({ error: "Klaida: Netinkamas pavadinimas" });
       fields.push(`title = $${i++}`);
       vals.push(title.trim());
     }
     if (description !== undefined) {
+      if (description !== null && typeof description !== "string") {
+        return res.status(400).json({ error: MSG_BAD_DESCRIPTION });
+      }
       fields.push(`description = $${i++}`);
-      vals.push(description.trim());
+      vals.push((description ?? "").trim());
     }
 
     if (req.file) {
@@ -1468,8 +1686,7 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
 
     // A reassigned theme/subtheme must still be a real pair
     if ((newThemeId !== null || newSubthemeId !== null)
-        && !(await subthemeMatchesTheme(id, newThemeId, newSubthemeId))) {
-      if (req.file) fs.unlink(req.file.path, () => {});
+        && !(await subthemeMatchesTheme(id, newThemeId, newSubthemeId, client))) {
       return res.status(400).json({ error: MSG_PAIR });
     }
 
@@ -1477,9 +1694,8 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
 
     // Conditional write: still the owner's and still
     // PATEIKTA/TIKSLINTI, or the edit lost a race with a
-    // manager verdict (see answerLostRace) — then the file
-    // just uploaded is dropped again
-    const upd = await pool.query(
+    // manager verdict (see answerLostRace)
+    const upd = await client.query(
       `UPDATE activities
           SET ${fields.join(", ")},
               updated_at = NOW()
@@ -1488,10 +1704,10 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
           AND status IN ('PATEIKTA', 'TIKSLINTI')`,
       vals
     );
-    if (upd.rowCount === 0) {
-      if (req.file) fs.unlink(req.file.path, () => {});
-      return answerLostRace(res, id, eid);
-    }
+    if (upd.rowCount === 0) return await answerLostRace(res, id, eid);
+    await client.query("COMMIT");
+    committed = true;
+    kept = true;
 
     // The old file is orphaned once the row points elsewhere
     const oldPath = cur.rows[0].attachment_path;
@@ -1534,6 +1750,14 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
   } catch (e) {
     console.error("PATCH /api/activities/:id error:", e);
     res.status(500).json({ error: "internal error" });
+  } finally {
+    // Every refusal and failure lands here with the
+    // transaction still open
+    if (client) {
+      if (!committed) await client.query("ROLLBACK").catch(() => {});
+      client.release();
+    }
+    if (req.file && !kept) fs.unlink(req.file.path, () => {});
   }
 });
 
@@ -1559,7 +1783,7 @@ router.patch("/:id", guard, loadUserFullName, uploadAttachment, async (req, res)
 //   - employee/myActivities.jsx — the delete button
 // -----------------------------------------------------------
 
-router.delete("/:id", guard, async (req, res) => {
+router.delete("/:id", guard, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const eid = req.user?.eid || req.user?.sub;
@@ -1594,7 +1818,7 @@ router.delete("/:id", guard, async (req, res) => {
        RETURNING attachment_path`,
       [id, eid]
     );
-    if (del.rowCount === 0) return answerLostRace(res, id, eid);
+    if (del.rowCount === 0) return await answerLostRace(res, id, eid);
 
     const gonePath = del.rows[0]?.attachment_path;
     if (gonePath) {
@@ -1629,7 +1853,7 @@ router.delete("/:id", guard, async (req, res) => {
 //   - employee/myActivities.jsx — "Pateikti iš naujo"
 // -----------------------------------------------------------
 
-router.post("/:id/resubmit", guard, async (req, res) => {
+router.post("/:id/resubmit", guard, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const eid = req.user?.eid || req.user?.sub;
@@ -1668,7 +1892,7 @@ router.post("/:id/resubmit", guard, async (req, res) => {
           AND status = 'TIKSLINTI'`,
       [id, eid]
     );
-    if (upd.rowCount === 0) return answerLostRace(res, id, eid);
+    if (upd.rowCount === 0) return await answerLostRace(res, id, eid);
 
     const q = await pool.query(
       `SELECT

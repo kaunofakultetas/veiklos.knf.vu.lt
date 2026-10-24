@@ -13,7 +13,6 @@
 //
 //  Split into (root component last):
 //
-//    getActiveRole   — activeRole from localStorage
 //    apiFetch        — fetch with auth headers + error text
 //    codeToNums      — "1.2.3" → [1,2,3]
 //    compareCodes    — numeric-aware code ordering
@@ -28,28 +27,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppSelect } from "@/components/appCommon.jsx";
+import { getActiveRole } from "@/components/activeRole.js";
 import "@/components/employee.css";
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// getActiveRole
-// -----------------------------------------------------------
-//
-// The active role for the X-Active-Role header, read fresh
-// per request.
-//
-// Used by:
-//   - apiFetch (below)
-// -----------------------------------------------------------
-
-function getActiveRole() {
-  return localStorage.getItem("activeRole") || "";
-}
 
 
 
@@ -183,9 +162,11 @@ function sortedSubthemes(theme) {
 // -----------------------------------------------------------
 //
 // "Nauja tema": code + title, both required (the button is
-// disabled until both are filled). Owns its two fields and
-// hands { code, title } plus a reset callback to onSubmit,
-// which clears the fields once the theme is saved.
+// disabled until both are filled, and while the create is in
+// flight, so a double-click cannot create the theme twice).
+// Owns its two fields and hands { code, title } plus a reset
+// callback to onSubmit, which clears the fields once the
+// theme is saved; the button waits for onSubmit's promise.
 //
 // Used by:
 //   - ThemesPage (below) — left panel
@@ -195,11 +176,21 @@ function NewThemeForm({ onSubmit }) {
 
   const [code, setCode] = useState("");
   const [title, setTitle] = useState("");
+  const [saving, setSaving] = useState(false);
 
 
   const reset = () => {
     setCode("");
     setTitle("");
+  };
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await onSubmit({ code, title }, reset);
+    } finally {
+      setSaving(false);
+    }
   };
 
 
@@ -237,8 +228,8 @@ function NewThemeForm({ onSubmit }) {
         <button
           type="button"
           className="btn btn-primary"
-          onClick={() => onSubmit({ code, title }, reset)}
-          disabled={!code || !title}
+          onClick={submit}
+          disabled={saving || !code || !title}
         >
           Sukurti temą
         </button>
@@ -263,7 +254,9 @@ function NewThemeForm({ onSubmit }) {
 // the description is marked required in the UI but checked
 // as required by neither this form nor the backend. Hands
 // { code, title, description } plus a reset callback (the
-// three own fields, not the parent) to onSubmit.
+// three own fields, not the parent) to onSubmit, and keeps
+// the button disabled until onSubmit's promise settles, so a
+// double-click cannot create the subtheme twice.
 //
 // Used by:
 //   - ThemesPage (below) — left panel
@@ -274,12 +267,22 @@ function NewSubthemeForm({ themes, parentId, onParentChange, onSubmit }) {
   const [code, setCode] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [saving, setSaving] = useState(false);
 
 
   const reset = () => {
     setCode("");
     setTitle("");
     setDescription("");
+  };
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await onSubmit({ code, title, description }, reset);
+    } finally {
+      setSaving(false);
+    }
   };
 
 
@@ -345,8 +348,8 @@ function NewSubthemeForm({ themes, parentId, onParentChange, onSubmit }) {
         <button
           type="button"
           className="btn btn-primary"
-          onClick={() => onSubmit({ code, title, description }, reset)}
-          disabled={!parentId || !code || !title}
+          onClick={submit}
+          disabled={saving || !parentId || !code || !title}
         >
           Sukurti potemę
         </button>

@@ -29,6 +29,14 @@
 //  direction VU signs its logout messages, and the SP verifies
 //  them against the IdP certificate from its metadata.
 //
+//  A local metadata file is trusted as placed. With
+//  IDP_METADATA_CERT set — and always for a URL — the
+//  descriptor's signature must verify against that
+//  certificate, and samlify gets exactly what was signed
+//  (verifiedMetadata). assertionIdOf hands the replay check
+//  in routes/saml.js the ID of the one assertion samlify
+//  accepted.
+//
 //  The mdui/organization/contact enrichment exists for the
 //  LitNET FEDI registration: the federation requires SP
 //  metadata to carry display info, requested attributes and
@@ -40,6 +48,9 @@
 
 import * as saml from "samlify";
 import * as validator from "@authenio/samlify-node-xmllint";
+import { DOMParser } from "@xmldom/xmldom";
+import xpath from "xpath";
+import { SignedXml } from "xml-crypto";
 import { readFileSync } from "node:fs";
 import { X509Certificate } from "node:crypto";
 
@@ -198,6 +209,7 @@ function readConfig() {
   const env = process.env;
   return {
     idpMetadata:        env.IDP_METADATA || "",
+    idpMetadataCert:    env.IDP_METADATA_CERT || "",
     spNameIdFormat:     env.SP_NAME_ID_FORMAT ??
                           "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified",
     spPrivateKeyPath:   env.SP_PRIVATE_KEY_PATH,
@@ -307,13 +319,73 @@ function readRequiredFile(path, envName) {
 
 
 // -----------------------------------------------------------
+// verifiedMetadata
+// -----------------------------------------------------------
+//
+// The IdP descriptor as signed, checked against the pinned
+// certificate from IDP_METADATA_CERT. VU signs its
+// descriptor with one enveloped signature, the root's own
+// child, over the root by its ID — exactly that shape is
+// accepted, and what comes back is the content the signature
+// covers, so nothing wrapped around a signed descriptor or
+// slipped in beside it reaches samlify. The certificate in
+// the signature itself is never trusted. Throws a pointed
+// boot error when the descriptor is unsigned, signed with
+// another key, or changed after signing.
+//
+// Used by:
+//   - loadIdpMetadata (below)
+// -----------------------------------------------------------
+
+function verifiedMetadata(xml, certPem, source) {
+  const root = new DOMParser().parseFromString(xml, "text/xml").documentElement;
+  const signatures = root
+    ? xpath.select("./*[local-name(.)='Signature' and namespace-uri(.)='http://www.w3.org/2000/09/xmldsig#']", root)
+    : [];
+  if (signatures.length !== 1) {
+    throw new Error(`IdP metadata from ${source} is not signed, and IDP_METADATA_CERT asks for a signed descriptor`);
+  }
+
+  const signature = new SignedXml({ publicCert: certPem });
+  signature.loadSignature(signatures[0]);
+  let valid = false;
+  try {
+    valid = signature.checkSignature(xml);
+  } catch {
+    valid = false;
+  }
+
+  // The signed content must be the root itself, not some
+  // element inside it
+  const signed = valid ? signature.getSignedReferences() : [];
+  const signedRoot = signed.length === 1 ? new DOMParser().parseFromString(signed[0], "text/xml").documentElement : null;
+  const coversRoot = signedRoot
+    && signedRoot.localName === root.localName
+    && signedRoot.getAttribute("ID") === root.getAttribute("ID");
+  if (!coversRoot) {
+    throw new Error(`IdP metadata signature from ${source} does not verify against IDP_METADATA_CERT`);
+  }
+  return signed[0];
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // loadIdpMetadata
 // -----------------------------------------------------------
 //
 // The IdP's EntityDescriptor XML from IDP_METADATA: fetched
-// when it is an http(s) URL, read as a file otherwise. The
-// XML is used verbatim. Returns { xml, source } — source for
-// the boot log.
+// when it is an http(s) URL, read as a file otherwise. A
+// download is trusted only once verified, so a URL without
+// IDP_METADATA_CERT stops the boot before anything is
+// fetched; with the certificate set, a file is verified too.
+// Returns { xml, source, verified } — the XML samlify gets
+// (the signed descriptor when verified, the file as it is
+// otherwise), its source and the verdict for the boot log.
 //
 // Used by:
 //   - createSamlSetup (below)
@@ -326,17 +398,29 @@ async function loadIdpMetadata(cfg) {
     );
   }
 
-  if (/^https?:\/\//i.test(cfg.idpMetadata)) {
+  const isUrl = /^https?:\/\//i.test(cfg.idpMetadata);
+  if (isUrl && !cfg.idpMetadataCert) {
+    throw new Error(
+      "IDP_METADATA is a URL, so IDP_METADATA_CERT is required: the certificate VU signs its metadata with — a downloaded descriptor is trusted only once its signature checks out",
+    );
+  }
+
+  let xml;
+  if (isUrl) {
     const response = await fetch(cfg.idpMetadata);
     if (!response.ok) {
       throw new Error(
         `Failed to load IdP metadata (${response.status} ${response.statusText}) from ${cfg.idpMetadata}`,
       );
     }
-    return { xml: await response.text(), source: cfg.idpMetadata };
+    xml = await response.text();
+  } else {
+    xml = readFileSync(cfg.idpMetadata, "utf8");
   }
 
-  return { xml: readFileSync(cfg.idpMetadata, "utf8"), source: cfg.idpMetadata };
+  if (!cfg.idpMetadataCert) return { xml, source: cfg.idpMetadata, verified: false };
+  const certPem = readFileSync(cfg.idpMetadataCert, "utf8");
+  return { xml: verifiedMetadata(xml, certPem, cfg.idpMetadata), source: cfg.idpMetadata, verified: true };
 }
 
 
@@ -519,6 +603,52 @@ export function logoutRequestTags(template, tags) {
 
 
 // -----------------------------------------------------------
+// assertionIdOf
+// -----------------------------------------------------------
+//
+// The ID of the one assertion in a login response samlify
+// has just accepted — the key the replay check in
+// routes/saml.js remembers. samlify only verifies and
+// decrypts an assertion directly under the Response, so that
+// is the only place looked at. An encrypted assertion is
+// decrypted again with the SP's key first: when VU signs the
+// assertion but not the response, samlify hands back the
+// still-encrypted document, and a forged plain assertion
+// slipped in beside the encrypted one would otherwise pass
+// for it. Resolves to the ID, or null unless there is
+// exactly one assertion with an ID.
+//
+// Used by:
+//   - routes/saml.js — POST /assert
+// -----------------------------------------------------------
+
+export async function assertionIdOf(sp, samlContent) {
+  const childrenOfResponse = (xml, name) => [].concat(
+    saml.Extractor.extract(xml, [{ key: "nodes", localPath: ["Response", name], attributes: [], context: true }]).nodes ?? []
+  );
+
+  let doc = samlContent;
+  if (childrenOfResponse(doc, "EncryptedAssertion").length > 0) {
+    try {
+      [doc] = await saml.SamlLib.decryptAssertion(sp, doc);
+    } catch {
+      return null;
+    }
+  }
+
+  const assertions = childrenOfResponse(doc, "Assertion");
+  if (assertions.length !== 1) return null;
+  const { id } = saml.Extractor.extract(assertions[0], [{ key: "id", localPath: ["Assertion"], attributes: ["ID"] }]);
+  return id || null;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // createSamlSetup
 // -----------------------------------------------------------
 //
@@ -528,6 +658,8 @@ export function logoutRequestTags(template, tags) {
 //   idp             — the samlify IdentityProvider
 //   spCertFingerprint — SHA-256 of the SP certificate, for
 //                     the boot log / VU's registration form
+//   idpMetadataVerified — whether the IdP metadata's
+//                     signature was checked, for the boot log
 //   identityFor(o)  — { spEntityId, acsUrl } for origin o
 //                     (o + /auth/saml/{metadata,assert})
 //   spFor(o)        — the samlify ServiceProvider for origin
@@ -541,7 +673,7 @@ export async function createSamlSetup() {
   const cfg = readConfig();
   saml.setSchemaValidator(validator);
 
-  const { xml: idpMetadata, source: idpSource } = await loadIdpMetadata(cfg);
+  const { xml: idpMetadata, source: idpSource, verified: idpMetadataVerified } = await loadIdpMetadata(cfg);
   // isAssertionEncrypted here describes the IdP: samlify reads
   // it from the SENDER when deciding to decrypt, so without it
   // an encrypted response is judged unsigned and refused
@@ -619,6 +751,7 @@ export async function createSamlSetup() {
     identityFor,
     spFor,
     idpSource,
+    idpMetadataVerified,
     idpEntityId: idp.entityMeta.getEntityID(),
     spCertFingerprint,
     spNameIdFormat: cfg.spNameIdFormat,

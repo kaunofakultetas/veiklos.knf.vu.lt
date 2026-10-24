@@ -5,12 +5,13 @@
 //  the tree loads with X-Active-Role only (Content-Type
 //  travels only with a body), themes collapse and expand one
 //  by one or all at once with their subthemes in code order,
-//  the two creation forms stay disabled until filled and POST
-//  their exact bodies, the two delete buttons ask their exact
-//  confirms and DELETE, every successful change reloads the
-//  tree (collapsing it — except the parent of a new
-//  subtheme), backend errors are shown verbatim without a
-//  reload, and every native field is reachable by its label.
+//  the two creation forms stay disabled until filled and
+//  while their POST is in flight, and POST their exact
+//  bodies, the two delete buttons ask their exact confirms
+//  and DELETE, every successful change reloads the tree
+//  (collapsing it — except the parent of a new subtheme),
+//  backend errors are shown verbatim without a reload, and
+//  every native field is reachable by its label.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -373,6 +374,56 @@ test("create subtheme under the seeded parent with a description", async () => {
   expect(subthemeCodes("Studijų kokybė")).toEqual(["6.1.1.", "6.1.2.", "6.1.3.", "6.1.10."]);
   expect(within(subthemeRow("Egzaminai")).getByText("— Egzaminų vertinimas")).toBeInTheDocument();
   expect(subDescription().value).toBe("");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// create — one POST per create
+// -----------------------------------------------------------
+//
+// While a create is in flight its button is disabled, so a
+// double-click cannot POST the same theme or subtheme twice;
+// the button comes back once the request is answered.
+// -----------------------------------------------------------
+
+test("a create button stays disabled while its POST is in flight, so a double-click sends one", async () => {
+  const state = scriptTree();
+  let releaseTheme;
+  onRequest("POST", "/api/themes", (req) => new Promise((resolve) => {
+    releaseTheme = () => {
+      state.tree = [...THEMES, { id: 3, code: req.body.code, title: req.body.title, total_sum: "0", pointvalue: null, subthemes: [] }];
+      resolve({ id: 3, ...req.body });
+    };
+  }));
+  let releaseSubtheme;
+  onRequest("POST", "/api/themes/1/subthemes", (req) => new Promise((resolve) => {
+    releaseSubtheme = () => resolve(created(13, 1, req.body));
+  }));
+  const { user } = renderPage(ThemesPage);
+  await loaded();
+
+  await user.type(themeCode(), "6.3.");
+  await user.type(themeTitle(), "Bendruomenė");
+  await user.dblClick(screen.getByRole("button", { name: "Sukurti temą" }));
+  expect(screen.getByRole("button", { name: "Sukurti temą" })).toBeDisabled();
+  expect(requestsTo("POST", "/api/themes")).toHaveLength(1);
+  releaseTheme();
+  await screen.findByText("Tema sukurta.");
+  expect(requestsTo("POST", "/api/themes")).toHaveLength(1);
+
+  await user.type(subCode(), "6.1.4.");
+  await user.type(subTitle(), "Naujiena");
+  await user.dblClick(screen.getByRole("button", { name: "Sukurti potemę" }));
+  expect(screen.getByRole("button", { name: "Sukurti potemę" })).toBeDisabled();
+  expect(requestsTo("POST", "/api/themes/1/subthemes")).toHaveLength(1);
+  releaseSubtheme();
+  await screen.findByText("Potemė sukurta.");
+  expect(requestsTo("POST", "/api/themes/1/subthemes")).toHaveLength(1);
 });
 
 

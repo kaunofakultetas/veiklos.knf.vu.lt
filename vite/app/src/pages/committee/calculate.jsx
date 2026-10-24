@@ -18,13 +18,13 @@
 //
 //  So the flow is: save the point value on the left first —
 //  the right panel reads the stored theme_pointvalue, not the
-//  freshly displayed one.
+//  freshly displayed one; a save updates the open employee's
+//  rows of that theme at once.
 //
 //  Split into (root component last):
 //
 //    LAYOUT / PANEL / TABLE_STYLE / TH_STYLE / TD_STYLE
 //                         — inline styles of the two panels
-//    getActiveRole        — activeRole from localStorage
 //    rowResult            — one subtheme row's capped result
 //    ThemeTotalsTable     — left: per-theme score sums
 //    PointValueCalculator — left: theme picker + Skaičiuoti
@@ -34,6 +34,7 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
+import { getActiveRole } from "@/components/activeRole.js";
 import "@/components/employee.css";
 
 
@@ -72,27 +73,6 @@ const TD_STYLE = {
   padding: "6px 6px",
   textAlign: "left",
 };
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// getActiveRole
-// -----------------------------------------------------------
-//
-// The active role for the X-Active-Role header, read fresh
-// per request.
-//
-// Used by:
-//   - CalculatePage (below) — every API call
-// -----------------------------------------------------------
-
-function getActiveRole() {
-  return localStorage.getItem("activeRole") || "";
-}
 
 
 
@@ -751,6 +731,16 @@ export default function CalculatePage() {
           t.theme_id === selectedTheme.theme_id
             ? { ...t, theme_pointvalue: rounded }
             : t
+        )
+      );
+
+      // The open employee's rows of this theme show the saved
+      // value at once too, not the one loaded before the save
+      setEmployeeSubthemes((prev) =>
+        prev.map((r) =>
+          r.theme_id === selectedTheme.theme_id
+            ? { ...r, theme_pointvalue: rounded }
+            : r
         )
       );
 

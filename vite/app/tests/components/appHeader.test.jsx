@@ -3,13 +3,14 @@
 //
 //  The shared top bar against the scripted fetch: /api/me on
 //  mount (roles as strings or { name } objects, the name with
-//  its "—" fallback), the activeRole repair rules and the
-//  "(nėra)" text once an answer holds no roles, the role
-//  switcher only for several roles and its navigation, the
-//  brand click, the "app:roles-updated" refetch, and sign-out
-//  — the POST, the cleared role, and the redirect (a 2xx
-//  answer's, or "/" when the answer is refused, not JSON, or
-//  the request fails).
+//  its email and "—" fallbacks, a refused answer changing
+//  nothing), the activeRole repair rules and the "(nėra)"
+//  text once an answer holds no roles, the role switcher only
+//  for several roles and its navigation, the brand click, the
+//  "app:roles-updated" refetch, and sign-out — the POST, the
+//  cleared role, and the redirect (a 2xx answer's, or "/"
+//  when the answer is refused, not JSON, or the request
+//  fails).
 // -----------------------------------------------------------
 
 import { test, expect, vi, afterEach } from "vitest";
@@ -67,9 +68,11 @@ const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)))
 //
 // One bare GET /api/me; before it answers the name is "—"
 // and the role block shows the stored role (or "Kraunama…");
-// after it, the name and — for several roles — the switcher
-// with the stored role selected. The nav children sit in
-// the <nav>.
+// after it, the name (the email when the name is blank) and
+// — for several roles — the switcher with the stored role
+// selected. A refused answer — a 401, or the 500 of a role
+// lookup that failed — changes neither the role nor the
+// "—". The nav children sit in the <nav>.
 // -----------------------------------------------------------
 
 test("loads /api/me on mount: name, the switcher for several roles, the nav children", async () => {
@@ -108,6 +111,28 @@ test("one role: no switcher, the role as text; { name } objects and a missing na
   expect(localStorage.getItem("activeRole")).toBe("Darbuotojas");
 });
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// a sign-in without a name
+// -----------------------------------------------------------
+//
+// VU SSO may release no first or last name; the bar then
+// names the caller by email rather than showing a dash.
+// -----------------------------------------------------------
+
+test("a blank name shows the caller's email instead", async () => {
+  onRequest("GET", "/api/me", { name: "", email: "ona@vu.lt", eid: "u200", roles: ["Darbuotojas"] });
+  renderHeader();
+
+  expect(await screen.findByText("ona@vu.lt")).toHaveClass("app-user-name");
+  expect(screen.queryByText("—")).not.toBeInTheDocument();
+});
+
 test("a refused /api/me leaves the stored role and the name alone", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/me", { status: 401, body: { error: "Neprisijungta" } });
@@ -117,6 +142,19 @@ test("a refused /api/me leaves the stored role and the name alone", async () => 
   expect(requestsTo("GET", "/api/me")).toHaveLength(1);
   expect(screen.getByText("Komisijos narys")).toHaveClass("app-role-value");
   expect(screen.getByText("—")).toHaveClass("app-user-name");
+  expect(localStorage.getItem("activeRole")).toBe("Komisijos narys");
+});
+
+test("a role lookup that failed (500) leaves the stored role alone too", async () => {
+  signInAs("Komisijos narys");
+  onRequest("GET", "/api/me", { status: 500, body: { error: "internal error" } });
+  renderHeader();
+  await settle();
+
+  expect(requestsTo("GET", "/api/me")).toHaveLength(1);
+  expect(screen.getByText("Komisijos narys")).toHaveClass("app-role-value");
+  expect(screen.getByText("—")).toHaveClass("app-user-name");
+  expect(sessionStorage.getItem("activeRole")).toBe("Komisijos narys");
   expect(localStorage.getItem("activeRole")).toBe("Komisijos narys");
 });
 

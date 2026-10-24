@@ -9,9 +9,8 @@
 //  role is called WITH the header, from a page of a role the
 //  route allows; and the routes nothing calls are exactly
 //  the known ones, so a route that goes dead fails here.
-//  (The route table cannot read the guards' roles yet, so
-//  the role half of that check is blind: a known bug, pinned
-//  as an expected failure.)
+//  The route table itself is checked to resolve each
+//  workspace's role, so the role half cannot go blind.
 //
 //  Nothing of the frontend is read: the two sides each keep
 //  their own copy of the contract — SPA_CALLS here, and the
@@ -141,9 +140,8 @@ const SPA_CALLS = [
 // Backend routes the SPA does not call, on purpose: the
 // health probe (nothing wired), the SAML endpoints the
 // BROWSER is sent to (navigations and the IdP's own calls),
-// the manager routers the roles page does not use, and the
-// two theme/subtheme edit routes the themes admin has no UI
-// for (their banners say so).
+// and the manager routers the roles page does not use (their
+// banners say so).
 //
 // Used by:
 //   - the uncalled-routes test (below)
@@ -154,8 +152,6 @@ const KNOWN_UNCALLED = [
   "GET /api/roles",
   "POST /api/roles/assign",
   "GET /api/users",
-  "PATCH /api/themes/:p",
-  "PATCH /api/themes/subthemes/:p",
   `GET ${SAML_BASE_PATH}/metadata`,
   `GET ${SAML_BASE_PATH}/login`,
   `POST ${SAML_BASE_PATH}/assert`,
@@ -202,7 +198,9 @@ function backendRoutes() {
   for (const [file, prefix] of Object.entries(prefixes)) {
     const src = fs.readFileSync(path.join(BACKEND_SRC, "routes", file), "utf8");
     const guards = {};
-    for (const g of src.matchAll(/const\s+(\w+)\s*=\s*\[([^\]]*)\]/g)) {
+    // A guard array holds its own brackets (requireActiveRoleIn([...]))
+    // and sits on one line, so it is read up to the line's last "];"
+    for (const g of src.matchAll(/const\s+(\w+)\s*=\s*\[(.*)\];/g)) {
       const roles = [...g[2].matchAll(/requireActiveRoleIn\(\[([^\]]*)\]\)/g)].flatMap((r) => [...r[1].matchAll(/["']([^"']+)["']/g)].map((x) => x[1]));
       guards[g[1]] = roles.length ? roles : null;
     }
@@ -342,25 +340,19 @@ test("every call to an active-role route sends X-Active-Role from a page of an a
 // whose guard array cannot be read comes back with no roles
 // and is skipped as if it took no header, so a page sending
 // the wrong role would pass unseen. One route of each
-// workspace must therefore resolve to its role. The guard
-// regex reads an array only up to its first "]", which is the
-// one inside requireActiveRoleIn([...]), so every guard reads
-// as null: a known bug in this file, pinned as an expected
-// failure until it is fixed.
+// workspace must therefore resolve to its role — the guard
+// arrays carry brackets of their own (requireActiveRoleIn),
+// which a reader stopping at the first "]" would trip over.
 // -----------------------------------------------------------
 
-test(
-  "BUG: backendRoutes() resolves each guard array to its active roles",
-  { todo: "known bug: the guard regex stops at the first ']' — the one inside requireActiveRoleIn([...]) — so every guard reads as null and the X-Active-Role check above can never fail" },
-  () => {
-    const table = new Map(backendRoutes().map((r) => [key(r), r]));
-    assert.deepEqual(table.get("POST /api/activities")?.activeRoles, ["Darbuotojas"]);
-    assert.deepEqual(table.get("GET /api/activities/pending")?.activeRoles, ["Vadybininkas"]);
-    assert.deepEqual(table.get("PATCH /api/activities/:p/committee")?.activeRoles, ["Komisijos narys"]);
-    assert.deepEqual(table.get("POST /api/themes")?.activeRoles, ["Vadybininkas"]);
-    assert.deepEqual(table.get("PATCH /api/themes/:p/total-sum")?.activeRoles, ["Komisijos narys"]);
-  }
-);
+test("backendRoutes() resolves each guard array to its active roles", () => {
+  const table = new Map(backendRoutes().map((r) => [key(r), r]));
+  assert.deepEqual(table.get("POST /api/activities")?.activeRoles, ["Darbuotojas"]);
+  assert.deepEqual(table.get("GET /api/activities/pending")?.activeRoles, ["Vadybininkas"]);
+  assert.deepEqual(table.get("PATCH /api/activities/:p/committee")?.activeRoles, ["Komisijos narys"]);
+  assert.deepEqual(table.get("POST /api/themes")?.activeRoles, ["Vadybininkas"]);
+  assert.deepEqual(table.get("PATCH /api/themes/:p/total-sum")?.activeRoles, ["Komisijos narys"]);
+});
 
 
 

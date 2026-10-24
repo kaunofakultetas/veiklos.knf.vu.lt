@@ -3,7 +3,10 @@
 //
 //  Drives createSamlSetup against the real sso.vu.lt
 //  descriptor checked into fixtures/ (as a file and, via a
-//  stub server, as a URL). Pins the per-origin SP identity,
+//  stub server, as a URL whose signature is checked). Pins
+//  the metadata signature check against IDP_METADATA_CERT,
+//  the one-assertion ID the replay check keys on
+//  (assertionIdOf), the per-origin SP identity,
 //  the mandatory SP key pair
 //  (signing + encryption KeyDescriptors, signed requests),
 //  the whole encrypted-assertion path against a FAKE IdP
@@ -30,6 +33,7 @@ import zlib from "node:zlib";
 import path from "node:path";
 import { once } from "node:events";
 import * as saml from "samlify";
+import { SignedXml } from "xml-crypto";
 import {
   SAML_BASE_PATH,
   CLOCK_DRIFT_MS,
@@ -42,6 +46,7 @@ import {
   logoutRequestTags,
   LOGOUT_REQUEST_TEMPLATE,
   sessionIndexOf,
+  assertionIdOf,
 } from "../src/utils/saml.js";
 
 
@@ -63,11 +68,20 @@ const FAKE_IDP_FILE = path.join(os.tmpdir(), `fake-idp-${process.pid}.xml`);
 // Every env key createSamlSetup / enrichSpMetadata read —
 // wiped before each test so nothing leaks between tests
 const SAML_ENV = [
-  "IDP_METADATA", "SP_PRIVATE_KEY_PATH", "SP_CERT_PATH",
+  "IDP_METADATA", "IDP_METADATA_CERT", "SP_PRIVATE_KEY_PATH", "SP_CERT_PATH",
 ];
 
 let stub;
 let stubOrigin;
+
+// How many requests the stub server answered in this test
+let stubHits = 0;
+
+// Signed variants of the fake IdP's descriptor, and the PEM
+// of VU's metadata signer, written here for IDP_METADATA /
+// IDP_METADATA_CERT
+const SIGNED_IDP_FILE = path.join(os.tmpdir(), `fake-idp-signed-${process.pid}.xml`);
+const VU_SIGNER_FILE = path.join(os.tmpdir(), `vu-metadata-signer-${process.pid}.crt`);
 
 
 
@@ -93,6 +107,7 @@ function stubMetadata() {
 
 before(async () => {
   stub = http.createServer((_req, res) => {
+    stubHits++;
     res.setHeader("Content-Type", "application/xml");
     res.end(stubMetadata());
   });
@@ -104,6 +119,7 @@ before(async () => {
 after(() => stub.close());
 
 beforeEach(() => {
+  stubHits = 0;
   for (const k of SAML_ENV) delete process.env[k];
   // The key pair is mandatory — every test starts with one
   process.env.SP_PRIVATE_KEY_PATH = FAKE_SP_KEY;
@@ -126,7 +142,8 @@ beforeEach(() => {
 // FAKE_IDP_FILE so createSamlSetup loads it like the real
 // one. Like VU it signs its logout messages and demands
 // signed ones back. loginResponseFor() mints a signed (and
-// encrypted) response for our SP carrying VU's attribute set.
+// encrypted) response for our SP carrying VU's attribute set,
+// under the assertion ID it is given.
 //
 // Used by:
 //   - the encrypted-assertion tests (below)
@@ -153,7 +170,7 @@ function fakeIdp({ encrypted }) {
   });
   fs.writeFileSync(FAKE_IDP_FILE, idp.getMetadata());
 
-  const loginResponseFor = async (sp, { audience, attributes, skewMs = 0 }) => {
+  const loginResponseFor = async (sp, { audience, attributes, skewMs = 0, assertionId = "_assertion-1" }) => {
     // skewMs shifts the IdP's clock: its "now" and the whole
     // validity window move together
     const now = new Date(Date.now() + skewMs);
@@ -172,7 +189,7 @@ function fakeIdp({ encrypted }) {
         id: "_resp-1",
         context: saml.SamlLib.replaceTagsByValue(template, {
           ID: "_resp-1",
-          AssertionID: "_assertion-1",
+          AssertionID: assertionId,
           Destination: acs,
           Audience: audience ?? sp.entityMeta.getEntityID(),
           SubjectRecipient: acs,
@@ -205,6 +222,73 @@ after(() => fs.rmSync(FAKE_IDP_FILE, { force: true }));
 
 
 // -----------------------------------------------------------
+// signMetadata
+// -----------------------------------------------------------
+//
+// The descriptor signed the way VU signs its own: one
+// enveloped signature as the root's first child, over the
+// root by its ID, RSA-SHA256 with exclusive canonicalization.
+//
+// Used by:
+//   - the metadata signature tests (below)
+// -----------------------------------------------------------
+
+function signMetadata(xml, privateKey, publicCert) {
+  const signer = new SignedXml({
+    privateKey,
+    publicCert,
+    idAttribute: "ID",
+    signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+    canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
+  });
+  signer.addReference({
+    xpath: "/*",
+    transforms: ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/2001/10/xml-exc-c14n#"],
+    digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
+  });
+  signer.computeSignature(xml, { location: { reference: "/*", action: "prepend" } });
+  return signer.getSignedXml();
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// writeVuSigner
+// -----------------------------------------------------------
+//
+// Writes the certificate VU signed the fixture's descriptor
+// with to VU_SIGNER_FILE, as PEM. It is read out of the
+// signature itself — good enough for a fixture; production
+// pins the certificate from a source of its own.
+//
+// Used by:
+//   - the URL metadata tests (below)
+// -----------------------------------------------------------
+
+function writeVuSigner() {
+  const xml = fs.readFileSync(VU_FIXTURE, "utf8");
+  const signature = xml.slice(xml.indexOf("<ds:Signature>"), xml.indexOf("</ds:Signature>"));
+  const base64 = signature.match(/<ds:X509Certificate>([^<]+)<\/ds:X509Certificate>/)[1].replace(/\s+/g, "");
+  fs.writeFileSync(VU_SIGNER_FILE, `-----BEGIN CERTIFICATE-----\n${base64.match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`);
+  return VU_SIGNER_FILE;
+}
+
+after(() => {
+  fs.rmSync(SIGNED_IDP_FILE, { force: true });
+  fs.rmSync(VU_SIGNER_FILE, { force: true });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // file metadata — VU IdP, unsigned requests, login target
 // -----------------------------------------------------------
 //
@@ -221,6 +305,7 @@ test("file metadata: VU IdP parsed, SP metadata carries both keys, signed login 
 
   assert.equal(setup.idpSource, VU_FIXTURE);
   assert.equal(setup.idpEntityId, "https://sso.vu.lt/saml/saml2/idp/metadata.php");
+  assert.equal(setup.idpMetadataVerified, false, "a local file without IDP_METADATA_CERT is taken as placed");
   assert.match(setup.spCertFingerprint, /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
 
   const sp = setup.spFor("https://veiklos.knf.vu.lt");
@@ -266,15 +351,27 @@ test("file metadata: VU IdP parsed, SP metadata carries both keys, signed login 
 // URL metadata
 // -----------------------------------------------------------
 //
-// IDP_METADATA may also be an http(s) URL; it is fetched
-// verbatim.
+// IDP_METADATA may also be an http(s) URL. A download is
+// only trusted once its signature checks out, so a URL needs
+// IDP_METADATA_CERT: without it the boot stops before
+// anything is fetched; with VU's signing certificate, VU's
+// real signed descriptor loads and is reported verified.
 // -----------------------------------------------------------
 
-test("URL metadata is fetched and used verbatim", async () => {
+test("URL metadata without IDP_METADATA_CERT refuses to boot, before fetching anything", async () => {
   process.env.IDP_METADATA = `${stubOrigin}/metadata`;
+  await assert.rejects(() => createSamlSetup(), /IDP_METADATA_CERT is required/);
+  assert.equal(stubHits, 0);
+});
+
+test("URL metadata: VU's signature checks out against its certificate", async () => {
+  process.env.IDP_METADATA = `${stubOrigin}/metadata`;
+  process.env.IDP_METADATA_CERT = writeVuSigner();
 
   const setup = await createSamlSetup();
   assert.equal(setup.idpSource, `${stubOrigin}/metadata`);
+  assert.equal(setup.idpMetadataVerified, true);
+  assert.equal(setup.idpEntityId, "https://sso.vu.lt/saml/saml2/idp/metadata.php");
   const { context } = await setup.spFor("https://app.example").createLoginRequest(setup.idp, "redirect");
   assert.ok(context.startsWith("https://sso.vu.lt/saml/module.php/saml/idp/singleSignOnService?"));
 });
@@ -336,7 +433,8 @@ test("no IDP_METADATA → pointed boot error; dead URL → error", async () => {
   const deadUrl = `http://127.0.0.1:${dead.address().port}/metadata`;
   await new Promise((r) => dead.close(r));
   process.env.IDP_METADATA = deadUrl;
-  await assert.rejects(() => createSamlSetup());
+  process.env.IDP_METADATA_CERT = writeVuSigner();
+  await assert.rejects(() => createSamlSetup(), /fetch failed|ECONNREFUSED/);
 });
 
 
@@ -882,4 +980,101 @@ test("sessionIndexOf: the extract object, a string, arrays; empties are null", (
   assert.equal(sessionIndexOf(""), null);
   assert.equal(sessionIndexOf(undefined), null);
   assert.equal(sessionIndexOf(null), null);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// metadata signature — IDP_METADATA_CERT
+// -----------------------------------------------------------
+//
+// With IDP_METADATA_CERT set, the descriptor must carry one
+// signature directly under its root, over the root itself,
+// made with that certificate's key; what samlify then gets
+// is exactly the signed descriptor. Anything else stops the
+// boot: no signature, a signature by another key, a
+// descriptor changed after signing, or a signed descriptor
+// wrapped inside an outer element of someone else's.
+// -----------------------------------------------------------
+
+test("IDP_METADATA_CERT: a descriptor signed with that certificate's key loads and is reported verified", async () => {
+  fakeIdp({ encrypted: true });
+  fs.writeFileSync(SIGNED_IDP_FILE, signMetadata(fs.readFileSync(FAKE_IDP_FILE, "utf8"), FAKE_IDP_KEY, FAKE_IDP_CERT));
+  process.env.IDP_METADATA = SIGNED_IDP_FILE;
+  process.env.IDP_METADATA_CERT = FIX("fake-idp.crt");
+
+  const setup = await createSamlSetup();
+  assert.equal(setup.idpMetadataVerified, true);
+  assert.equal(setup.idpEntityId, FAKE_IDP_ENTITY);
+});
+
+test("IDP_METADATA_CERT: unsigned, stranger-signed, tampered or wrapped descriptors refuse to boot", async () => {
+  fakeIdp({ encrypted: true });
+  const raw = fs.readFileSync(FAKE_IDP_FILE, "utf8");
+  const signed = signMetadata(raw, FAKE_IDP_KEY, FAKE_IDP_CERT);
+  process.env.IDP_METADATA = SIGNED_IDP_FILE;
+  process.env.IDP_METADATA_CERT = FIX("fake-idp.crt");
+
+  for (const [name, xml, refusal] of [
+    ["unsigned", raw, /not signed/],
+    ["signed by another key", signMetadata(raw, fs.readFileSync(FAKE_SP_KEY, "utf8"), fs.readFileSync(FAKE_SP_CERT, "utf8")), /does not verify/],
+    ["changed after signing", signed.replace(`entityID="${FAKE_IDP_ENTITY}"`, 'entityID="https://evil.example/idp"'), /does not verify/],
+    ["wrapped in an outer element", `<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata">${signed.replace(/^<\?xml[^>]*>/, "")}</md:EntitiesDescriptor>`, /not signed/],
+  ]) {
+    fs.writeFileSync(SIGNED_IDP_FILE, xml);
+    await assert.rejects(() => createSamlSetup(), refusal, name);
+  }
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// assertionIdOf
+// -----------------------------------------------------------
+//
+// The replay check's key: the ID of the one assertion
+// directly under the Response, the only place samlify
+// verifies and decrypts one. With VU's encryption, a real
+// response from the fake IdP gives its assertion's ID. A
+// replayed encrypted assertion with a forged plain one
+// beside it, carrying a fresh ID, still passes samlify —
+// which verifies the encrypted one and ignores the other —
+// so the assertions are counted after decryption, and two
+// give no ID at all; so do none, one without an ID, or one
+// nested deeper than the Response's own children.
+// -----------------------------------------------------------
+
+test("assertionIdOf: a real encrypted response → its assertion's ID; with a forged assertion beside it → null", async () => {
+  const { loginResponseFor } = fakeIdp({ encrypted: true });
+  process.env.IDP_METADATA = FAKE_IDP_FILE;
+  const setup = await createSamlSetup();
+  const sp = setup.spFor("https://veiklos.knf.vu.lt");
+  const attributes = { eID: "112546", mail: "u1@vu.lt" };
+
+  const genuine = await loginResponseFor(sp, { attributes, assertionId: "_assertion-7" });
+  const parsed = await sp.parseLoginResponse(setup.idp, "post", { body: { SAMLResponse: genuine } });
+  assert.equal(await assertionIdOf(sp, parsed.samlContent), "_assertion-7");
+
+  const forged = `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_forged-1" Version="2.0" IssueInstant="${new Date().toISOString()}"><saml:Issuer>${FAKE_IDP_ENTITY}</saml:Issuer></saml:Assertion>`;
+  const doctored = Buffer.from(genuine, "base64").toString().replace(/<([\w-]+:)?EncryptedAssertion\b/, (tag) => forged + tag);
+  const accepted = await sp.parseLoginResponse(setup.idp, "post", { body: { SAMLResponse: Buffer.from(doctored).toString("base64") } });
+  assert.equal(accepted.extract.attributes.eID, "112546", "samlify accepts the doctored response");
+  assert.equal(await assertionIdOf(sp, accepted.samlContent), null);
+});
+
+test("assertionIdOf: two, none, an ID-less or a nested assertion → null", async () => {
+  const open = '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">';
+  assert.equal(await assertionIdOf(null, `${open}<saml:Assertion ID="_one"/></samlp:Response>`), "_one");
+  assert.equal(await assertionIdOf(null, `${open}<saml:Assertion ID="_a"/><saml:Assertion ID="_b"/></samlp:Response>`), null);
+  assert.equal(await assertionIdOf(null, `${open}</samlp:Response>`), null);
+  assert.equal(await assertionIdOf(null, `${open}<saml:Assertion Version="2.0"/></samlp:Response>`), null);
+  assert.equal(await assertionIdOf(null, `${open}<samlp:Extensions><saml:Assertion ID="_deep"/></samlp:Extensions></samlp:Response>`), null);
 });

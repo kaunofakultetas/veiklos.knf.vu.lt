@@ -8,7 +8,9 @@
 //  itself, several open the picker, a stored role goes
 //  straight to its workspace, no roles stays on the loading
 //  card — the RoleRoute guard for a wrong or missing role,
-//  and the catch-all redirect to "/".
+//  the catch-all redirect to "/", a tab that keeps its own
+//  role when another tab switches, and the notice that
+//  offers a fresh sign-in when the session ends mid-work.
 // -----------------------------------------------------------
 
 import { test, expect, vi, afterEach } from "vitest";
@@ -261,4 +263,84 @@ test("an unknown path falls back to / — the stored role's workspace when signe
 
   expect(await screen.findByRole("heading", { name: "Komisijos nario langas" })).toBeInTheDocument();
   expect(window.location.pathname).toBe("/committee");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// one role per tab
+// -----------------------------------------------------------
+//
+// Switching the role in one tab must not pull the rug from
+// under another: the shared storage only remembers the last
+// choice for tabs opened later. A manager tab whose user
+// switched to Darbuotojas in a second tab keeps its
+// workspace when it navigates, and its requests keep saying
+// Vadybininkas.
+// -----------------------------------------------------------
+
+test("another tab's role switch leaves this tab's workspace and its X-Active-Role alone", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/session/check", session(["Darbuotojas", "Vadybininkas"]));
+  onRequest("GET", "/api/me", ME);
+  onRequest("GET", "/api/activities/all", []);
+  onRequest("GET", "/api/themes", []);
+  const { user } = renderApp("/manager");
+  expect(await screen.findByRole("heading", { name: "Vadybininko langas" })).toBeInTheDocument();
+
+  // What the other tab's switch writes to the shared storage
+  localStorage.setItem("activeRole", "Darbuotojas");
+
+  await user.click(screen.getByRole("link", { name: "Eksportas" }));
+  expect(await screen.findByRole("heading", { name: "Darbuotojų veiklų eksportas" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Netinkama rolė" })).not.toBeInTheDocument();
+  await settle();
+  expect(requestsTo("GET", "/api/activities/all")[0].headers["x-active-role"]).toBe("Vadybininkas");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// the session ends mid-work
+// -----------------------------------------------------------
+//
+// Eight hours after sign-in the cookie is gone and every API
+// call answers 401 Neprisijungta. Instead of a page that only
+// shows the error, a notice explains it and offers a fresh
+// sign-in in a NEW tab — this one keeps whatever was typed —
+// and can be dismissed. A 401 from the probe on load is no
+// such moment: that is simply signed out.
+// -----------------------------------------------------------
+
+test("a 401 while signed in offers a fresh sign-in in a new tab and keeps the page", async () => {
+  signInAs("Darbuotojas");
+  onRequest("GET", "/api/session/check", session(["Darbuotojas"]));
+  onRequest("GET", "/api/me", SIGNED_OUT);
+  const { user } = renderApp("/employee");
+
+  const notice = await screen.findByRole("dialog", { name: "Prisijungimo sesija baigėsi" });
+  const link = within(notice).getByRole("link", { name: "Prisijungti naujame skirtuke" });
+  expect(link).toHaveAttribute("href", "/auth/saml/login");
+  expect(link).toHaveAttribute("target", "_blank");
+  expect(screen.getByRole("heading", { name: "Darbuotojo langas" })).toBeInTheDocument();
+
+  await user.click(within(notice).getByRole("button", { name: "Uždaryti" }));
+  expect(screen.queryByRole("dialog", { name: "Prisijungimo sesija baigėsi" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Darbuotojo langas" })).toBeInTheDocument();
+});
+
+test("a signed-out probe is not an ended session: the SignIn card, no notice", async () => {
+  onRequest("GET", "/api/session/check", SIGNED_OUT);
+  renderApp("/");
+
+  expect(await screen.findByRole("heading", { name: "Vilniaus universiteto veiklos" })).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "Prisijungimo sesija baigėsi" })).not.toBeInTheDocument();
 });

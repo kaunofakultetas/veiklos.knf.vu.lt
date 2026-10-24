@@ -5,15 +5,16 @@
 //  queue loads with the committee's X-Active-Role and renders
 //  rows with status pills, the review modal shows the row's
 //  read-only fields (muted placeholders for what is missing),
-//  "Grąžinti vadybininkei" confirms and PATCHes { action:
-//  "return" }, scoring derives 1/n from the people count,
-//  refuses an empty or negative count without a request,
-//  PATCHes { action: "score", … } and closes the modal only
-//  when the status left PATVIRTINTA, backend errors — a
-//  refused download included — are shown as "Klaida: …", the
-//  attachment travels through fetch with the header, and the
-//  modal's comments box and people count answer to their
-//  labels.
+//  "Grąžinti vadybininkei" asks for the reason and PATCHes
+//  { action: "return", committee_comments } — an empty
+//  reason is refused without a request — scoring derives 1/n
+//  from the people count, refuses an empty or negative count
+//  without a request, PATCHes { action: "score", … } and
+//  closes the modal only when the status left PATVIRTINTA,
+//  backend errors — a refused download included — are shown
+//  as "Klaida: …", the attachment travels through fetch with
+//  the header, and the modal's comments box and people count
+//  answer to their labels.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -222,13 +223,17 @@ test("Peržiūrėti opens the read-only modal; placeholders for missing fields; 
 // return
 // -----------------------------------------------------------
 //
-// "Grąžinti vadybininkei" asks for confirmation, PATCHes
-// { action: "return" } with both headers, shows "Grąžinama…"
-// disabled while in flight, and drops the row once the reply
-// leaves PATVIRTINTA.
+// "Grąžinti vadybininkei" opens a prompt for the reason —
+// the manager gets the activity back and must see why — with
+// the employee and the activity named. An empty reason is
+// refused without a request; a given one is PATCHed as
+// { action: "return", committee_comments } with both
+// headers, "Grąžinama…" shows disabled while in flight, and
+// the row leaves once the reply leaves PATVIRTINTA. Atšaukti
+// closes the prompt and sends nothing.
 // -----------------------------------------------------------
 
-test("returning a row: confirm, PATCH { action: \"return\" }, in-flight label, row removed", async () => {
+test("returning a row: the reason prompt, an empty reason refused, PATCH { action, committee_comments }, row removed", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/activities/committee", QUEUE);
   let release;
@@ -237,34 +242,44 @@ test("returning a row: confirm, PATCH { action: \"return\" }, in-flight label, r
   await screen.findByText("Seminaras apie X");
 
   await user.click(within(rowNamed("Seminaras apie X")).getByRole("button", { name: "Grąžinti vadybininkei" }));
-  expect(window.confirm).toHaveBeenCalledWith("Grąžinti veiklą vadybininkei?");
-  const busy = await screen.findByRole("button", { name: "Grąžinama…" });
-  expect(busy).toBeDisabled();
-  expect(within(rowNamed("Paskaitų ciklas")).getByRole("button", { name: "Grąžinti vadybininkei" })).toBeEnabled();
+  const prompt = screen.getByRole("heading", { level: 3, name: "Grąžinti veiklą vadybininkei" }).parentElement;
+  expect(within(prompt).getByText("Jonas Jonaitis")).toBeInTheDocument();
+  expect(within(prompt).getByText("Seminaras apie X")).toBeInTheDocument();
 
-  release(ok({ ...ACT1, status: "PATEIKTA" }));
+  await user.click(within(prompt).getByRole("button", { name: "Patvirtinti grąžinimą" }));
+  expect(await screen.findByText("Klaida: Grąžinimui būtinas komentaras.")).toBeInTheDocument();
+  expect(requestLog()).toHaveLength(1);
+
+  await user.type(within(prompt).getByLabelText("Grąžinimo priežastis"), "Patikslinkite temą");
+  await user.click(within(prompt).getByRole("button", { name: "Patvirtinti grąžinimą" }));
+  expect(await within(prompt).findByRole("button", { name: "Grąžinama…" })).toBeDisabled();
+
+  release(ok({ ...ACT1, status: "PATEIKTA", committee_comments: "Patikslinkite temą" }));
   await waitFor(() => expect(screen.queryByText("Seminaras apie X")).not.toBeInTheDocument());
+  expect(screen.queryByRole("heading", { level: 3, name: "Grąžinti veiklą vadybininkei" })).not.toBeInTheDocument();
   expect(screen.getByText("Paskaitų ciklas")).toBeInTheDocument();
   expect(screen.getAllByRole("row")).toHaveLength(2);
 
   const [patch] = requestsTo("PATCH", "/api/activities/1/committee");
   expect(patch.headers).toEqual({ "x-active-role": "Komisijos narys", "content-type": "application/json" });
-  expect(patch.body).toEqual({ action: "return" });
+  expect(patch.body).toEqual({ action: "return", committee_comments: "Patikslinkite temą" });
+  expect(window.confirm).not.toHaveBeenCalled();
   expect(requestLog()).toHaveLength(2);
 });
 
-test("a cancelled confirm sends nothing and keeps the row", async () => {
+test("Atšaukti closes the reason prompt, sends nothing and keeps the row", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/activities/committee", QUEUE);
   const { user } = renderPage(EvaluatePage);
   await screen.findByText("Seminaras apie X");
 
-  window.confirm.mockReturnValueOnce(false);
   await user.click(within(rowNamed("Seminaras apie X")).getByRole("button", { name: "Grąžinti vadybininkei" }));
+  const prompt = screen.getByRole("heading", { level: 3, name: "Grąžinti veiklą vadybininkei" }).parentElement;
+  await user.type(within(prompt).getByLabelText("Grąžinimo priežastis"), "Juodraštis");
+  await user.click(within(prompt).getByRole("button", { name: "Atšaukti" }));
 
-  expect(window.confirm).toHaveBeenCalledWith("Grąžinti veiklą vadybininkei?");
+  expect(screen.queryByRole("heading", { level: 3, name: "Grąžinti veiklą vadybininkei" })).not.toBeInTheDocument();
   expect(requestLog()).toHaveLength(1);
-  expect(screen.getByText("Seminaras apie X")).toBeInTheDocument();
   expect(within(rowNamed("Seminaras apie X")).getByRole("button", { name: "Grąžinti vadybininkei" })).toBeEnabled();
 });
 
@@ -410,7 +425,8 @@ test("a reply still PATVIRTINTA keeps the modal open and patches the row in plac
 //
 // A refused PATCH shows "Klaida: " + the backend's reason; a
 // refused score keeps the modal in scoring mode, a refused
-// return keeps the row with its button re-enabled.
+// return keeps the row and the reason prompt open, the
+// reason kept and the button re-enabled.
 // -----------------------------------------------------------
 
 test("a refused score shows Klaida: and keeps the modal in scoring mode", async () => {
@@ -427,7 +443,7 @@ test("a refused score shows Klaida: and keeps the modal in scoring mode", async 
   expect(screen.queryByText("Įvertinimas išsaugotas.")).not.toBeInTheDocument();
 });
 
-test("a refused return shows Klaida: and keeps the row", async () => {
+test("a refused return shows Klaida:, keeps the row and keeps the reason prompt open", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/activities/committee", QUEUE);
   onRequest("PATCH", "/api/activities/1/committee", { status: 409, body: { error: "Veikla jau įvertinta" } });
@@ -435,11 +451,15 @@ test("a refused return shows Klaida: and keeps the row", async () => {
   await screen.findByText("Seminaras apie X");
 
   await user.click(within(rowNamed("Seminaras apie X")).getByRole("button", { name: "Grąžinti vadybininkei" }));
+  const prompt = screen.getByRole("heading", { level: 3, name: "Grąžinti veiklą vadybininkei" }).parentElement;
+  await user.type(within(prompt).getByLabelText("Grąžinimo priežastis"), "Patikslinkite temą");
+  await user.click(within(prompt).getByRole("button", { name: "Patvirtinti grąžinimą" }));
 
   expect(await screen.findByText("Klaida: Veikla jau įvertinta")).toBeInTheDocument();
-  await waitFor(() => expect(within(rowNamed("Seminaras apie X")).getByRole("button", { name: "Grąžinti vadybininkei" })).toBeEnabled());
-  expect(screen.getAllByRole("row")).toHaveLength(3);
-  expect(requestsTo("PATCH", "/api/activities/1/committee")[0].body).toEqual({ action: "return" });
+  await waitFor(() => expect(within(prompt).getByRole("button", { name: "Patvirtinti grąžinimą" })).toBeEnabled());
+  expect(within(prompt).getByLabelText("Grąžinimo priežastis")).toHaveValue("Patikslinkite temą");
+  expect(rowNamed("Seminaras apie X")).toBeInTheDocument();
+  expect(requestsTo("PATCH", "/api/activities/1/committee")[0].body).toEqual({ action: "return", committee_comments: "Patikslinkite temą" });
 });
 
 

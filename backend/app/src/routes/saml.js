@@ -25,7 +25,9 @@
 //  SessionIndex and NameID, and the session store can find a
 //  session by them (db/sessionStore.js), so an IdP-initiated
 //  logout — which arrives without the cookie — can still end
-//  it.
+//  it. A login message signs in once: each assertion's ID is
+//  remembered (saml_assertions) until the assertion expires,
+//  and a second post of it is refused.
 //
 //  Used by:
 //    - the browser — App.jsx redirects to /login, VU SSO
@@ -36,8 +38,9 @@
 
 import { Router } from "express";
 import { pool } from "../db/pool.js";
-import { TBL_USERS, TBL_ROLES, TBL_USER_ROLES } from "../db/tables.js";
-import { enrichSpMetadata, logoutOctetString, logoutRequestTags, mapSamlAttributes, sessionIndexOf } from "../utils/saml.js";
+import { TBL_USERS, TBL_ROLES, TBL_USER_ROLES, TBL_SAML_ASSERTIONS } from "../db/tables.js";
+import { assertionIdOf, CLOCK_DRIFT_MS, enrichSpMetadata, logoutOctetString, logoutRequestTags, mapSamlAttributes, sessionIndexOf } from "../utils/saml.js";
+import { SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "../auth/sessionCookie.js";
 
 
 
@@ -75,6 +78,64 @@ function failedStatusDetail(samlResponseB64) {
     if (message) parts.push(message);
     if (codes.length > 1) parts.push(`(${codes.join(" → ")})`);
     return parts.length ? parts.join(" ") : null;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// assertionExpiry
+// -----------------------------------------------------------
+//
+// When a used assertion's ID may be forgotten: once samlify
+// would refuse the assertion anyway — its Conditions
+// NotOnOrAfter plus the clock drift samlify allows. One
+// without that bound (VU always sends it) is kept a day.
+//
+// Used by:
+//   - the /assert handler in createSamlRouter (below)
+// -----------------------------------------------------------
+
+function assertionExpiry(extract) {
+    const notOnOrAfter = Date.parse(extract.conditions?.notOnOrAfter ?? "");
+    if (Number.isNaN(notOnOrAfter)) return new Date(Date.now() + 24 * 60 * 60 * 1000);
+    return new Date(notOnOrAfter + CLOCK_DRIFT_MS);
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// rememberAssertion
+// -----------------------------------------------------------
+//
+// Records an assertion's ID as used until `expire`, after
+// sweeping the IDs whose assertions have expired. Resolves
+// true the first time an ID is recorded and false when it was
+// already there — the conflict on the primary key is the
+// whole check, so two posts of one assertion racing each
+// other cannot both win.
+//
+// Used by:
+//   - the /assert handler in createSamlRouter (below)
+// -----------------------------------------------------------
+
+async function rememberAssertion(id, expire) {
+    await pool.query(`DELETE FROM ${TBL_SAML_ASSERTIONS} WHERE expire <= NOW()`);
+    const fresh = await pool.query(
+        `INSERT INTO ${TBL_SAML_ASSERTIONS} (id, expire)
+         VALUES ($1, $2)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id`,
+        [id, expire]
+    );
+    return fresh.rowCount > 0;
 }
 
 
@@ -128,12 +189,14 @@ export default function createSamlRouter({ setup }) {
     // assertion here. samlify checks signature, issuer and
     // validity window; the audience is checked here because
     // samlify does not — an assertion minted for another SP
-    // must not log anyone in. Then: upsert the user,
+    // must not log anyone in — and so is a repeat of an
+    // assertion already used. Then: upsert the user,
     // auto-grant Darbuotojas on first sign-in, store the login
     // in the session and send the browser home
     const assert = async (req, res) => {
         try {
-            const { extract } = await spOf(req).parseLoginResponse(idp, "post", req);
+            const sp = spOf(req);
+            const { samlContent, extract } = await sp.parseLoginResponse(idp, "post", req);
 
             const { spEntityId } = identityFor(originOf(req));
             const audiences = [].concat(extract.audience ?? []);
@@ -154,6 +217,24 @@ export default function createSamlRouter({ setup }) {
                 return res.status(400).send(
                     `SAML assertion missing eID or mail attributes (received: ${received.join(", ") || "none"})`
                 );
+            }
+
+            // One sign-in per assertion. A second post of
+            // one is refused — except from the browser
+            // already signed in as that same user (the back
+            // button re-posting VU SSO's form), which just
+            // goes home
+            const assertionId = await assertionIdOf(sp, samlContent);
+            if (!assertionId) {
+                console.error("SAML assert: the response does not hold exactly one assertion with an ID");
+                return res.status(401).send("SAML assertion without a single ID");
+            }
+            if (!(await rememberAssertion(assertionId, assertionExpiry(extract)))) {
+                if (mapSamlAttributes(req.session?.samlUser?.attributes ?? {}).eid === eid) {
+                    return res.redirect("/");
+                }
+                console.error("SAML assert: an assertion was posted again");
+                return res.status(401).send("SAML assertion already used");
             }
 
             // Upsert keyed by eid — email always refreshes,
@@ -235,12 +316,14 @@ export default function createSamlRouter({ setup }) {
     };
     samlRouter.post("/assert", assert);
 
-    // Drop the local session and its cookie; resolves once the
-    // store has forgotten it
+    // Drop the local session and its cookie — cleared with
+    // the attributes it was set with, as a __Host- cookie
+    // ignores any other clear; resolves once the store has
+    // forgotten it
     const endLocalSession = (req, res) =>
         new Promise((resolve) => {
             req.session.destroy(() => {
-                res.clearCookie("connect.sid");
+                res.clearCookie(SESSION_COOKIE, SESSION_COOKIE_OPTIONS);
                 resolve();
             });
         });
@@ -250,10 +333,12 @@ export default function createSamlRouter({ setup }) {
     // for the SPA to navigate to; no session, or any IdP
     // failure, answers "/" so the browser still lands signed
     // out. A POST because a cross-site request cannot carry
-    // the SameSite=Lax cookie — no other page can sign a user
-    // out. JSON + navigation rather than a form POST with a
-    // 302: Chromium enforces the CSP form-action rule on the
-    // redirect to the IdP that would follow a form submission
+    // the SameSite=Lax cookie — no page on another site can
+    // sign a user out (pages on other *.vu.lt hosts count as
+    // the same site and can). JSON + navigation rather than a
+    // form POST with a 302: Chromium enforces the CSP
+    // form-action rule on the redirect to the IdP that would
+    // follow a form submission
     samlRouter.post("/logout", async (req, res) => {
         const samlUser = req.session?.samlUser;
         await endLocalSession(req, res);
@@ -296,7 +381,8 @@ export default function createSamlRouter({ setup }) {
     //     the IdP's RelayState) — without it the IdP's logout
     //     chain stalls on us. A request that fails verification
     //     is refused and changes nothing, so a forged link
-    //     cannot log anyone out
+    //     cannot log anyone out; a store that cannot be searched
+    //     answers 500 rather than a success it cannot vouch for
     //
     // Both messages are signed by VU; samlify verifies them
     // against the IdP certificate (wantLogout*Signed on the SP)
@@ -314,8 +400,19 @@ export default function createSamlRouter({ setup }) {
                 return res.status(400).send("Invalid SAML logout request");
             }
 
+            // The lookup is a database query. If it fails the
+            // login's sessions cannot be ended, so the IdP must
+            // not be told they were — and the rejection must not
+            // escape: Express 4 leaves a rejected async handler
+            // unanswered and Node ends the process on it
             const ids = { sessionIndex: parsed.extract?.sessionIndex, nameID: parsed.extract?.nameID };
-            const sids = req.sessionStore?.sidsForLogin ? await req.sessionStore.sidsForLogin(ids) : [];
+            let sids;
+            try {
+                sids = req.sessionStore?.sidsForLogin ? await req.sessionStore.sidsForLogin(ids) : [];
+            } catch (err) {
+                console.error("SAML logout: session lookup failed:", err);
+                return res.status(500).send("Logout failed on our side");
+            }
             for (const sid of sids) {
                 await new Promise((resolve) => req.sessionStore.destroy(sid, () => resolve()));
             }

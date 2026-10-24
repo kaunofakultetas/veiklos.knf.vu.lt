@@ -2,14 +2,13 @@
 //  [*] Regression — routes /api/themes
 //
 //  The theme/subtheme catalog. Pins the guard split (read =
-//  any JWT, structure = active Vadybininkas, numbers = active
-//  Komisijos narys), the tree assembly, the dynamic PATCH SET
-//  building, every validation message, and the transactional
-//  cascade DELETE — plus, pinned as expected failures, the
-//  known bugs: the subtheme DELETE that answers 500 for a
-//  subtheme in use, ids Postgres cannot take, blank or
-//  non-text codes and titles on create, a subtheme for a
-//  theme that is gone, and committee numbers that are not
+//  any signed-in session, structure = active Vadybininkas,
+//  numbers = active Komisijos narys), the tree assembly, the
+//  dynamic PATCH SET building, every validation message, the
+//  transactional cascade DELETE, and the refusals that keep
+//  bad input out of the database: a subtheme still in use,
+//  ids Postgres cannot take, blank or non-text codes and
+//  titles, a theme that is gone, and numbers that are not
 //  numbers.
 //
 //  verifySamlSession/attachRoles are mocked
@@ -239,6 +238,73 @@ test("GET /: subthemes nest under their theme; orphans are dropped silently", as
 
 
 // -----------------------------------------------------------
+// tree order
+// -----------------------------------------------------------
+//
+// Postgres orders codes as text ("6.10." before "6.2."); the
+// tree every dropdown is built from comes in code order
+// instead — the themes, and each theme's subthemes. The live
+// theme codes are a family name and a section number, and
+// two families number their sections alike: the text decides
+// first, so one family's themes stay together, and subthemes
+// sharing a code stay under their own theme.
+// -----------------------------------------------------------
+
+test("GET /: themes and their subthemes come in numeric code order", async () => {
+  employee();
+  onQuery(/FROM themes ORDER BY code ASC/, [
+    { id: 1, code: "6.1.", title: "A", total_sum: 0, pointvalue: null },
+    { id: 10, code: "6.10.", title: "J", total_sum: 0, pointvalue: null },
+    { id: 2, code: "6.2.", title: "B", total_sum: 0, pointvalue: null },
+  ]);
+  onQuery(/FROM subthemes ORDER BY code ASC/, [
+    { id: 210, theme_id: 2, code: "6.2.10.", title: "P10", description: null, cap: null },
+    { id: 22, theme_id: 2, code: "6.2.2.", title: "P2", description: null, cap: null },
+  ]);
+
+  const res = await api(app.base, "GET", "/api/themes");
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.map((t) => t.code), ["6.1.", "6.2.", "6.10."]);
+  assert.deepEqual(res.body[1].subthemes.map((st) => st.code), ["6.2.2.", "6.2.10."]);
+});
+
+test("GET /: the live codes — a family's themes stay together, each with its own subthemes", async () => {
+  employee();
+  onQuery(/FROM themes ORDER BY code ASC/, [
+    { id: 1, code: "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.1.", title: "A", total_sum: 0, pointvalue: null },
+    { id: 2, code: "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.2.", title: "B", total_sum: 0, pointvalue: null },
+    { id: 3, code: "STUDIJŲ KOKYBĖ 6.1.", title: "C", total_sum: 0, pointvalue: null },
+    { id: 5, code: "STUDIJŲ KOKYBĖ 6.10.", title: "E", total_sum: 0, pointvalue: null },
+    { id: 4, code: "STUDIJŲ KOKYBĖ 6.2.", title: "D", total_sum: 0, pointvalue: null },
+  ]);
+  onQuery(/FROM subthemes ORDER BY code ASC/, [
+    { id: 11, theme_id: 1, code: "6.1.1.", title: "E1", description: null, cap: null },
+    { id: 31, theme_id: 3, code: "6.1.1.", title: "S1", description: null, cap: null },
+    { id: 110, theme_id: 1, code: "6.1.10.", title: "E10", description: null, cap: null },
+    { id: 12, theme_id: 1, code: "6.1.2.", title: "E2", description: null, cap: null },
+    { id: 32, theme_id: 3, code: "6.1.2.", title: "S2", description: null, cap: null },
+  ]);
+
+  const res = await api(app.base, "GET", "/api/themes");
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.map((t) => t.code), [
+    "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.1.",
+    "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.2.",
+    "STUDIJŲ KOKYBĖ 6.1.",
+    "STUDIJŲ KOKYBĖ 6.2.",
+    "STUDIJŲ KOKYBĖ 6.10.",
+  ]);
+  assert.deepEqual(res.body[0].subthemes.map((st) => st.id), [11, 12, 110]);
+  assert.deepEqual(res.body[2].subthemes.map((st) => st.id), [31, 32]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // create theme
 // -----------------------------------------------------------
 //
@@ -302,58 +368,23 @@ test("POST /: duplicate code (23505) → 409", async () => {
 
 
 // -----------------------------------------------------------
-// edit — unknown keys
+// no edit routes for codes and titles
 // -----------------------------------------------------------
 //
-// A body of non-whitelisted keys builds an empty SET →
-// the no-fields 400.
+// Themes and subtheme structure is created and deleted,
+// never edited in place: no page ever edited it, and the two
+// edit routes stored whatever they were sent. Both are gone
+// — a PATCH on a theme or on a subtheme itself finds no
+// route, and nothing touches the database.
 // -----------------------------------------------------------
 
-test("PATCH /:id: unknown body keys are silently ignored; only-unknown → 400", async () => {
+test("PATCH /:id and PATCH /subthemes/:id no longer exist: 404, no query", async () => {
   manager();
-  const res = await api(app.base, "PATCH", "/api/themes/5", {
-    body: { pavadinimas: "X", total_sum: 9 },
-    headers: asRole("Vadybininkas"),
-  });
-  assert.equal(res.status, 400);
-  assert.deepEqual(res.body, { error: "Klaida: nėra atnaujinamų laukų" });
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// edit — SET building
-// -----------------------------------------------------------
-//
-// code+title produce 'code = $1, title = $2' with the
-// id as $3; a rowCount-0 update → 404.
-// -----------------------------------------------------------
-
-test("PATCH /:id: builds SET from the allowed keys, id last; 404 on no row", async () => {
-  manager();
-  onQuery(/UPDATE themes SET code = \$1, title = \$2 WHERE id = \$3/, (sql, params) => [
-    { id: 5, code: params[0], title: params[1] },
-  ]);
-
-  let res = await api(app.base, "PATCH", "/api/themes/5", {
-    body: { code: "T9", title: "Nauja" },
-    headers: asRole("Vadybininkas"),
-  });
-  assert.equal(res.status, 200);
-  assert.deepEqual(queryLog()[0].params, ["T9", "Nauja", "5"]);
-
-  resetDb();
-  onQuery(/UPDATE themes SET/, { rowCount: 0 });
-  res = await api(app.base, "PATCH", "/api/themes/404", {
-    body: { title: "X" },
-    headers: asRole("Vadybininkas"),
-  });
-  assert.equal(res.status, 404);
-  assert.deepEqual(res.body, { error: "Klaida: nerasta" });
+  for (const url of ["/api/themes/5", "/api/themes/subthemes/10"]) {
+    const res = await api(app.base, "PATCH", url, { body: { code: "6.9.", title: "X" }, headers: asRole("Vadybininkas") });
+    assert.equal(res.status, 404, url);
+  }
+  assert.equal(queryLog().length, 0);
 });
 
 
@@ -388,34 +419,6 @@ test("POST /:themeId/subthemes: 400 missing; 201 with description defaulting to 
   });
   assert.equal(res.status, 201);
   assert.deepEqual(queryLog()[0].params, ["1", "T1.1", "Potemė", null]);
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// edit subtheme
-// -----------------------------------------------------------
-//
-// description is on THIS whitelist (unlike themes);
-// happy-path passthrough.
-// -----------------------------------------------------------
-
-test("PATCH /subthemes/:id: description is editable here; 404 on no row", async () => {
-  manager();
-  onQuery(/UPDATE subthemes SET description = \$1 WHERE id = \$2/, [
-    { id: 10, theme_id: 1, code: "T1.1", title: "P", description: "Naujas", cap: null },
-  ]);
-
-  const res = await api(app.base, "PATCH", "/api/themes/subthemes/10", {
-    body: { description: "Naujas" },
-    headers: asRole("Vadybininkas"),
-  });
-  assert.equal(res.status, 200);
-  assert.equal(res.body.description, "Naujas");
 });
 
 
@@ -462,31 +465,26 @@ test("DELETE /subthemes/:id: 204 / 404", async () => {
 // bare 500. The fake database knows both ways the route might
 // find out — a pre-check over activities answers that a row
 // exists, and the DELETE itself fails on the foreign key the
-// way Postgres would. The route only has the 500: a known
-// bug, pinned as an expected failure until it is fixed.
+// way Postgres would.
 // -----------------------------------------------------------
 
-test(
-  "BUG: DELETE /subthemes/:id: linked activities → 409 with a reason, not 500",
-  { todo: "known bug: DELETE /subthemes/:id has no linked-activities check and no 23503 mapping — the manager gets 500 internal error" },
-  async () => {
-    manager();
-    onQuery(/FROM activities/, [{ "?column?": 1 }]);
-    onQuery(/DELETE FROM subthemes WHERE id = \$1/, () => {
-      throw Object.assign(
-        new Error('update or delete on table "subthemes" violates foreign key constraint "activities_subtheme_id_fkey" on table "activities"'),
-        { code: "23503" }
-      );
-    });
+test("DELETE /subthemes/:id: linked activities → 409 with a reason, not 500", async () => {
+  manager();
+  onQuery(/FROM activities/, [{ "?column?": 1 }]);
+  onQuery(/DELETE FROM subthemes WHERE id = \$1/, () => {
+    throw Object.assign(
+      new Error('update or delete on table "subthemes" violates foreign key constraint "activities_subtheme_id_fkey" on table "activities"'),
+      { code: "23503" }
+    );
+  });
 
-    const res = await api(app.base, "DELETE", "/api/themes/subthemes/10", {
-      headers: asRole("Vadybininkas"),
-    });
-    assert.equal(res.status, 409);
-    assert.equal(typeof res.body?.error, "string");
-    assert.notEqual(res.body.error, "internal error");
-  }
-);
+  const res = await api(app.base, "DELETE", "/api/themes/subthemes/10", {
+    headers: asRole("Vadybininkas"),
+  });
+  assert.equal(res.status, 409);
+  assert.equal(typeof res.body?.error, "string");
+  assert.notEqual(res.body.error, "internal error");
+});
 
 
 
@@ -724,51 +722,78 @@ test("DELETE /:id: a failure between the two DELETEs → ROLLBACK and 500", asyn
 
 
 // -----------------------------------------------------------
+// delete theme — an activity added after the check
+// -----------------------------------------------------------
+//
+// The linked-activities check runs before the transaction,
+// so an activity created in between makes a DELETE meet the
+// foreign key instead. That is the check's own refusal: the
+// same 409 with its reason and a rollback, not a 500.
+// -----------------------------------------------------------
+
+test("DELETE /:id: an activity added after the check → 409 and ROLLBACK, not 500", async () => {
+  manager();
+  onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
+  onQuery(/SELECT 1 FROM activities WHERE theme_id = \$1 LIMIT 1/, []);
+  onQuery(/DELETE FROM subthemes WHERE theme_id = \$1/, () => {
+    throw Object.assign(new Error('update or delete on table "subthemes" violates foreign key constraint'), { code: "23503" });
+  });
+
+  const res = await api(app.base, "DELETE", "/api/themes/1", { headers: asRole("Vadybininkas") });
+  assert.equal(res.status, 409);
+  assert.deepEqual(res.body, { error: "Klaida: negalima ištrinti temos, nes yra su ja susietų veiklų." });
+  const sqls = queryLog().map((q) => q.sql);
+  assert.equal(sqls.at(-1), "ROLLBACK");
+  assert.ok(!sqls.includes("COMMIT"));
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // ids Postgres cannot take
 // -----------------------------------------------------------
 //
-// Every :id and :themeId goes to Postgres as sent, so "abc"
-// or "1.5" fails there as invalid integer syntax and
-// 2147483648 as out of range for int4, and the route answers
-// 500 with a stack trace in the log. Such an id names
-// nothing: a 404 or a 400, without a query, is the answer.
-// The fake database fails exactly where Postgres would. A
-// known bug, pinned as an expected failure until it is fixed.
+// Postgres refuses an :id or :themeId of "abc" or "1.5" as
+// invalid integer syntax and 2147483648 as out of range for
+// int4, which would surface as a 500 with a stack trace in
+// the log. Such an id names nothing: a 404 or a 400, without
+// a query, is the answer. The fake database fails exactly
+// where Postgres would.
 // -----------------------------------------------------------
 
-test(
-  "BUG: a theme or subtheme id that is not an int4 → 404 or 400, never 500",
-  { todo: "known bug: the theme routes pass :id and :themeId to Postgres unchecked — \"abc\" (22P02) and 2147483648 (22003) answer 500" },
-  async () => {
-    const int4 = (value) => {
-      const text = String(value);
-      if (!/^-?\d+$/.test(text)) {
-        throw Object.assign(new Error(`invalid input syntax for type integer: "${text}"`), { code: "22P02" });
-      }
-      if (Math.abs(Number(text)) > 2147483647) {
-        throw Object.assign(new Error(`value "${text}" is out of range for type integer`), { code: "22003" });
-      }
-    };
-    const idAt = (index) => (sql, params) => {
-      int4(params[index]);
-      return [];
-    };
-
-    for (const c of [
-      { who: committee, role: "Komisijos narys", method: "PATCH", url: "/api/themes/abc/total-sum", body: { total_sum: 100 }, sql: /^UPDATE themes SET total_sum/, at: 1 },
-      { who: committee, role: "Komisijos narys", method: "PATCH", url: "/api/themes/subthemes/1.5/cap", body: { cap: 1 }, sql: /^UPDATE subthemes SET cap/, at: 1 },
-      { who: manager, role: "Vadybininkas", method: "DELETE", url: "/api/themes/2147483648", sql: /^SELECT 1 FROM activities WHERE theme_id = \$1/, at: 0 },
-      { who: manager, role: "Vadybininkas", method: "DELETE", url: "/api/themes/subthemes/abc", sql: /^DELETE FROM subthemes WHERE id = \$1/, at: 0 },
-      { who: manager, role: "Vadybininkas", method: "POST", url: "/api/themes/abc/subthemes", body: { code: "9.1.", title: "Potemė" }, sql: /^INSERT INTO subthemes/, at: 0 },
-    ]) {
-      resetDb();
-      c.who();
-      onQuery(c.sql, idAt(c.at));
-      const res = await api(app.base, c.method, c.url, { body: c.body, headers: asRole(c.role) });
-      assert.ok(res.status === 404 || res.status === 400, `${c.method} ${c.url} answered ${res.status}`);
+test("a theme or subtheme id that is not an int4 → 404 or 400, never 500", async () => {
+  const int4 = (value) => {
+    const text = String(value);
+    if (!/^-?\d+$/.test(text)) {
+      throw Object.assign(new Error(`invalid input syntax for type integer: "${text}"`), { code: "22P02" });
     }
+    if (Math.abs(Number(text)) > 2147483647) {
+      throw Object.assign(new Error(`value "${text}" is out of range for type integer`), { code: "22003" });
+    }
+  };
+  const idAt = (index) => (sql, params) => {
+    int4(params[index]);
+    return [];
+  };
+
+  for (const c of [
+    { who: committee, role: "Komisijos narys", method: "PATCH", url: "/api/themes/abc/total-sum", body: { total_sum: 100 }, sql: /^UPDATE themes SET total_sum/, at: 1 },
+    { who: committee, role: "Komisijos narys", method: "PATCH", url: "/api/themes/subthemes/1.5/cap", body: { cap: 1 }, sql: /^UPDATE subthemes SET cap/, at: 1 },
+    { who: manager, role: "Vadybininkas", method: "DELETE", url: "/api/themes/2147483648", sql: /^SELECT 1 FROM activities WHERE theme_id = \$1/, at: 0 },
+    { who: manager, role: "Vadybininkas", method: "DELETE", url: "/api/themes/subthemes/abc", sql: /^DELETE FROM subthemes WHERE id = \$1/, at: 0 },
+    { who: manager, role: "Vadybininkas", method: "POST", url: "/api/themes/abc/subthemes", body: { code: "9.1.", title: "Potemė" }, sql: /^INSERT INTO subthemes/, at: 0 },
+  ]) {
+    resetDb();
+    c.who();
+    onQuery(c.sql, idAt(c.at));
+    const res = await api(app.base, c.method, c.url, { body: c.body, headers: asRole(c.role) });
+    assert.ok(res.status === 404 || res.status === 400, `${c.method} ${c.url} answered ${res.status}`);
   }
-);
+});
 
 
 
@@ -780,38 +805,32 @@ test(
 // create — codes and titles that are not text
 // -----------------------------------------------------------
 //
-// Both create routes test the raw code and title for
-// emptiness and trim them only afterwards, so a code of
-// spaces is stored as an empty string with a 201 — the themes
-// page enables its button on the untrimmed input, so this is
-// one stray space away. A number, an array or an object
-// reaches .trim() and answers 500. A blank or non-string code
-// or title must be the usual 400, with nothing inserted. A
-// known bug, pinned as an expected failure until it is fixed.
+// Code and title are judged after trimming, so a code of
+// spaces is refused rather than stored as an empty one — the
+// themes page enables its button on the untrimmed input, so
+// that is one stray space away. A number, an array or an
+// object is refused too instead of reaching .trim(). Either
+// way it is the usual 400, with nothing inserted.
 // -----------------------------------------------------------
 
-test(
-  "BUG: create theme/subtheme: a blank or non-string code or title → 400, nothing inserted",
-  { todo: "known bug: POST /api/themes and /:themeId/subthemes check !code before trimming and call .trim() on whatever arrives — \"   \" is stored as \"\", a number or an array answers 500" },
-  async () => {
-    for (const url of ["/api/themes", "/api/themes/1/subthemes"]) {
-      for (const body of [
-        { code: "   ", title: "Tema" },
-        { code: "9.", title: " \t " },
-        { code: 5, title: "Tema" },
-        { code: ["9."], title: "Tema" },
-        { code: "9.", title: { lt: "Tema" } },
-      ]) {
-        resetDb();
-        manager();
-        onQuery(/^INSERT INTO (themes|subthemes)/, (sql, params) => [{ id: 9, code: "?", title: "?" }]);
-        const res = await api(app.base, "POST", url, { body, headers: asRole("Vadybininkas") });
-        assert.equal(res.status, 400, `${url} ${JSON.stringify(body)} answered ${res.status}`);
-        assert.equal(queryLog().some((q) => q.sql.startsWith("INSERT")), false, `${url} ${JSON.stringify(body)} inserted`);
-      }
+test("create theme/subtheme: a blank or non-string code or title → 400, nothing inserted", async () => {
+  for (const url of ["/api/themes", "/api/themes/1/subthemes"]) {
+    for (const body of [
+      { code: "   ", title: "Tema" },
+      { code: "9.", title: " \t " },
+      { code: 5, title: "Tema" },
+      { code: ["9."], title: "Tema" },
+      { code: "9.", title: { lt: "Tema" } },
+    ]) {
+      resetDb();
+      manager();
+      onQuery(/^INSERT INTO (themes|subthemes)/, (sql, params) => [{ id: 9, code: "?", title: "?" }]);
+      const res = await api(app.base, "POST", url, { body, headers: asRole("Vadybininkas") });
+      assert.equal(res.status, 400, `${url} ${JSON.stringify(body)} answered ${res.status}`);
+      assert.equal(queryLog().some((q) => q.sql.startsWith("INSERT")), false, `${url} ${JSON.stringify(body)} inserted`);
     }
   }
-);
+});
 
 
 
@@ -825,33 +844,28 @@ test(
 //
 // A theme deleted in another tab leaves its "Pridėti potemę"
 // form behind; the INSERT then fails on the themes foreign
-// key and the manager gets 500 internal error. A theme that
-// does not exist is a 404. The fake database answers both
-// ways the route might find out: a lookup finds no theme, and
-// the INSERT fails like Postgres would. A known bug, pinned
-// as an expected failure until it is fixed.
+// key. A theme that does not exist is a 404, not a 500. The
+// fake database answers both ways the route might find out:
+// a lookup finds no theme, and the INSERT fails like Postgres
+// would.
 // -----------------------------------------------------------
 
-test(
-  "BUG: POST /:themeId/subthemes for a theme that is gone → 404, not 500",
-  { todo: "known bug: the subtheme INSERT fails on the themes foreign key (23503) and answers 500" },
-  async () => {
-    manager();
-    onQuery(/FROM themes WHERE id = \$1/, []);
-    onQuery(/^INSERT INTO subthemes/, () => {
-      throw Object.assign(
-        new Error('insert or update on table "subthemes" violates foreign key constraint "subthemes_theme_id_fkey"'),
-        { code: "23503" }
-      );
-    });
+test("POST /:themeId/subthemes for a theme that is gone → 404, not 500", async () => {
+  manager();
+  onQuery(/FROM themes WHERE id = \$1/, []);
+  onQuery(/^INSERT INTO subthemes/, () => {
+    throw Object.assign(
+      new Error('insert or update on table "subthemes" violates foreign key constraint "subthemes_theme_id_fkey"'),
+      { code: "23503" }
+    );
+  });
 
-    const res = await api(app.base, "POST", "/api/themes/99/subthemes", {
-      body: { code: "9.1.", title: "Potemė" },
-      headers: asRole("Vadybininkas"),
-    });
-    assert.equal(res.status, 404);
-  }
-);
+  const res = await api(app.base, "POST", "/api/themes/99/subthemes", {
+    body: { code: "9.1.", title: "Potemė" },
+    headers: asRole("Vadybininkas"),
+  });
+  assert.equal(res.status, 404);
+});
 
 
 
@@ -863,32 +877,27 @@ test(
 // committee numbers — values that are not numbers
 // -----------------------------------------------------------
 //
-// Cap, total sum and point value are checked with Number(),
-// which turns a blank string, a boolean, an array and a hex
-// string into a valid-looking number: " " is saved as 0, true
-// as 1, [7] as 7 and "0x1F4" as 500. Only a number, or a
-// string spelling a decimal number, may pass; anything else
-// is a 400 with nothing written. A known bug, pinned as an
-// expected failure until it is fixed.
+// Number() would turn a blank string, a boolean, an array
+// and a hex string into a valid-looking amount: " " saved as
+// 0, true as 1, [7] as 7 and "0x1F4" as 500. Only a number,
+// or a string spelling a decimal number, passes for cap,
+// total sum and point value; anything else is a 400 with
+// nothing written.
 // -----------------------------------------------------------
 
-test(
-  "BUG: cap, total sum and point value: blank strings, booleans, arrays and hex strings → 400, no UPDATE",
-  { todo: "known bug: the three committee PATCHes validate with Number() — \" \", true, [], [7] and \"0x1F4\" pass and are stored" },
-  async () => {
-    for (const [url, field] of [
-      ["/api/themes/subthemes/10/cap", "cap"],
-      ["/api/themes/1/total-sum", "total_sum"],
-      ["/api/themes/1/pointvalue", "pointvalue"],
-    ]) {
-      for (const value of [" ", true, [], [7], "0x1F4"]) {
-        resetDb();
-        committee();
-        onQuery(/^UPDATE (subthemes|themes) SET/, (sql, params) => [{ id: 1, [field]: params[0] }]);
-        const res = await api(app.base, "PATCH", url, { body: { [field]: value }, headers: asRole("Komisijos narys") });
-        assert.equal(res.status, 400, `${field} ${JSON.stringify(value)} answered ${res.status}`);
-        assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE")), false, `${field} ${JSON.stringify(value)} was saved`);
-      }
+test("cap, total sum and point value: blank strings, booleans, arrays and hex strings → 400, no UPDATE", async () => {
+  for (const [url, field] of [
+    ["/api/themes/subthemes/10/cap", "cap"],
+    ["/api/themes/1/total-sum", "total_sum"],
+    ["/api/themes/1/pointvalue", "pointvalue"],
+  ]) {
+    for (const value of [" ", true, [], [7], "0x1F4"]) {
+      resetDb();
+      committee();
+      onQuery(/^UPDATE (subthemes|themes) SET/, (sql, params) => [{ id: 1, [field]: params[0] }]);
+      const res = await api(app.base, "PATCH", url, { body: { [field]: value }, headers: asRole("Komisijos narys") });
+      assert.equal(res.status, 400, `${field} ${JSON.stringify(value)} answered ${res.status}`);
+      assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE")), false, `${field} ${JSON.stringify(value)} was saved`);
     }
   }
-);
+});

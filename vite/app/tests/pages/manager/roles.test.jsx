@@ -6,11 +6,13 @@
 //  session cookie — this page sends no X-Active-Role), the
 //  lookup GET with the encoded email in the query string, the
 //  user / pill / dropdown rendering, assign and remove with
-//  their exact POST bodies and the "app:roles-updated" window
-//  event, the self-revoke confirm for a manager's own
-//  Vadybininkas role, backend errors shown verbatim with the
-//  page's own fallbacks, and the email field and the role
-//  dropdown reachable by their labels.
+//  their exact POST bodies — always for the user shown, even
+//  once the search box holds another email — and the
+//  "app:roles-updated" window event, the self-revoke confirm
+//  for a manager's own Vadybininkas role, backend errors
+//  shown verbatim with the page's own fallbacks, and the
+//  email field and the role dropdown reachable by their
+//  labels.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -294,11 +296,11 @@ test("remove: ✕ POSTs { email, role } without a confirm, the pill goes, the ro
 // self-revoke
 // -----------------------------------------------------------
 //
-// The /api/me email is lower-cased and compared to the typed
-// email trimmed and lower-cased. Removing my own Komisijos
+// The /api/me email is lower-cased and compared to the
+// shown user's email, lower-cased. Removing my own Komisijos
 // narys needs no confirm; removing my own Vadybininkas asks
 // the exact question — cancel sends nothing, OK POSTs the
-// email as typed.
+// shown user's email.
 // -----------------------------------------------------------
 
 test("self-revoke: my own Vadybininkas asks the exact confirm; cancel sends nothing, OK POSTs", async () => {
@@ -326,8 +328,71 @@ test("self-revoke: my own Vadybininkas asks the exact confirm; cancel sends noth
   await user.click(within(pill("Vadybininkas")).getByTitle("Pašalinti"));
   await screen.findByText("Pašalinta rolė: Vadybininkas");
   expect(window.confirm).toHaveBeenCalledTimes(2);
-  expect(requestsTo("POST", "/api/user-roles/remove")[1].body).toEqual({ email: "Jonas.Jonaitis@knf.vu.lt", role: "Vadybininkas" });
+  expect(requestsTo("POST", "/api/user-roles/remove")[1].body).toEqual({ email: "jonas.jonaitis@knf.vu.lt", role: "Vadybininkas" });
   expect(pillNames()).toEqual(["Darbuotojas"]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// the user shown, not the search box
+// -----------------------------------------------------------
+//
+// The search box stays editable after a lookup, so it can
+// hold another email while the card still shows the user it
+// found. Assign and remove act on that shown user; and the
+// self-revoke confirm asks whenever the shown user is me,
+// whatever the box holds by then.
+// -----------------------------------------------------------
+
+test("assign and remove act on the user shown, not on an email typed after the lookup", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/me", ME);
+  onRequest("GET", "/api/user-roles", lookup(["Darbuotojas", "Komisijos narys"]));
+  onRequest("POST", "/api/user-roles/assign", DONE);
+  onRequest("POST", "/api/user-roles/remove", DONE);
+  const { user } = renderPage(RolesPage);
+  await lookUp(user, "jonas.jonaitis@knf.vu.lt");
+  await screen.findByText("Turimos rolės:");
+
+  const input = screen.getByPlaceholderText("vardas.pavarde@knf.vu.lt");
+  await user.clear(input);
+  await user.type(input, "petras.petraitis@knf.vu.lt");
+  await user.click(screen.getByRole("button", { name: "Priskirti rolę" }));
+  await screen.findByText("Priskirta rolė: Vadybininkas");
+  expect(requestsTo("POST", "/api/user-roles/assign")[0].body).toEqual({ email: "jonas.jonaitis@knf.vu.lt", role: "Vadybininkas" });
+
+  await user.click(within(pill("Komisijos narys")).getByTitle("Pašalinti"));
+  await screen.findByText("Pašalinta rolė: Komisijos narys");
+  expect(requestsTo("POST", "/api/user-roles/remove")[0].body).toEqual({ email: "jonas.jonaitis@knf.vu.lt", role: "Komisijos narys" });
+  expect(requestsTo("GET", "/api/user-roles")).toHaveLength(1);
+});
+
+test("the self-revoke confirm follows the user shown, whatever the search box holds", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/me", ME);
+  onRequest("GET", "/api/user-roles", {
+    user: { id: 9, email: "vadybininke@knf.vu.lt", full_name: "Vaida Vadybininkė" },
+    roles: ["Darbuotojas", "Vadybininkas"],
+    allRoles: ALL,
+  });
+  const { user } = renderPage(RolesPage);
+  await lookUp(user, "vadybininke@knf.vu.lt");
+  await screen.findByText("Turimos rolės:");
+
+  const input = screen.getByPlaceholderText("vardas.pavarde@knf.vu.lt");
+  await user.clear(input);
+  await user.type(input, "kitas@knf.vu.lt");
+  window.confirm.mockReturnValueOnce(false);
+  await user.click(within(pill("Vadybininkas")).getByTitle("Pašalinti"));
+
+  expect(window.confirm).toHaveBeenCalledWith("Ar tikrai norite sau nusiimti Vadybininko rolę?");
+  expect(requestsTo("POST", "/api/user-roles/remove")).toHaveLength(0);
+  expect(pillNames()).toEqual(["Darbuotojas", "Vadybininkas"]);
 });
 
 

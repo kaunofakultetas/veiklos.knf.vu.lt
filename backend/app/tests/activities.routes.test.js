@@ -4,18 +4,17 @@
 //  The core status machine: PATEIKTA → (manager) PATVIRTINTA/
 //  ATMESTA/TIKSLINTI → (committee) ĮVERTINTA, and back. Pins
 //  the guards per role area, multipart upload naming, the
-//  latin1→utf8 attachment-name re-decode (present on POST,
-//  MISSING on PATCH — pinned as an expected failure), the
-//  manager/committee verdict rules with their exact
+//  latin1→utf8 attachment-name re-decode on POST and PATCH,
+//  the manager/committee verdict rules with their exact
 //  Lithuanian messages (including the shipped "Paketiimai"
 //  typo), the deny/return notification emails and their
 //  fire-and-forget contract, the attachment download's
-//  ownership-not-active-role authorization — and, pinned as
-//  expected failures, the known bugs: uploads that refused or
-//  aborted requests leave on disk, the blank title the create
-//  route accepts, verdict input that slips through or answers
-//  500, ids Postgres cannot take, unlimited text fields, and
-//  two ways a single request ends the whole process.
+//  ownership-not-active-role authorization, and the hard
+//  edges: no upload outlives a refused or aborted request, a
+//  blank title is no title, verdict input the route does not
+//  expect is refused, ids Postgres cannot take are 404s, text
+//  fields are limited, and no single request can end the
+//  whole process.
 //
 //  verifySamlSession/attachRoles are mocked;
 //  requireActiveRoleIn is
@@ -28,6 +27,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { signInAs, signOut } from "./helpers/authMock.js";
 import { outbox, mailControl } from "./helpers/mailMock.js";
 import { resetDb, onQuery, queryLog } from "./helpers/db.js";
@@ -148,7 +148,9 @@ const committee = () => signInAs("com-1", ["Komisijos narys"]);
 //
 // A create/edit multipart body; the codes are appended BEFORE
 // the file on purpose — multer's filename callback reads them
-// from req.body, which only holds fields seen so far.
+// from req.body, which only holds fields seen so far. An
+// array value sends its field once per element: the repeated
+// field multer hands the route as an array.
 //
 // Used by:
 //   - the POST / and PATCH /:id tests (below)
@@ -156,7 +158,9 @@ const committee = () => signInAs("com-1", ["Komisijos narys"]);
 
 function activityForm({ file, fileName, fileType = "text/plain", ...fields }) {
   const form = new FormData();
-  for (const [k, v] of Object.entries(fields)) form.append(k, v);
+  for (const [k, v] of Object.entries(fields)) {
+    for (const one of [].concat(v)) form.append(k, one);
+  }
   if (file !== undefined) {
     form.append("attachment", new Blob([file], { type: fileType }), fileName);
   }
@@ -274,34 +278,27 @@ test("create: missing theme/subtheme/title → 400", async () => {
 // create — a blank title is no title
 // -----------------------------------------------------------
 //
-// A title of spaces only is trimmed to nothing, so it must be
-// refused like a missing one — the edit route already refuses
-// it as Netinkamas pavadinimas. The create route checks the
-// untrimmed value and stores an activity with an empty title:
-// a known bug, pinned as an expected failure until it is
-// fixed.
+// A title of spaces only is trimmed to nothing, so it is
+// refused like a missing one — as the edit route refuses it
+// as Netinkamas pavadinimas — and nothing is inserted.
 // -----------------------------------------------------------
 
-test(
-  "BUG: create: a whitespace-only title → 400, no INSERT",
-  { todo: "known bug: POST / tests !title before trimming — a title of spaces is stored as an empty string (201)" },
-  async () => {
-    employee();
-    stubFullName();
-    stubPair();
-    onQuery(/INSERT INTO activities/, (sql, params) => [
-      { id: 1, employee_eid: params[0], title: params[3], status: "PATEIKTA" },
-    ]);
+test("create: a whitespace-only title → 400, no INSERT", async () => {
+  employee();
+  stubFullName();
+  stubPair();
+  onQuery(/INSERT INTO activities/, (sql, params) => [
+    { id: 1, employee_eid: params[0], title: params[3], status: "PATEIKTA" },
+  ]);
 
-    const res = await api(app.base, "POST", "/api/activities", {
-      form: activityForm({ theme_id: "1", subtheme_id: "2", title: "   " }),
-      headers: asRole("Darbuotojas"),
-    });
-    assert.equal(res.status, 400);
-    assert.deepEqual(res.body, { error: "Klaida: Tema, potemė ir pavadinimas yra privalomi" });
-    assert.equal(queryLog().some((q) => q.sql.includes("INSERT INTO activities")), false);
-  }
-);
+  const res = await api(app.base, "POST", "/api/activities", {
+    form: activityForm({ theme_id: "1", subtheme_id: "2", title: "   " }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(res.body, { error: "Klaida: Tema, potemė ir pavadinimas yra privalomi" });
+  assert.equal(queryLog().some((q) => q.sql.includes("INSERT INTO activities")), false);
+});
 
 
 
@@ -489,6 +486,46 @@ test("create: allowed type with an uppercase extension is stored lowercase", asy
 
 
 // -----------------------------------------------------------
+// create — no dot-named files
+// -----------------------------------------------------------
+//
+// The stored name starts with the cleaned theme code, and
+// cleaning drops every Lithuanian letter, so a code that
+// begins with one can leave a leading dot. The download
+// (send, behind res.download) refuses such a "dotfile" with a
+// 404, so the file could never be fetched again: a stored
+// name never starts with a dot.
+// -----------------------------------------------------------
+
+test("create: a theme code that cleans to a leading dot still stores a downloadable file", async () => {
+  employee();
+  stubFullName();
+  stubPair();
+  onQuery(/INSERT INTO activities/, (sql, params) => [{ id: 4, title: params[3] }]);
+
+  const res = await api(app.base, "POST", "/api/activities", {
+    form: activityForm({ ...BASE_CREATE, theme_code: "Š.1", subtheme_code: "Š.1.1", file: "turinys", fileName: "priedas.txt" }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 201);
+  const stored = queryLog().find((q) => q.sql.includes("INSERT INTO activities")).params[5];
+  createdFiles.add(stored);
+  assert.ok(!stored.startsWith("."), `stored as ${stored}`);
+
+  resetDb();
+  stubAttachmentRow({ attachment_path: stored });
+  const download = await api(app.base, "GET", "/api/activities/4/attachment");
+  assert.equal(download.status, 200);
+  assert.equal(download.text, "turinys");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // create — magic bytes
 // -----------------------------------------------------------
 //
@@ -562,57 +599,140 @@ test("create: an attachment over 100 MB → 400 per didelis", async () => {
 // the fields, so every refusal after that point must remove
 // the stored file again: a missing title, a subtheme of
 // another theme, a database error. Otherwise each refused
-// request leaves up to 100 MB on disk that no row points at,
-// and any signed-in employee can fill the disk that way.
-// POST / never removes it: a known bug, pinned as an expected
-// failure until it is fixed.
+// request would leave up to 100 MB on disk that no row
+// points at, and any signed-in employee could fill the disk
+// that way.
 // -----------------------------------------------------------
 
-test(
-  "BUG: create: a request refused after the upload leaves no file behind",
-  { todo: "known bug: POST / never unlinks req.file — a missing field, a mismatched pair or a DB error leaves the upload on disk" },
-  async () => {
-    employee();
-    const before = snapshotUploads();
+test("create: a request refused after the upload leaves no file behind", async () => {
+  employee();
+  const before = snapshotUploads();
 
-    // no title
-    stubFullName();
-    let res = await api(app.base, "POST", "/api/activities", {
-      form: activityForm({ ...BASE_CREATE, title: "", file: "x", fileName: "be-pavadinimo.txt" }),
-      headers: asRole("Darbuotojas"),
-    });
-    assert.equal(res.status, 400);
+  // no title
+  stubFullName();
+  let res = await api(app.base, "POST", "/api/activities", {
+    form: activityForm({ ...BASE_CREATE, title: "", file: "x", fileName: "be-pavadinimo.txt" }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 400);
 
-    // a subtheme of another theme
-    resetDb();
-    stubFullName();
-    stubPair(false);
-    res = await api(app.base, "POST", "/api/activities", {
-      form: activityForm({ ...BASE_CREATE, file: "x", fileName: "ne-ta-tema.txt" }),
-      headers: asRole("Darbuotojas"),
-    });
-    assert.equal(res.status, 400);
+  // a subtheme of another theme
+  resetDb();
+  stubFullName();
+  stubPair(false);
+  res = await api(app.base, "POST", "/api/activities", {
+    form: activityForm({ ...BASE_CREATE, file: "x", fileName: "ne-ta-tema.txt" }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 400);
 
-    // the INSERT fails
-    resetDb();
-    stubFullName();
-    stubPair(true);
-    onQuery(/INSERT INTO activities/, () => {
-      throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
-    });
-    res = await api(app.base, "POST", "/api/activities", {
-      form: activityForm({ ...BASE_CREATE, file: "x", fileName: "db-klaida.txt" }),
-      headers: asRole("Darbuotojas"),
-    });
-    assert.equal(res.status, 500);
+  // the INSERT fails
+  resetDb();
+  stubFullName();
+  stubPair(true);
+  onQuery(/INSERT INTO activities/, () => {
+    throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
+  });
+  res = await api(app.base, "POST", "/api/activities", {
+    form: activityForm({ ...BASE_CREATE, file: "x", fileName: "db-klaida.txt" }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 500);
 
-    // an unlink would be fire-and-forget — give it a beat
-    await new Promise((r) => setTimeout(r, 100));
-    const left = [...snapshotUploads()].filter((f) => !before.has(f));
-    for (const f of left) createdFiles.add(f);
-    assert.deepEqual(left, [], "refused uploads must not stay on disk");
-  }
-);
+  // an unlink would be fire-and-forget — give it a beat
+  await new Promise((r) => setTimeout(r, 100));
+  const left = [...snapshotUploads()].filter((f) => !before.has(f));
+  for (const f of left) createdFiles.add(f);
+  assert.deepEqual(left, [], "refused uploads must not stay on disk");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// create — the server cannot store the file
+// -----------------------------------------------------------
+//
+// A write that fails on the server's side — the disk full,
+// the uploads folder unwritable — is no fault of the
+// employee's: it is answered like every other server error,
+// a 500 with the cause in the log, never the 400 a broken
+// upload gets.
+// -----------------------------------------------------------
+
+test("create: a file the server cannot write (disk full) → 500 with the cause logged", async (t) => {
+  employee();
+  stubFullName();
+  const logged = [];
+  t.mock.method(console, "error", (...args) => logged.push(args.map(String).join(" ")));
+  t.mock.method(fs, "createWriteStream", () => new Writable({
+    write(_chunk, _encoding, done) {
+      done(Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC", errno: -28, syscall: "write" }));
+    },
+  }));
+
+  const res = await api(app.base, "POST", "/api/activities", {
+    form: activityForm({ ...BASE_CREATE, file: "turinys", fileName: "priedas.txt" }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 500);
+  assert.deepEqual(res.body, { error: "internal error" });
+  assert.ok(logged.some((line) => line.includes("ENOSPC")), "the cause is logged");
+  assert.equal(queryLog().some((q) => q.sql.includes("INSERT INTO activities")), false);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// create — a description that is not text
+// -----------------------------------------------------------
+//
+// The form always sends text, but the route takes whatever
+// arrives: a repeated multipart field comes as an array, and
+// a JSON body (which multer lets through) can carry a number
+// or null. A description that is not text is a 400 before
+// any query, not a 500 from its trim; null counts as no
+// description, stored as the empty text.
+// -----------------------------------------------------------
+
+test("create: a description that is not text → 400 before any query; null counts as none", async () => {
+  employee();
+  stubFullName();
+  let res = await api(app.base, "POST", "/api/activities", {
+    form: activityForm({ ...BASE_CREATE, description: ["Pirmas", "Antras"] }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(res.body, { error: "Klaida: Netinkamas aprašymas" });
+
+  resetDb();
+  stubFullName();
+  res = await api(app.base, "POST", "/api/activities", {
+    body: { theme_id: 1, subtheme_id: 2, title: "X", description: 5 },
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(res.body, { error: "Klaida: Netinkamas aprašymas" });
+  assert.equal(queryLog().some((q) => /FROM subthemes|INSERT/.test(q.sql)), false);
+
+  resetDb();
+  stubFullName();
+  stubPair();
+  onQuery(/INSERT INTO activities/, (sql, params) => [{ id: 3, title: params[3] }]);
+  res = await api(app.base, "POST", "/api/activities", {
+    body: { theme_id: 1, subtheme_id: 2, title: "X", description: null },
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 201);
+  assert.equal(queryLog().find((q) => q.sql.includes("INSERT INTO activities")).params[4], "");
+});
 
 
 
@@ -1034,37 +1154,31 @@ test('no usable fields → 400 with the shipped "Paketiimai" typo (load-bearing 
 // manager — comments that are not strings
 // -----------------------------------------------------------
 //
-// The verdict calls .trim() on rejection_comment and
-// manager_comments as they arrive, so a JSON null, a number
-// or an array (a repeated key in a form-encoded body) throws
-// and the manager gets a 500 — the committee route already
-// takes a null comment as "clear it". Whatever the fix makes
-// of such a value, the answer must be a 400 or a clean save,
-// never a 500. A known bug, pinned as an expected failure
-// until it is fixed.
+// A JSON null, a number or an array where the verdict
+// expects a comment must not reach .trim() and answer 500. A
+// deny/return comment that is not text is the "privalomas
+// komentaras" 400; a null manager comment clears it, as on
+// the committee route. Either way the answer is a 400 or a
+// clean save, never a 500.
 // -----------------------------------------------------------
 
-test(
-  "BUG: manager verdict: a comment that is not a string → 400 or a clean save, never 500",
-  { todo: "known bug: PATCH /:id/manager calls .trim() on rejection_comment / manager_comments unchecked — null, a number or an array answers 500" },
-  async () => {
-    manager();
-    for (const body of [
-      { action: "deny", rejection_comment: 5 },
-      { action: "return", rejection_comment: ["Patikslinkite"] },
-      { manager_comments: null },
-      { manager_comments: 7 },
-    ]) {
-      resetDb();
-      stubManagerPatch();
-      const res = await api(app.base, "PATCH", "/api/activities/10/manager", {
-        body,
-        headers: asRole("Vadybininkas"),
-      });
-      assert.ok(res.status === 200 || res.status === 400, `${JSON.stringify(body)} answered ${res.status}`);
-    }
+test("manager verdict: a comment that is not a string → 400 or a clean save, never 500", async () => {
+  manager();
+  for (const body of [
+    { action: "deny", rejection_comment: 5 },
+    { action: "return", rejection_comment: ["Patikslinkite"] },
+    { manager_comments: null },
+    { manager_comments: 7 },
+  ]) {
+    resetDb();
+    stubManagerPatch();
+    const res = await api(app.base, "PATCH", "/api/activities/10/manager", {
+      body,
+      headers: asRole("Vadybininkas"),
+    });
+    assert.ok(res.status === 200 || res.status === 400, `${JSON.stringify(body)} answered ${res.status}`);
   }
-);
+});
 
 
 
@@ -1239,25 +1353,123 @@ test("re-scoring an ĮVERTINTA row is allowed (the results-page correction path)
 
 
 // -----------------------------------------------------------
+// stubReturnNotice
+// -----------------------------------------------------------
+//
+// The two reads behind the managers' notice on a committee
+// return: the activity (title, the committee's reason, the
+// employee's name) and every holder of the manager role.
+//
+// Used by:
+//   - the committee return tests (below)
+// -----------------------------------------------------------
+
+function stubReturnNotice(managers = []) {
+  onQuery(/SELECT a\.title, a\.committee_comments/, [
+    { title: "Konferencija", committee_comments: "Patikslinkite temą", full_name: "Jonas Jonaitis" },
+  ]);
+  onQuery(/JOIN user_roles ur ON ur\.user_eid = u\.eid/, managers);
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // committee — return
 // -----------------------------------------------------------
 //
-// Back to PATEIKTA with the score nulled — the
-// clean-slate contract for a re-approval.
+// Back to PATEIKTA with the score nulled — the clean-slate
+// contract for a re-approval — and the committee's reason
+// stored in committee_comments, where the manager's queue
+// shows it. A return without a reason is refused before
+// anything is written: the manager would get the activity
+// back with no idea why.
 // -----------------------------------------------------------
 
-test("return: → PATEIKTA with the score wiped", async () => {
+test("return: → PATEIKTA with the score wiped and the reason stored", async () => {
   committee();
   stubCommitteePatch();
+  stubReturnNotice();
 
   const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
-    body: { action: "return" },
+    body: { action: "return", committee_comments: " Patikslinkite temą " },
     headers: asRole("Komisijos narys"),
   });
   assert.equal(res.status, 200);
 
   const update = queryLog().find((q) => q.sql.startsWith("UPDATE activities"));
-  assert.deepEqual(update.params, ["PATEIKTA", null, "10"]);
+  assert.deepEqual(update.params, ["PATEIKTA", null, "Patikslinkite temą", "10"]);
+});
+
+test("return without a reason → 400, nothing written", async () => {
+  committee();
+  for (const body of [{ action: "return" }, { action: "return", committee_comments: "   " }, { action: "return", committee_comments: 5 }]) {
+    resetDb();
+    stubCommitteePatch();
+    const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
+      body,
+      headers: asRole("Komisijos narys"),
+    });
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.deepEqual(res.body, { error: "Klaida: Grąžinimui privalomas komentaras." });
+    assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE activities")), false);
+  }
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// committee — the managers hear of a return
+// -----------------------------------------------------------
+//
+// Every holder of the manager role is mailed the returned
+// activity, its employee and the committee's reason, read
+// back from the database after the write. Fire-and-forget,
+// like the employee's mails: a dead relay is only logged and
+// the return stands.
+// -----------------------------------------------------------
+
+test("return: every manager is mailed the activity and the committee's reason", async () => {
+  committee();
+  stubCommitteePatch();
+  stubReturnNotice([
+    { email: "vadybininke@vu.lt", full_name: "Rūta Vadybininkė" },
+    { email: "kitas@vu.lt", full_name: null },
+  ]);
+
+  const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
+    body: { action: "return", committee_comments: "Patikslinkite temą" },
+    headers: asRole("Komisijos narys"),
+  });
+  assert.equal(res.status, 200);
+
+  assert.deepEqual(outbox.map((m) => m.to), ["vadybininke@vu.lt", "kitas@vu.lt"]);
+  for (const msg of outbox) {
+    assert.equal(msg.subject, "Komisija grąžino veiklą: Konferencija");
+    assert.ok(msg.text.includes("Darbuotojas: Jonas Jonaitis"), msg.text);
+    assert.ok(msg.text.includes("Komisijos komentaras:\nPatikslinkite temą"), msg.text);
+  }
+});
+
+test("return: a dead mail relay does not fail the return", async () => {
+  committee();
+  stubCommitteePatch();
+  stubReturnNotice([{ email: "vadybininke@vu.lt", full_name: "Rūta Vadybininkė" }]);
+  mailControl.reject = new Error("relay down");
+
+  const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
+    body: { action: "return", committee_comments: "Patikslinkite temą" },
+    headers: asRole("Komisijos narys"),
+  });
+  assert.equal(res.status, 200);
+  assert.ok(queryLog().some((q) => q.sql.startsWith("UPDATE activities")));
 });
 
 
@@ -1296,33 +1508,27 @@ test("committee empty body → 400, correctly spelled here", async () => {
 // score — values that are not numbers
 // -----------------------------------------------------------
 //
-// The score check is Number(score), which turns a blank
-// string, a boolean, a one-element array and a hex or binary
-// string into a valid-looking number — so " " is stored as a
-// score of 0 and true as 1, with the activity marked
-// ĮVERTINTA. Only a number, or a string spelling a decimal
-// number, may pass; anything else is a 400 with nothing
-// written. A known bug, pinned as an expected failure until
-// it is fixed.
+// Number() would turn a blank string, a boolean, a
+// one-element array and a hex or binary string into a
+// valid-looking score — " " stored as 0 and true as 1, with
+// the activity marked ĮVERTINTA. Only a number, or a string
+// spelling a decimal number, passes; anything else is a 400
+// with nothing written.
 // -----------------------------------------------------------
 
-test(
-  "BUG: score: blank strings, booleans, arrays and hex strings → 400, no UPDATE",
-  { todo: "known bug: PATCH /:id/committee validates with Number(score) — \" \", false, true, [0.5] and \"0x1\" pass and are stored" },
-  async () => {
-    committee();
-    for (const score of [" ", "\t", false, true, [0.5], "0x1", "0b1"]) {
-      resetDb();
-      stubCommitteePatch();
-      const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
-        body: { action: "score", score },
-        headers: asRole("Komisijos narys"),
-      });
-      assert.equal(res.status, 400, JSON.stringify(score));
-      assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE activities")), false, JSON.stringify(score));
-    }
+test("score: blank strings, booleans, arrays and hex strings → 400, no UPDATE", async () => {
+  committee();
+  for (const score of [" ", "\t", false, true, [0.5], "0x1", "0b1"]) {
+    resetDb();
+    stubCommitteePatch();
+    const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
+      body: { action: "score", score },
+      headers: asRole("Komisijos narys"),
+    });
+    assert.equal(res.status, 400, JSON.stringify(score));
+    assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE activities")), false, JSON.stringify(score));
   }
-);
+});
 
 
 
@@ -1334,39 +1540,33 @@ test(
 // verdicts — an action nobody knows
 // -----------------------------------------------------------
 //
-// Both verdict routes compare action to fixed strings and
-// skip anything else in silence: "Approve" with a comment
-// saves the comment, leaves the activity PATEIKTA and answers
-// 200; "SCORE" with a score drops the score the same way. An
-// action that is present but not one the route knows must be
-// refused with a 400 before anything is written. A known bug,
-// pinned as an expected failure until it is fixed.
+// An action that is present but not one the route knows is
+// refused with a 400 before anything is written. Skipped in
+// silence instead, "Approve" with a comment would save the
+// comment, leave the activity PATEIKTA and answer 200, and
+// "SCORE" with a score would drop the score the same way.
 // -----------------------------------------------------------
 
-test(
-  "BUG: verdicts: an unknown action → 400, nothing written",
-  { todo: "known bug: PATCH /:id/manager and /:id/committee ignore an unrecognised action — the rest of the body is applied and the answer is 200" },
-  async () => {
-    manager();
-    stubManagerPatch();
-    let res = await api(app.base, "PATCH", "/api/activities/10/manager", {
-      body: { action: "Approve", manager_comments: "Gerai" },
-      headers: asRole("Vadybininkas"),
-    });
-    assert.equal(res.status, 400);
-    assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE activities")), false);
+test("verdicts: an unknown action → 400, nothing written", async () => {
+  manager();
+  stubManagerPatch();
+  let res = await api(app.base, "PATCH", "/api/activities/10/manager", {
+    body: { action: "Approve", manager_comments: "Gerai" },
+    headers: asRole("Vadybininkas"),
+  });
+  assert.equal(res.status, 400);
+  assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE activities")), false);
 
-    resetDb();
-    committee();
-    stubCommitteePatch();
-    res = await api(app.base, "PATCH", "/api/activities/10/committee", {
-      body: { action: "SCORE", score: 0.5, committee_comments: "Gerai" },
-      headers: asRole("Komisijos narys"),
-    });
-    assert.equal(res.status, 400);
-    assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE activities")), false);
-  }
-);
+  resetDb();
+  committee();
+  stubCommitteePatch();
+  res = await api(app.base, "PATCH", "/api/activities/10/committee", {
+    body: { action: "SCORE", score: 0.5, committee_comments: "Gerai" },
+    headers: asRole("Komisijos narys"),
+  });
+  assert.equal(res.status, 400);
+  assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE activities")), false);
+});
 
 
 
@@ -1517,14 +1717,16 @@ test("attachment: row without a file → 404 Nėra priedo; unknown id → 404 Ne
 // stubEmployeePatch
 // -----------------------------------------------------------
 //
-// The employee edit's three queries: the ownership/status
-// lookup (overridable), the UPDATE, the final select.
+// The employee edit's queries: the transaction around the
+// locked ownership/status lookup (overridable) and the
+// UPDATE, then the final select.
 //
 // Used by:
 //   - the PATCH /:id tests (below)
 // -----------------------------------------------------------
 
 function stubEmployeePatch(cur = {}) {
+  onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
   onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
     {
       employee_eid: cur.employee_eid ?? "emp-1",
@@ -1608,6 +1810,115 @@ test("employee edit: field validation (bad theme, blank title)", async () => {
   });
   assert.equal(res.status, 400);
   assert.deepEqual(res.body, { error: "Klaida: Netinkamas pavadinimas" });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// edit — a title or description that is not text
+// -----------------------------------------------------------
+//
+// As on create: a title sent twice arrives as an array, and
+// a JSON body can carry a number or null. A title or
+// description that is not text is a 400 naming the field,
+// with no UPDATE, never a 500 from the trim; a null
+// description clears it to the empty text a create without
+// one stores.
+// -----------------------------------------------------------
+
+test("employee edit: a title or description that is not text → 400; null clears the description", async () => {
+  employee();
+  stubEmployeePatch();
+  stubFullName();
+  let res = await api(app.base, "PATCH", "/api/activities/10", {
+    form: activityForm({ title: ["Vienas", "Du"] }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(res.body, { error: "Klaida: Netinkamas pavadinimas" });
+
+  for (const [body, error] of [
+    [{ title: 5 }, "Klaida: Netinkamas pavadinimas"],
+    [{ description: 5 }, "Klaida: Netinkamas aprašymas"],
+    [{ description: ["a"] }, "Klaida: Netinkamas aprašymas"],
+  ]) {
+    resetDb();
+    stubEmployeePatch();
+    stubFullName();
+    res = await api(app.base, "PATCH", "/api/activities/10", { body, headers: asRole("Darbuotojas") });
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.deepEqual(res.body, { error });
+    assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE activities")), false);
+  }
+
+  resetDb();
+  stubEmployeePatch();
+  stubFullName();
+  res = await api(app.base, "PATCH", "/api/activities/10", {
+    body: { description: null },
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(queryLog().find((q) => q.sql.includes("UPDATE activities SET")).params[0], "");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// edit — one edit at a time
+// -----------------------------------------------------------
+//
+// Two edits of one activity, each with a new file, must not
+// both replace the same old file — that left the first
+// edit's new file with no row pointing at it. The row is
+// read FOR UPDATE inside a transaction the UPDATE commits,
+// so a second edit waits for the first and then replaces the
+// file the first one stored. The replaced file goes only
+// after the commit, and a refused edit rolls back.
+// -----------------------------------------------------------
+
+test("employee edit: locked read, UPDATE and COMMIT in one transaction; the replaced file goes after the commit", async () => {
+  employee();
+  const old = `regression-old-${Date.now()}.txt`;
+  fs.writeFileSync(path.join(uploadDir, old), "senas");
+  createdFiles.add(old);
+  stubEmployeePatch({ attachment_path: old });
+  stubFullName();
+
+  let res = await api(app.base, "PATCH", "/api/activities/10", {
+    form: activityForm({ file: "naujas", fileName: "naujas.txt" }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 200);
+  const sqls = queryLog().map((q) => q.sql);
+  const at = (re) => sqls.findIndex((sql) => re.test(sql));
+  const update = queryLog().find((q) => q.sql.startsWith("UPDATE activities"));
+  createdFiles.add(update.params.find((p) => typeof p === "string" && p.endsWith(".txt")));
+  assert.ok(at(/^BEGIN$/) >= 0, "a transaction is opened");
+  assert.ok(at(/^BEGIN$/) < at(/FROM activities WHERE id = \$1 FOR UPDATE$/), "the row is read under a lock, inside it");
+  assert.ok(at(/FOR UPDATE$/) < at(/^UPDATE activities/));
+  assert.ok(at(/^UPDATE activities/) < at(/^COMMIT$/), "the UPDATE is committed");
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(fs.existsSync(path.join(uploadDir, old)), false, "the replaced file is gone");
+
+  resetDb();
+  stubEmployeePatch({ employee_eid: "kitas" });
+  stubFullName();
+  res = await api(app.base, "PATCH", "/api/activities/10", {
+    form: activityForm({ title: "X" }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 403);
+  assert.ok(queryLog().some((q) => q.sql === "ROLLBACK"), "a refused edit rolls back");
+  assert.equal(queryLog().some((q) => q.sql === "COMMIT"), false);
 });
 
 
@@ -1736,71 +2047,66 @@ test("employee edit with a dangerous file: 400, no UPDATE, old file kept", async
 // The replacement file is stored before the handler checks
 // the row, so every refusal must remove it again: an unknown
 // id, a stranger's activity, a row past PATEIKTA/TIKSLINTI,
-// a blank title, a database error. The handler removes it
-// only on a pair mismatch and a lost race, so the others
-// leave up to 100 MB each on disk — even an employee PATCHing
-// an activity that is not theirs gets their file stored. A
-// known bug, pinned as an expected failure until it is fixed.
+// a blank title, a database error. Each would otherwise
+// leave up to 100 MB on disk — even an employee PATCHing an
+// activity that is not theirs would get their file stored.
 // -----------------------------------------------------------
 
-test(
-  "BUG: employee edit: a refused edit leaves no uploaded file behind",
-  { todo: "known bug: PATCH /:id unlinks req.file only on a pair mismatch or a lost race — 404, 403, a status refusal, a blank title or a DB error leave the upload on disk" },
-  async () => {
-    employee();
-    const before = snapshotUploads();
-    const patchWithFile = (fields, fileName) =>
-      api(app.base, "PATCH", "/api/activities/10", {
-        form: activityForm({ theme_code: "T1", subtheme_code: "T1.1", ...fields, file: "x", fileName }),
-        headers: asRole("Darbuotojas"),
-      });
-
-    // unknown id
-    stubFullName();
-    onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, []);
-    let res = await patchWithFile({ title: "X" }, "nera.txt");
-    assert.equal(res.status, 404);
-
-    // a stranger's activity
-    resetDb();
-    stubFullName();
-    stubEmployeePatch({ employee_eid: "kitas" });
-    res = await patchWithFile({ title: "X" }, "svetima.txt");
-    assert.equal(res.status, 403);
-
-    // a row the manager already approved
-    resetDb();
-    stubFullName();
-    stubEmployeePatch({ status: "PATVIRTINTA" });
-    res = await patchWithFile({ title: "X" }, "patvirtinta.txt");
-    assert.equal(res.status, 400);
-
-    // a blank title
-    resetDb();
-    stubFullName();
-    stubEmployeePatch();
-    res = await patchWithFile({ title: "   " }, "tuscias.txt");
-    assert.equal(res.status, 400);
-
-    // the UPDATE fails
-    resetDb();
-    stubFullName();
-    onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
-      { employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null },
-    ]);
-    onQuery(/UPDATE activities SET/, () => {
-      throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
+test("employee edit: a refused edit leaves no uploaded file behind", async () => {
+  employee();
+  const before = snapshotUploads();
+  const patchWithFile = (fields, fileName) =>
+    api(app.base, "PATCH", "/api/activities/10", {
+      form: activityForm({ theme_code: "T1", subtheme_code: "T1.1", ...fields, file: "x", fileName }),
+      headers: asRole("Darbuotojas"),
     });
-    res = await patchWithFile({ title: "X" }, "db-klaida.txt");
-    assert.equal(res.status, 500);
 
-    // an unlink would be fire-and-forget — give it a beat
-    await new Promise((r) => setTimeout(r, 100));
-    const left = [...snapshotUploads()].filter((f) => !before.has(f));
-    for (const f of left) createdFiles.add(f);
-    assert.deepEqual(left, [], "refused uploads must not stay on disk");
-  }
-);
+  // unknown id
+  stubFullName();
+  onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
+  onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, []);
+  let res = await patchWithFile({ title: "X" }, "nera.txt");
+  assert.equal(res.status, 404);
+
+  // a stranger's activity
+  resetDb();
+  stubFullName();
+  stubEmployeePatch({ employee_eid: "kitas" });
+  res = await patchWithFile({ title: "X" }, "svetima.txt");
+  assert.equal(res.status, 403);
+
+  // a row the manager already approved
+  resetDb();
+  stubFullName();
+  stubEmployeePatch({ status: "PATVIRTINTA" });
+  res = await patchWithFile({ title: "X" }, "patvirtinta.txt");
+  assert.equal(res.status, 400);
+
+  // a blank title
+  resetDb();
+  stubFullName();
+  stubEmployeePatch();
+  res = await patchWithFile({ title: "   " }, "tuscias.txt");
+  assert.equal(res.status, 400);
+
+  // the UPDATE fails
+  resetDb();
+  stubFullName();
+  onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
+    { employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null },
+  ]);
+  onQuery(/UPDATE activities SET/, () => {
+    throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
+  });
+  res = await patchWithFile({ title: "X" }, "db-klaida.txt");
+  assert.equal(res.status, 500);
+
+  // an unlink would be fire-and-forget — give it a beat
+  await new Promise((r) => setTimeout(r, 100));
+  const left = [...snapshotUploads()].filter((f) => !before.has(f));
+  for (const f of left) createdFiles.add(f);
+  assert.deepEqual(left, [], "refused uploads must not stay on disk");
+});
 
 
 
@@ -2042,6 +2348,7 @@ function twice(first, then) {
 test("edit: manager approves between the gate and the UPDATE → 409, upload dropped", async () => {
   employee();
   stubFullName();
+  onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
   onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
     { employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null },
   ]);
@@ -2088,6 +2395,7 @@ test("edit: a 0-row UPDATE answers 404 when the row vanished, 403 when it is not
   ]) {
     resetDb();
     stubFullName();
+    onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
     onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
       { employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null },
     ]);
@@ -2319,33 +2627,25 @@ test("manager and committee: a mismatched reassignment → 400, no UPDATE; a mat
 // upload — text fields without end
 // -----------------------------------------------------------
 //
-// multer runs with busboy's defaults for text fields: up to
-// 1 MiB each and no limit on how many, all held in req.body
-// until the body ends — and neither the ingress nor the VU
-// proxy caps the body. A create form has six text fields; a
-// thousand of them is an attack, and must be refused before
-// anything is written.
-// A known bug, pinned as an expected failure until it is
-// fixed.
+// Every text field may hold up to 1 MiB, and multer keeps
+// them all in req.body until the body ends, so their number
+// is capped. A create form has six text fields; a thousand
+// of them is an attack, refused before anything is written.
 // -----------------------------------------------------------
 
-test(
-  "BUG: create: a multipart body with a thousand text fields → 4xx, nothing inserted",
-  { todo: "known bug: multer has no fields/parts limit and no proxy caps the body — one request can hold gigabytes of text fields in memory" },
-  async () => {
-    employee();
-    stubFullName();
-    stubPair();
-    onQuery(/INSERT INTO activities/, (sql, params) => [{ id: 1, employee_eid: params[0], status: "PATEIKTA" }]);
+test("create: a multipart body with a thousand text fields → 4xx, nothing inserted", async () => {
+  employee();
+  stubFullName();
+  stubPair();
+  onQuery(/INSERT INTO activities/, (sql, params) => [{ id: 1, employee_eid: params[0], status: "PATEIKTA" }]);
 
-    const form = activityForm({ theme_id: "1", subtheme_id: "2", title: "Laukai" });
-    for (let i = 0; i < 1000; i++) form.append(`laukas${i}`, "x".repeat(1024));
-    const res = await api(app.base, "POST", "/api/activities", { form, headers: asRole("Darbuotojas") });
+  const form = activityForm({ theme_id: "1", subtheme_id: "2", title: "Laukai" });
+  for (let i = 0; i < 1000; i++) form.append(`laukas${i}`, "x".repeat(1024));
+  const res = await api(app.base, "POST", "/api/activities", { form, headers: asRole("Darbuotojas") });
 
-    assert.ok(res.status >= 400 && res.status < 500, `answered ${res.status}`);
-    assert.equal(queryLog().some((q) => q.sql.includes("INSERT INTO activities")), false);
-  }
-);
+  assert.ok(res.status >= 400 && res.status < 500, `answered ${res.status}`);
+  assert.equal(queryLog().some((q) => q.sql.includes("INSERT INTO activities")), false);
+});
 
 
 
@@ -2358,104 +2658,95 @@ test(
 // -----------------------------------------------------------
 //
 // When a conditional write matches no row, five routes answer
-// through answerLostRace, which reads the row again — but they
-// return its promise from inside try without awaiting it, so
-// a failing re-read skips their catch. Express 4 leaves the
-// rejected handler unanswered and Node ends the process on
-// the unhandled rejection. Each must answer a JSON 500
-// instead. The test holds the process's unhandledRejection
-// listeners while the requests run. A known bug, pinned as an
-// expected failure until it is fixed.
+// through answerLostRace, which reads the row again. A
+// failing re-read must land in the route's catch as a JSON
+// 500: a rejection that escaped it would leave the request
+// unanswered (Express 4) and end the process (Node). The
+// test holds the process's unhandledRejection listeners while
+// the requests run.
 // -----------------------------------------------------------
 
-test(
-  "BUG: a lost race whose re-read fails → a JSON 500 on every route, not an unhandled rejection",
-  {
-    todo: "known bug: PATCH /:id, DELETE /:id, POST /:id/resubmit, PATCH /:id/manager and /:id/committee `return answerLostRace(...)` without await inside try",
-    timeout: 40_000,
-  },
-  async () => {
-    const dbDown = () => {
-      throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
-    };
-    const reReadFails = (row) => {
-      let reads = 0;
-      return () => (++reads === 1 ? [row] : dbDown());
-    };
-    const cases = [
-      {
-        name: "employee edit", who: employee, method: "PATCH", url: "/api/activities/10", role: "Darbuotojas",
-        form: () => activityForm({ title: "X" }),
-        stub: () => {
-          stubFullName();
-          onQuery(/^SELECT employee_eid, status, attachment_path FROM activities/, [{ employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null }]);
-          onQuery(/^UPDATE activities SET/, { rowCount: 0 });
-          onQuery(/^SELECT employee_eid, status FROM activities/, dbDown);
-        },
+test("a lost race whose re-read fails → a JSON 500 on every route, not an unhandled rejection", { timeout: 40_000 }, async () => {
+  const dbDown = () => {
+    throw Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" });
+  };
+  const reReadFails = (row) => {
+    let reads = 0;
+    return () => (++reads === 1 ? [row] : dbDown());
+  };
+  const cases = [
+    {
+      name: "employee edit", who: employee, method: "PATCH", url: "/api/activities/10", role: "Darbuotojas",
+      form: () => activityForm({ title: "X" }),
+      stub: () => {
+        stubFullName();
+        onQuery(/^SELECT employee_eid, status, attachment_path FROM activities/, [{ employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null }]);
+        onQuery(/^UPDATE activities SET/, { rowCount: 0 });
+        onQuery(/^SELECT employee_eid, status FROM activities/, dbDown);
       },
-      {
-        name: "delete", who: employee, method: "DELETE", url: "/api/activities/10", role: "Darbuotojas",
-        stub: () => {
-          onQuery(/^SELECT employee_eid, status FROM activities/, reReadFails({ employee_eid: "emp-1", status: "PATEIKTA" }));
-          onQuery(/^DELETE FROM activities/, { rowCount: 0 });
-        },
+    },
+    {
+      name: "delete", who: employee, method: "DELETE", url: "/api/activities/10", role: "Darbuotojas",
+      stub: () => {
+        onQuery(/^SELECT employee_eid, status FROM activities/, reReadFails({ employee_eid: "emp-1", status: "PATEIKTA" }));
+        onQuery(/^DELETE FROM activities/, { rowCount: 0 });
       },
-      {
-        name: "resubmit", who: employee, method: "POST", url: "/api/activities/10/resubmit", role: "Darbuotojas",
-        stub: () => {
-          onQuery(/^SELECT employee_eid, status FROM activities/, reReadFails({ employee_eid: "emp-1", status: "TIKSLINTI" }));
-          onQuery(/^UPDATE activities SET/, { rowCount: 0 });
-        },
+    },
+    {
+      name: "resubmit", who: employee, method: "POST", url: "/api/activities/10/resubmit", role: "Darbuotojas",
+      stub: () => {
+        onQuery(/^SELECT employee_eid, status FROM activities/, reReadFails({ employee_eid: "emp-1", status: "TIKSLINTI" }));
+        onQuery(/^UPDATE activities SET/, { rowCount: 0 });
       },
-      {
-        name: "manager verdict", who: manager, method: "PATCH", url: "/api/activities/10/manager", role: "Vadybininkas",
-        body: { action: "approve" },
-        stub: () => {
-          onQuery(/^SELECT status FROM activities/, [{ status: "PATEIKTA" }]);
-          onQuery(/^UPDATE activities SET/, { rowCount: 0 });
-          onQuery(/^SELECT employee_eid, status FROM activities/, dbDown);
-        },
+    },
+    {
+      name: "manager verdict", who: manager, method: "PATCH", url: "/api/activities/10/manager", role: "Vadybininkas",
+      body: { action: "approve" },
+      stub: () => {
+        onQuery(/^SELECT status FROM activities/, [{ status: "PATEIKTA" }]);
+        onQuery(/^UPDATE activities SET/, { rowCount: 0 });
+        onQuery(/^SELECT employee_eid, status FROM activities/, dbDown);
       },
-      {
-        name: "committee verdict", who: committee, method: "PATCH", url: "/api/activities/10/committee", role: "Komisijos narys",
-        body: { action: "score", score: 0.5 },
-        stub: () => {
-          onQuery(/^SELECT status FROM activities/, [{ status: "PATVIRTINTA" }]);
-          onQuery(/^UPDATE activities SET/, { rowCount: 0 });
-          onQuery(/^SELECT employee_eid, status FROM activities/, dbDown);
-        },
+    },
+    {
+      name: "committee verdict", who: committee, method: "PATCH", url: "/api/activities/10/committee", role: "Komisijos narys",
+      body: { action: "score", score: 0.5 },
+      stub: () => {
+        onQuery(/^SELECT status FROM activities/, [{ status: "PATVIRTINTA" }]);
+        onQuery(/^UPDATE activities SET/, { rowCount: 0 });
+        onQuery(/^SELECT employee_eid, status FROM activities/, dbDown);
       },
-    ];
+    },
+  ];
 
-    const runnerListeners = process.listeners("unhandledRejection");
-    process.removeAllListeners("unhandledRejection");
-    const escaped = [];
-    process.on("unhandledRejection", (err) => escaped.push(String(err)));
+  const runnerListeners = process.listeners("unhandledRejection");
+  process.removeAllListeners("unhandledRejection");
+  const escaped = [];
+  process.on("unhandledRejection", (err) => escaped.push(String(err)));
 
-    const answers = [];
-    try {
-      for (const c of cases) {
-        resetDb();
-        c.who();
-        c.stub();
-        const init = { method: c.method, headers: asRole(c.role), signal: AbortSignal.timeout(3000) };
-        if (c.form) init.body = c.form();
-        if (c.body) {
-          init.body = JSON.stringify(c.body);
-          init.headers = { ...init.headers, "Content-Type": "application/json" };
-        }
-        const res = await fetch(app.base + c.url, init).catch((err) => err);
-        answers.push(`${c.name}: ${res.status ?? res}`);
+  const answers = [];
+  try {
+    for (const c of cases) {
+      resetDb();
+      c.who();
+      c.stub();
+      const init = { method: c.method, headers: asRole(c.role), signal: AbortSignal.timeout(3000) };
+      if (c.form) init.body = c.form();
+      if (c.body) {
+        init.body = JSON.stringify(c.body);
+        init.headers = { ...init.headers, "Content-Type": "application/json" };
       }
-    } finally {
-      process.removeAllListeners("unhandledRejection");
-      for (const listener of runnerListeners) process.on("unhandledRejection", listener);
+      const res = await fetch(app.base + c.url, init).catch((err) => err);
+      answers.push(`${c.name}: ${res.status ?? res}`);
     }
-
-    assert.deepEqual(escaped, [], "no rejection may escape a handler");
-    assert.deepEqual(answers, cases.map((c) => `${c.name}: 500`));
+  } finally {
+    process.removeAllListeners("unhandledRejection");
+    for (const listener of runnerListeners) process.on("unhandledRejection", listener);
   }
-);
+
+  assert.deepEqual(escaped, [], "no rejection may escape a handler");
+  assert.deepEqual(answers, cases.map((c) => `${c.name}: 500`));
+});
 
 
 
@@ -2467,63 +2758,57 @@ test(
 // ids Postgres cannot take
 // -----------------------------------------------------------
 //
-// The :id in the URL goes to Postgres as sent, so "abc" or
-// "1.5" fails there as invalid integer syntax and 2147483648
-// as out of range for int4; a theme_id in a create form goes
-// the same way through parseInt. The route's catch answers
-// 500 and logs a stack trace. Such an id names nothing: a 404
-// or a 400, without a query, is the answer. The fake database
-// fails exactly where Postgres would. A known bug, pinned as
-// an expected failure until it is fixed.
+// Postgres refuses "abc" or "1.5" as invalid integer syntax
+// and 2147483648 as out of range for int4, which would
+// surface as a 500 with a stack trace. Such an id names
+// nothing: a 404 or a 400, without a query, is the answer —
+// for an :id in the URL and for a theme_id in a create form.
+// The fake database fails exactly where Postgres would.
 // -----------------------------------------------------------
 
-test(
-  "BUG: an id that is not an int4 → 404 or 400, never 500",
-  { todo: "known bug: activity routes pass :id and theme_id to Postgres unchecked — \"abc\" (22P02) and 2147483648 (22003) answer 500" },
-  async () => {
-    const int4 = (value) => {
-      const text = String(value);
-      if (!/^-?\d+$/.test(text)) {
-        throw Object.assign(new Error(`invalid input syntax for type integer: "${text}"`), { code: "22P02" });
-      }
-      if (Math.abs(Number(text)) > 2147483647) {
-        throw Object.assign(new Error(`value "${text}" is out of range for type integer`), { code: "22003" });
-      }
-    };
-    const gate = (sql, params) => {
-      int4(params[0]);
-      return [];
-    };
-    const allInt4 = (sql, params) => {
-      params.forEach(int4);
-      return [];
-    };
-
-    for (const c of [
-      { who: employee, method: "DELETE", url: "/api/activities/abc", role: "Darbuotojas", gate: /^SELECT employee_eid, status FROM activities WHERE id = \$1/ },
-      { who: employee, method: "POST", url: "/api/activities/2147483648/resubmit", role: "Darbuotojas", gate: /^SELECT employee_eid, status FROM activities WHERE id = \$1/ },
-      { who: manager, method: "PATCH", url: "/api/activities/abc/manager", role: "Vadybininkas", body: { action: "approve" }, gate: /^SELECT status FROM activities WHERE id = \$1/ },
-      { who: committee, method: "PATCH", url: "/api/activities/2147483648/committee", role: "Komisijos narys", body: { action: "score", score: 0.5 }, gate: /^SELECT status FROM activities WHERE id = \$1/ },
-      { who: employee, method: "GET", url: "/api/activities/1.5/attachment", role: "Darbuotojas", gate: /^SELECT attachment_path, attachment_original_name, employee_eid FROM activities WHERE id = \$1/ },
-    ]) {
-      resetDb();
-      c.who();
-      onQuery(c.gate, gate);
-      const res = await api(app.base, c.method, c.url, { body: c.body, headers: asRole(c.role) });
-      assert.ok(res.status === 404 || res.status === 400, `${c.method} ${c.url} answered ${res.status}`);
+test("an id that is not an int4 → 404 or 400, never 500", async () => {
+  const int4 = (value) => {
+    const text = String(value);
+    if (!/^-?\d+$/.test(text)) {
+      throw Object.assign(new Error(`invalid input syntax for type integer: "${text}"`), { code: "22P02" });
     }
+    if (Math.abs(Number(text)) > 2147483647) {
+      throw Object.assign(new Error(`value "${text}" is out of range for type integer`), { code: "22003" });
+    }
+  };
+  const gate = (sql, params) => {
+    int4(params[0]);
+    return [];
+  };
+  const allInt4 = (sql, params) => {
+    params.forEach(int4);
+    return [];
+  };
 
+  for (const c of [
+    { who: employee, method: "DELETE", url: "/api/activities/abc", role: "Darbuotojas", gate: /^SELECT employee_eid, status FROM activities WHERE id = \$1/ },
+    { who: employee, method: "POST", url: "/api/activities/2147483648/resubmit", role: "Darbuotojas", gate: /^SELECT employee_eid, status FROM activities WHERE id = \$1/ },
+    { who: manager, method: "PATCH", url: "/api/activities/abc/manager", role: "Vadybininkas", body: { action: "approve" }, gate: /^SELECT status FROM activities WHERE id = \$1/ },
+    { who: committee, method: "PATCH", url: "/api/activities/2147483648/committee", role: "Komisijos narys", body: { action: "score", score: 0.5 }, gate: /^SELECT status FROM activities WHERE id = \$1/ },
+    { who: employee, method: "GET", url: "/api/activities/1.5/attachment", role: "Darbuotojas", gate: /^SELECT attachment_path, attachment_original_name, employee_eid FROM activities WHERE id = \$1/ },
+  ]) {
     resetDb();
-    employee();
-    stubFullName();
-    onQuery(/^SELECT 1 FROM subthemes WHERE id = \$1 AND theme_id = \$2/, allInt4);
-    const res = await api(app.base, "POST", "/api/activities", {
-      form: activityForm({ theme_id: "3000000000", subtheme_id: "2", title: "Per didelis" }),
-      headers: asRole("Darbuotojas"),
-    });
-    assert.equal(res.status, 400, `a theme_id out of int4 range answered ${res.status}`);
+    c.who();
+    onQuery(c.gate, gate);
+    const res = await api(app.base, c.method, c.url, { body: c.body, headers: asRole(c.role) });
+    assert.ok(res.status === 404 || res.status === 400, `${c.method} ${c.url} answered ${res.status}`);
   }
-);
+
+  resetDb();
+  employee();
+  stubFullName();
+  onQuery(/^SELECT 1 FROM subthemes WHERE id = \$1 AND theme_id = \$2/, allInt4);
+  const res = await api(app.base, "POST", "/api/activities", {
+    form: activityForm({ theme_id: "3000000000", subtheme_id: "2", title: "Per didelis" }),
+    headers: asRole("Darbuotojas"),
+  });
+  assert.equal(res.status, 400, `a theme_id out of int4 range answered ${res.status}`);
+});
 
 
 
@@ -2536,62 +2821,53 @@ test(
 // -----------------------------------------------------------
 //
 // The magic-byte check opens the stored file synchronously
-// inside multer's completion callback, with no try around it.
-// A filesystem error there — out of file descriptors, a
-// permission problem — is thrown where nothing catches it,
-// and Node ends the process. It must instead be answered (a
-// server error), with the unchecked file removed. The test
-// fails openSync for the uploads directory only, and holds
-// the process's uncaughtException listeners while the request
-// runs. A known bug, pinned as an expected failure until it
-// is fixed.
+// inside multer's completion callback, where a throw would
+// escape every handler and end the process. A filesystem
+// error there — out of file descriptors, a permission
+// problem — is answered as a server error instead, with the
+// unchecked file removed. The test fails openSync for the
+// uploads directory only, and holds the process's
+// uncaughtException listeners while the request runs.
 // -----------------------------------------------------------
 
-test(
-  "BUG: a filesystem error in the magic-byte check → an answer and no file left, not a process crash",
-  {
-    todo: "known bug: hasExpectedMagic calls openSync/readSync inside multer's completion callback without a try — EMFILE or EACCES there is uncaught and ends the process",
-    timeout: 10_000,
-  },
-  async (t) => {
-    employee();
-    stubFullName();
-    const before = snapshotUploads();
-    const realOpenSync = fs.openSync;
-    t.mock.method(fs, "openSync", (file, ...rest) => {
-      if (String(file).startsWith(uploadDir)) {
-        throw Object.assign(new Error("EMFILE: too many open files"), { code: "EMFILE" });
-      }
-      return realOpenSync(file, ...rest);
-    });
-
-    const runnerListeners = process.listeners("uncaughtException");
-    process.removeAllListeners("uncaughtException");
-    const escaped = [];
-    process.on("uncaughtException", (err) => escaped.push(String(err)));
-
-    let res;
-    try {
-      res = await fetch(`${app.base}/api/activities`, {
-        method: "POST",
-        headers: asRole("Darbuotojas"),
-        body: activityForm({ ...BASE_CREATE, file: "%PDF-1.4 ataskaita", fileName: "ataskaita.pdf", fileType: "application/pdf" }),
-        signal: AbortSignal.timeout(3000),
-      }).catch((err) => err);
-    } finally {
-      process.removeAllListeners("uncaughtException");
-      for (const listener of runnerListeners) process.on("uncaughtException", listener);
+test("a filesystem error in the magic-byte check → an answer and no file left, not a process crash", { timeout: 10_000 }, async (t) => {
+  employee();
+  stubFullName();
+  const before = snapshotUploads();
+  const realOpenSync = fs.openSync;
+  t.mock.method(fs, "openSync", (file, ...rest) => {
+    if (String(file).startsWith(uploadDir)) {
+      throw Object.assign(new Error("EMFILE: too many open files"), { code: "EMFILE" });
     }
+    return realOpenSync(file, ...rest);
+  });
 
-    await new Promise((r) => setTimeout(r, 100));
-    const left = [...snapshotUploads()].filter((f) => !before.has(f));
-    for (const f of left) createdFiles.add(f);
+  const runnerListeners = process.listeners("uncaughtException");
+  process.removeAllListeners("uncaughtException");
+  const escaped = [];
+  process.on("uncaughtException", (err) => escaped.push(String(err)));
 
-    assert.deepEqual(escaped, [], "nothing may throw outside the request");
-    assert.equal(typeof res.status, "number", `no answer — ${res}`);
-    assert.deepEqual(left, [], "the unchecked file must not stay on disk");
+  let res;
+  try {
+    res = await fetch(`${app.base}/api/activities`, {
+      method: "POST",
+      headers: asRole("Darbuotojas"),
+      body: activityForm({ ...BASE_CREATE, file: "%PDF-1.4 ataskaita", fileName: "ataskaita.pdf", fileType: "application/pdf" }),
+      signal: AbortSignal.timeout(3000),
+    }).catch((err) => err);
+  } finally {
+    process.removeAllListeners("uncaughtException");
+    for (const listener of runnerListeners) process.on("uncaughtException", listener);
   }
-);
+
+  await new Promise((r) => setTimeout(r, 100));
+  const left = [...snapshotUploads()].filter((f) => !before.has(f));
+  for (const f of left) createdFiles.add(f);
+
+  assert.deepEqual(escaped, [], "nothing may throw outside the request");
+  assert.equal(typeof res.status, "number", `no answer — ${res}`);
+  assert.deepEqual(left, [], "the unchecked file must not stay on disk");
+});
 
 
 
@@ -2608,51 +2884,158 @@ test(
 // file in uploads/ — nothing ever sweeps that directory, so
 // every such file would stay there for good. The request is
 // sent by hand: a text field, then the start of a file, then
-// the socket is destroyed. A known bug, pinned as an expected
-// failure until it is fixed.
+// the socket is destroyed.
 // -----------------------------------------------------------
 
-test(
-  "BUG: an upload the client aborts halfway leaves no partial file",
-  { todo: "known bug: multer's disk storage keeps the half-written file when the client goes away mid-upload", timeout: 10_000 },
-  async () => {
-    employee();
-    stubFullName();
-    const before = snapshotUploads();
+test("an upload the client aborts halfway leaves no partial file", { timeout: 10_000 }, async () => {
+  employee();
+  stubFullName();
+  const before = snapshotUploads();
 
-    const boundary = "veiklos-nutraukta";
-    const head = [
-      `--${boundary}`,
-      'Content-Disposition: form-data; name="theme_code"',
-      "",
-      "T1",
-      `--${boundary}`,
-      'Content-Disposition: form-data; name="attachment"; filename="pusiau.txt"',
-      "Content-Type: text/plain",
-      "",
-      "",
-    ].join("\r\n");
-    const { hostname, port } = new URL(app.base);
-    const req = http.request({
-      host: hostname,
-      port,
-      method: "POST",
-      path: "/api/activities",
-      headers: {
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-        "Content-Length": String(head.length + 4 * 1024 * 1024),
-        "X-Active-Role": "Darbuotojas",
-      },
-    });
-    req.on("error", () => {});
-    req.write(head);
-    req.write("x".repeat(256 * 1024));
-    await new Promise((r) => setTimeout(r, 300));
-    req.destroy();
-    await new Promise((r) => setTimeout(r, 500));
+  const boundary = "veiklos-nutraukta";
+  const head = [
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="theme_code"',
+    "",
+    "T1",
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="attachment"; filename="pusiau.txt"',
+    "Content-Type: text/plain",
+    "",
+    "",
+  ].join("\r\n");
+  const { hostname, port } = new URL(app.base);
+  const req = http.request({
+    host: hostname,
+    port,
+    method: "POST",
+    path: "/api/activities",
+    headers: {
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      "Content-Length": String(head.length + 4 * 1024 * 1024),
+      "X-Active-Role": "Darbuotojas",
+    },
+  });
+  req.on("error", () => {});
+  req.write(head);
+  req.write("x".repeat(256 * 1024));
+  await new Promise((r) => setTimeout(r, 300));
+  req.destroy();
+  await new Promise((r) => setTimeout(r, 500));
 
-    const left = [...snapshotUploads()].filter((f) => !before.has(f));
-    for (const f of left) createdFiles.add(f);
-    assert.deepEqual(left, [], "an aborted upload must not stay on disk");
+  const left = [...snapshotUploads()].filter((f) => !before.has(f));
+  for (const f of left) createdFiles.add(f);
+  assert.deepEqual(left, [], "an aborted upload must not stay on disk");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// a sign-in without a name
+// -----------------------------------------------------------
+//
+// VU SSO may release no first or last name, which leaves
+// users.full_name empty. Every list a manager or the
+// committee reads, and both verdict answers, name the
+// employee by email then rather than leaving the cell blank.
+// -----------------------------------------------------------
+
+test("lists and verdict answers name the employee by email when the name is missing", async () => {
+  const namedByEmail = (sql) => sql.includes("COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name");
+
+  for (const [who, role, path] of [
+    [manager, "Vadybininkas", "/api/activities/all"],
+    [manager, "Vadybininkas", "/api/activities/pending"],
+    [committee, "Komisijos narys", "/api/activities/committee"],
+    [committee, "Komisijos narys", "/api/activities/evaluated"],
+  ]) {
+    resetDb();
+    who();
+    onQuery(/FROM activities a JOIN users u/, []);
+    const res = await api(app.base, "GET", path, { headers: asRole(role) });
+    assert.equal(res.status, 200, path);
+    assert.ok(namedByEmail(queryLog()[0].sql), `${path}: ${queryLog()[0].sql}`);
   }
-);
+
+  resetDb();
+  manager();
+  stubManagerPatch();
+  await api(app.base, "PATCH", "/api/activities/10/manager", { body: { action: "approve" }, headers: asRole("Vadybininkas") });
+  assert.ok(namedByEmail(queryLog().at(-1).sql), "the manager verdict's answer");
+
+  resetDb();
+  committee();
+  stubCommitteePatch();
+  await api(app.base, "PATCH", "/api/activities/10/committee", { body: { action: "score", score: 0.5 }, headers: asRole("Komisijos narys") });
+  assert.ok(namedByEmail(queryLog().at(-1).sql), "the committee verdict's answer");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// codes in reading order
+// -----------------------------------------------------------
+//
+// Postgres sorts codes as text: "6.10." before "6.2.". The
+// calculate page's two feeds are shown in the order they
+// arrive, so they must arrive in code order — themes, then
+// subthemes within a theme. The live theme codes are a
+// family name and a section number, and two families number
+// their sections alike: the text decides first, so a family's
+// themes, and the subthemes under them, stay together.
+// -----------------------------------------------------------
+
+test("theme totals and an employee's subthemes come in numeric code order", async () => {
+  committee();
+  onQuery(/LEFT JOIN activities a/, [
+    { theme_id: 1, theme_code: "6.1.", theme_title: "A", theme_total_sum: "0", theme_pointvalue: null, total_score: "0" },
+    { theme_id: 10, theme_code: "6.10.", theme_title: "J", theme_total_sum: "0", theme_pointvalue: null, total_score: "0" },
+    { theme_id: 2, theme_code: "6.2.", theme_title: "B", theme_total_sum: "0", theme_pointvalue: null, total_score: "0" },
+  ]);
+  let res = await api(app.base, "GET", "/api/activities/evaluated/theme-totals", { headers: asRole("Komisijos narys") });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.map((r) => r.theme_code), ["6.1.", "6.2.", "6.10."]);
+
+  resetDb();
+  onQuery(/COALESCE\(SUM\(a\.score\), 0\) AS total_score/, [
+    { theme_id: 10, theme_code: "6.10.", subtheme_id: 101, subtheme_code: "6.10.1." },
+    { theme_id: 2, theme_code: "6.2.", subtheme_id: 210, subtheme_code: "6.2.10." },
+    { theme_id: 2, theme_code: "6.2.", subtheme_id: 22, subtheme_code: "6.2.2." },
+  ]);
+  res = await api(app.base, "GET", "/api/activities/evaluated/employee/emp-1/subthemes", { headers: asRole("Komisijos narys") });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.map((r) => r.subtheme_code), ["6.2.2.", "6.2.10.", "6.10.1."]);
+});
+
+test("the live codes: theme totals and an employee's subthemes keep each family together", async () => {
+  committee();
+  onQuery(/LEFT JOIN activities a/, [
+    { theme_id: 1, theme_code: "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.1.", theme_title: "A", theme_total_sum: "0", theme_pointvalue: null, total_score: "0" },
+    { theme_id: 2, theme_code: "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.2.", theme_title: "B", theme_total_sum: "0", theme_pointvalue: null, total_score: "0" },
+    { theme_id: 3, theme_code: "STUDIJŲ KOKYBĖ 6.1.", theme_title: "C", theme_total_sum: "0", theme_pointvalue: null, total_score: "0" },
+    { theme_id: 5, theme_code: "STUDIJŲ KOKYBĖ 6.10.", theme_title: "E", theme_total_sum: "0", theme_pointvalue: null, total_score: "0" },
+    { theme_id: 4, theme_code: "STUDIJŲ KOKYBĖ 6.2.", theme_title: "D", theme_total_sum: "0", theme_pointvalue: null, total_score: "0" },
+  ]);
+  let res = await api(app.base, "GET", "/api/activities/evaluated/theme-totals", { headers: asRole("Komisijos narys") });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.map((r) => r.theme_id), [1, 2, 3, 4, 5]);
+
+  resetDb();
+  onQuery(/COALESCE\(SUM\(a\.score\), 0\) AS total_score/, [
+    { theme_id: 1, theme_code: "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.1.", subtheme_id: 11, subtheme_code: "6.1.1." },
+    { theme_id: 1, theme_code: "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.1.", subtheme_id: 12, subtheme_code: "6.1.2." },
+    { theme_id: 2, theme_code: "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.2.", subtheme_id: 21, subtheme_code: "6.2.1." },
+    { theme_id: 3, theme_code: "STUDIJŲ KOKYBĖ 6.1.", subtheme_id: 31, subtheme_code: "6.1.1." },
+  ].reverse());
+  res = await api(app.base, "GET", "/api/activities/evaluated/employee/emp-1/subthemes", { headers: asRole("Komisijos narys") });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.map((r) => r.subtheme_id), [11, 12, 21, 31]);
+});

@@ -197,6 +197,35 @@ test("assign: grants by (eid, role id), re-grant is a DB-side no-op → 204 eith
 
 
 // -----------------------------------------------------------
+// assign — unknown user
+// -----------------------------------------------------------
+//
+// An eid with no users row is refused by the foreign key on
+// user_roles: a 404 naming the missing user, the wording the
+// by-email assign uses, not a 500.
+// -----------------------------------------------------------
+
+test("assign: an eid with no user → 404, not 500", async () => {
+  manager();
+  onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 7 }]);
+  onQuery(/INSERT INTO user_roles/, () => {
+    throw Object.assign(new Error('insert or update on table "user_roles" violates foreign key constraint'), { code: "23503" });
+  });
+
+  const res = await api(app.base, "POST", "/api/roles/assign", {
+    body: { user_eid: "nera-tokio", role_name: "Vadybininkas" },
+  });
+  assert.equal(res.status, 404);
+  assert.deepEqual(res.body, { error: "Klaida: Vartotojas nerastas" });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // DB failure — both routes answer 500
 // -----------------------------------------------------------
 //

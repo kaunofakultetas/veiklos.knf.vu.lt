@@ -3,7 +3,9 @@
 //
 //  /committee/evaluate: the PATVIRTINTA queue. Each row can
 //  be returned to the manager (back to PATEIKTA) or opened in
-//  the review modal and scored.
+//  the review modal and scored. A return needs a reason,
+//  asked for in the shared CommentModal: the backend mails it
+//  to the managers and their queue shows it under the title.
 //
 //  The score is not typed directly: the member enters how
 //  many people carried the activity out and the score becomes
@@ -16,7 +18,6 @@
 //
 //  Split into (root component last):
 //
-//    getActiveRole   — activeRole from localStorage
 //    statusClass     — status → pill css class
 //    formatDate      — ISO → lt-LT date-time
 //    QueueTable      — the PATVIRTINTA rows + row actions
@@ -26,29 +27,9 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
+import { CommentModal } from "@/components/appCommon.jsx";
+import { getActiveRole } from "@/components/activeRole.js";
 import "@/components/employee.css";
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// getActiveRole
-// -----------------------------------------------------------
-//
-// The active role for the X-Active-Role header, read fresh
-// per request so a role switch in the header is picked up
-// immediately.
-//
-// Used by:
-//   - EvaluatePage (below) — every API call
-// -----------------------------------------------------------
-
-function getActiveRole() {
-  return localStorage.getItem("activeRole") || "";
-}
 
 
 
@@ -125,8 +106,9 @@ function formatDate(iso) {
 //
 // The PATVIRTINTA queue: one row per activity with
 // "Peržiūrėti" (opens the modal) and "Grąžinti vadybininkei"
-// (disabled and relabelled while that row's PATCH is in
-// flight). Loading and empty states are early returns.
+// (opens the reason prompt; disabled and relabelled while
+// that row's PATCH is in flight). Loading and empty states
+// are early returns.
 //
 // Used by:
 //   - EvaluatePage (below)
@@ -544,12 +526,13 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
 // EvaluatePage (default export)
 // -----------------------------------------------------------
 //
-// Owns the queue, the selected activity and every request;
-// verdicts go through callCommitteeAction (PATCH
+// Owns the queue, which activity the review modal and the
+// return prompt are open for, and every request; verdicts go
+// through callCommitteeAction (PATCH
 // /api/activities/:id/committee). A response whose status
 // left PATVIRTINTA drops out of the queue — both scoring and
-// returning do. One error/status line (msg) serves the table
-// and the modal.
+// returning do. One error/status line (msg) serves the table,
+// the modal and the prompt.
 //
 // Used by:
 //   - App.jsx — route /committee/evaluate
@@ -562,7 +545,11 @@ export default function EvaluatePage() {
   const [msg, setMsg] = useState("");
   const [actingId, setActingId] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
+
+  // Which activity the review modal and the return prompt are
+  // open for (null = closed)
   const [selectedActivity, setSelectedActivity] = useState(null);
+  const [returningActivity, setReturningActivity] = useState(null);
 
 
   // Load the PATVIRTINTA queue on mount
@@ -682,13 +669,10 @@ export default function EvaluatePage() {
   };
 
 
-  const handleReturnToManager = async (act) => {
-    if (!window.confirm("Grąžinti veiklą vadybininkei?")) return;
-    try {
-      await callCommitteeAction(act.id, { action: "return" });
-    } catch {
-      // ignore — callCommitteeAction already surfaced the error
-    }
+  // Opening the return prompt also clears the status line
+  const handleReturn = (act) => {
+    setReturningActivity(act);
+    setMsg("");
   };
 
 
@@ -718,7 +702,7 @@ export default function EvaluatePage() {
               loading={loading}
               actingId={actingId}
               onOpen={setSelectedActivity}
-              onReturn={handleReturnToManager}
+              onReturn={handleReturn}
             />
 
             {msg && (
@@ -739,6 +723,27 @@ export default function EvaluatePage() {
           onDownload={handleDownload}
           onScore={handleScore}
           onClose={() => setSelectedActivity(null)}
+          onMessage={setMsg}
+        />
+      )}
+
+      {returningActivity && (
+        <CommentModal
+          activity={returningActivity}
+          title="Grąžinti veiklą vadybininkei"
+          label="Grąžinimo priežastis"
+          placeholder="Paaiškinkite, kodėl veikla grąžinama vadybininkei"
+          initialComment={returningActivity.committee_comments || ""}
+          confirmLabel="Patvirtinti grąžinimą"
+          busyLabel="Grąžinama…"
+          emptyMessage="Klaida: Grąžinimui būtinas komentaras."
+          onConfirm={(comment) =>
+            callCommitteeAction(returningActivity.id, {
+              action: "return",
+              committee_comments: comment,
+            })
+          }
+          onClose={() => setReturningActivity(null)}
           onMessage={setMsg}
         />
       )}

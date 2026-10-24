@@ -4,7 +4,7 @@
 //  nodemailer is mocked (helpers/mailMock.js) and the Mailjet
 //  env is set BEFORE the module import below, because the
 //  transporter is created at import time from process.env.
-//  Pins the Mailjet relay transport settings and both
+//  Pins the Mailjet relay transport settings and the three
 //  Lithuanian message templates.
 // -----------------------------------------------------------
 
@@ -17,7 +17,7 @@ process.env.MAILJET_APIKEY = "mj-api-key";
 process.env.MAILJET_APISECRET = "mj-api-secret";
 process.env.MAIL_FROM_ADDRESS = "noreply@test.local";
 
-const { sendRejectionEmail, sendReturnEmail } = await import("../src/routes/emailService.js");
+const { sendRejectionEmail, sendReturnEmail, sendCommitteeReturnEmail } = await import("../src/routes/emailService.js");
 
 
 beforeEach(() => {
@@ -147,4 +147,38 @@ test("return: grąžinta subject and the manager's comment", async () => {
   assert.equal(msg.subject, "Jūsų veikla buvo grąžinta tikslinimui: Konferencija");
   assert.ok(msg.text.includes('Jūsų veikla "Konferencija" buvo grąžinta tikslinimui.'));
   assert.ok(msg.text.includes("Vadybininkės komentaras:\nPatikslinkite datą"));
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// committee return — template
+// -----------------------------------------------------------
+//
+// The note to a manager when the committee sends an activity
+// back: the activity in the subject, the employee and the
+// committee's reason in the text.
+// -----------------------------------------------------------
+
+test("committee return: the activity in the subject, the employee and the reason in the text", async () => {
+  await sendCommitteeReturnEmail({
+    to: "vadybininke@vu.lt",
+    fullName: "Rūta",
+    employeeName: "Jonas Jonaitis",
+    title: "Konferencija",
+    comment: "Patikslinkite temą",
+  });
+
+  const msg = outbox[0];
+  assert.equal(msg.to, "vadybininke@vu.lt");
+  assert.equal(msg.from, '"Veiklų registravimo sistema" <noreply@test.local>');
+  assert.equal(msg.subject, "Komisija grąžino veiklą: Konferencija");
+  assert.ok(msg.text.includes("Sveiki, Rūta"), msg.text);
+  assert.ok(msg.text.includes('Komisija grąžino Jums peržiūrėti veiklą "Konferencija".'), msg.text);
+  assert.ok(msg.text.includes("Darbuotojas: Jonas Jonaitis"), msg.text);
+  assert.ok(msg.text.includes("Komisijos komentaras:\nPatikslinkite temą"), msg.text);
 });

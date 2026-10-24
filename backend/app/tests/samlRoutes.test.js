@@ -2,17 +2,19 @@
 //  [*] Regression — routes/saml.js (the login flow)
 //
 //  The router factory with a FAKE samlify pair: the SP stub
-//  returns a scripted assertion extract, so /assert's own
-//  logic — attribute mapping, the user upsert, the first
-//  sign-in grant, the session write and the redirect — is
-//  pinned without any XML. The same stub scripts the logout
-//  parsers, so /logout/callback's two branches — the IdP's
-//  LogoutResponse and an IdP-initiated LogoutRequest — are
-//  pinned the same way, down to the raw octet string handed
-//  over for the signature check, and the store lookup that
-//  lets an IdP-initiated logout end a login without its
-//  cookie. A fake express-session (with a fake store) stands
-//  in for the cookie store; the pool is the usual fake.
+//  returns a scripted assertion extract (and a bare response
+//  document around one assertion ID), so /assert's own logic
+//  — attribute mapping, one sign-in per assertion, the user
+//  upsert, the first sign-in grant, the session write and the
+//  redirect — is pinned without real SAML. The same stub
+//  scripts the logout parsers, so /logout/callback's two
+//  branches — the IdP's LogoutResponse and an IdP-initiated
+//  LogoutRequest — are pinned the same way, down to the raw
+//  octet string handed over for the signature check, and the
+//  store lookup that lets an IdP-initiated logout end a login
+//  without its cookie. A fake express-session (with a fake
+//  store) stands in for the cookie store; the pool is the
+//  usual fake.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -26,6 +28,21 @@ import createSamlRouter from "../src/routes/saml.js";
 // What the fake SP "parses" out of the next POSTed assertion;
 // set per test. null → parseLoginResponse throws
 let nextExtract = null;
+
+// The ID of the assertion in that response, or a whole
+// response document to hand back instead (the malformed
+// cases); both reset per test
+let nextAssertionId = "_assertion-1";
+let nextSamlContent = null;
+
+// The assertion IDs the fake saml_assertions table holds
+const usedAssertions = new Set();
+
+// A login response as samlify hands it back once decrypted:
+// one assertion directly under the Response
+const responseWith = (assertionId) =>
+  '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_resp-1">' +
+  `<saml:Assertion ID="${assertionId}" Version="2.0"/></samlp:Response>`;
 
 // What the fake SP makes of the next logout message on
 // /logout/callback: the LogoutRequest extract (null →
@@ -121,7 +138,7 @@ const fakeSp = {
   },
   parseLoginResponse: async () => {
     if (!nextExtract) throw new Error("bad signature");
-    return { extract: nextExtract };
+    return { samlContent: nextSamlContent ?? responseWith(nextAssertionId), extract: nextExtract };
   },
   // samlify rejects redirect-binding messages with bare
   // strings, not Errors — mirrored here
@@ -265,7 +282,39 @@ beforeEach(() => {
   fakeStore.lookupFails = false;
   lastSession = null;
   askedOrigins.length = 0;
+  nextAssertionId = "_assertion-1";
+  nextSamlContent = null;
+  usedAssertions.clear();
+  stubAssertionTable();
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// stubAssertionTable
+// -----------------------------------------------------------
+//
+// The used-assertion table, behaving like the real one: the
+// sweep of expired rows deletes nothing, and an ID goes in
+// once — a second insert of it conflicts and returns no row.
+// Called per test, and again after a test resets the DB.
+//
+// Used by:
+//   - beforeEach (above), the audience test (below)
+// -----------------------------------------------------------
+
+function stubAssertionTable() {
+  onQuery(/^DELETE FROM saml_assertions WHERE expire <= NOW\(\)$/, { rowCount: 0 });
+  onQuery(/^INSERT INTO saml_assertions/, (_sql, params) => {
+    if (usedAssertions.has(params[0])) return { rows: [], rowCount: 0 };
+    usedAssertions.add(params[0]);
+    return [{ id: params[0] }];
+  });
+}
 
 
 
@@ -322,8 +371,8 @@ test("assert: VU attributes → upsert by eID, session stored, redirect /", asyn
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("location"), "/");
 
-  const upsert = queryLog()[0];
-  assert.ok(upsert.sql.startsWith("INSERT INTO users"), "the upsert is the first query");
+  const upsert = queryLog().find((q) => q.sql.startsWith("INSERT INTO users"));
+  assert.ok(upsert, "the user is upserted");
   assert.deepEqual(upsert.params, ["112546", "jonas.jonaitis@knf.vu.lt", "Jonas Jonaitis"]);
   assert.equal(lastSession.samlUser.nameID, "transient-1");
   assert.equal(lastSession.samlUser.attributes["urn:oid:2.5.4.42"], "Jonas");
@@ -364,7 +413,7 @@ test("assert: first sign-in auto-grants Darbuotojas", async () => {
   assert.equal(res.status, 302);
 
   // name is null when the IdP sent neither part
-  assert.deepEqual(queryLog()[0].params, ["200001", "new@vu.lt", null]);
+  assert.deepEqual(queryLog().find((q) => q.sql.startsWith("INSERT INTO users")).params, ["200001", "new@vu.lt", null]);
   const grant = queryLog().find((q) => q.sql.includes("INSERT INTO user_roles"));
   assert.deepEqual(grant.params, ["200001", 3]);
 });
@@ -510,10 +559,106 @@ test("assert: foreign or missing audience → 401, no upsert; a list containing 
   }
 
   resetDb();
+  stubAssertionTable();
   stubReturningUser();
   nextExtract = { audience: ["https://other.example", audienceOf()], nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" } };
   const ok = await post("/auth/saml/assert");
   assert.equal(ok.status, 302);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// assert — one sign-in per assertion
+// -----------------------------------------------------------
+//
+// samlify accepts the same signed response for as long as it
+// is valid, so /assert remembers each assertion's ID until
+// the assertion expires. The first post signs in; a second
+// post of the same assertion is a 401 that signs nobody in —
+// unless it comes from the browser already signed in as that
+// same user (the back button returning to VU SSO's form
+// re-posts it), which just goes home. Expired IDs are swept
+// first, and an ID is kept until the assertion's
+// NotOnOrAfter plus the clock drift samlify allows.
+// -----------------------------------------------------------
+
+test("assert: the same assertion twice → the second post is refused and signs nobody in", async () => {
+  nextExtract = { audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" } };
+  stubReturningUser();
+
+  const first = await post("/auth/saml/assert");
+  assert.equal(first.status, 302);
+  const before = queryLog().length;
+
+  const again = await post("/auth/saml/assert");
+  assert.equal(again.status, 401);
+  assert.equal(await again.text(), "SAML assertion already used");
+  assert.equal(queryLog().slice(before).some((q) => q.sql.startsWith("INSERT INTO users")), false, "no upsert for the repeat");
+  assert.equal(lastSession.samlUser, undefined, "nobody is signed in by the repeat");
+});
+
+test("assert: a repeat from the browser signed in as that user goes home; from anyone else it is refused", async () => {
+  nextExtract = { audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" } };
+  stubReturningUser();
+  assert.equal((await post("/auth/saml/assert")).status, 302);
+
+  // the fake signed-in session belongs to eID 112546
+  const back = await post("/auth/saml/assert", { "x-test-session": "signed-in" });
+  assert.equal(back.status, 302);
+  assert.equal(back.headers.get("location"), "/");
+  assert.equal(lastSession.regeneratedFrom, null, "no new session for the repeat");
+
+  nextExtract = { ...nextExtract, attributes: { eID: "200001", mail: "kitas@vu.lt" } };
+  nextAssertionId = "_assertion-2";
+  assert.equal((await post("/auth/saml/assert")).status, 302);
+  const foreign = await post("/auth/saml/assert", { "x-test-session": "signed-in" });
+  assert.equal(foreign.status, 401);
+  assert.equal(await foreign.text(), "SAML assertion already used");
+});
+
+test("assert: a response without exactly one assertion ID → 401, nothing written", async () => {
+  nextExtract = { audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" } };
+  const open = '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">';
+  for (const content of [
+    `${open}<saml:Assertion ID="_a"/><saml:Assertion ID="_b"/></samlp:Response>`,
+    `${open}<saml:Assertion Version="2.0"/></samlp:Response>`,
+    `${open}</samlp:Response>`,
+  ]) {
+    nextSamlContent = content;
+    const res = await post("/auth/saml/assert");
+    assert.equal(res.status, 401, content);
+    assert.equal(await res.text(), "SAML assertion without a single ID");
+  }
+  assert.equal(queryLog().length, 0);
+});
+
+test("assert: an ID is kept until NotOnOrAfter plus the clock drift, after the expired ones are swept", async () => {
+  nextExtract = {
+    audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" },
+    conditions: { notBefore: "2026-10-24T12:00:00Z", notOnOrAfter: "2026-10-24T12:05:00Z" },
+  };
+  stubReturningUser();
+  assert.equal((await post("/auth/saml/assert")).status, 302);
+
+  const at = (prefix) => queryLog().findIndex((q) => q.sql.startsWith(prefix));
+  assert.ok(at("DELETE FROM saml_assertions") >= 0, "expired IDs are swept");
+  assert.ok(at("DELETE FROM saml_assertions") < at("INSERT INTO saml_assertions"));
+  assert.ok(at("INSERT INTO saml_assertions") < at("INSERT INTO users"), "remembered before anyone is signed in");
+  assert.deepEqual(queryLog()[at("INSERT INTO saml_assertions")].params, ["_assertion-1", new Date("2026-10-24T12:10:00Z")]);
+
+  // an assertion without NotOnOrAfter (VU always sends one)
+  // is remembered for a day
+  nextExtract = { ...nextExtract, conditions: undefined };
+  nextAssertionId = "_assertion-2";
+  const sent = Date.now();
+  assert.equal((await post("/auth/saml/assert")).status, 302);
+  const kept = queryLog().filter((q) => q.sql.startsWith("INSERT INTO saml_assertions")).at(-1).params[1];
+  assert.ok(Math.abs(kept.getTime() - (sent + 24 * 60 * 60 * 1000)) < 60_000, `kept until ${kept.toISOString()}`);
 });
 
 
@@ -800,44 +945,36 @@ test("callback: cookie-less IdP-initiated logout ends the login's sessions throu
 // rejection. The test holds the process's unhandledRejection
 // listeners while the request runs, so an escaping rejection
 // is caught and asserted on here instead of reaching the test
-// runner. The await sits outside any try: a known bug, pinned
-// as an expected failure until it is fixed.
+// runner.
 // -----------------------------------------------------------
 
-test(
-  "BUG: callback: the store lookup fails → 500, nothing destroyed, no answer to the IdP",
-  {
-    todo: "known bug: GET /logout/callback awaits sidsForLogin outside any try — a database error rejects the handler, the request hangs and Node ends the process",
-    timeout: 10_000,
-  },
-  async () => {
-    fakeStore.lookupFails = true;
-    fakeStore.loginSids = ["sid-login"];
-    nextLogoutRequest = { extract: { request: { id: "_idp-req-5" }, nameID: "nid-5", sessionIndex: "sidx-5" } };
+test("callback: the store lookup fails → 500, nothing destroyed, no answer to the IdP", { timeout: 10_000 }, async () => {
+  fakeStore.lookupFails = true;
+  fakeStore.loginSids = ["sid-login"];
+  nextLogoutRequest = { extract: { request: { id: "_idp-req-5" }, nameID: "nid-5", sessionIndex: "sidx-5" } };
 
-    const runnerListeners = process.listeners("unhandledRejection");
+  const runnerListeners = process.listeners("unhandledRejection");
+  process.removeAllListeners("unhandledRejection");
+  const escaped = [];
+  process.on("unhandledRejection", (err) => escaped.push(String(err)));
+
+  let res;
+  try {
+    res = await fetch(`${base}/auth/saml/logout/callback?${RAW_REQUEST}&Signature=s`, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(3000),
+    }).catch((err) => err);
+  } finally {
     process.removeAllListeners("unhandledRejection");
-    const escaped = [];
-    process.on("unhandledRejection", (err) => escaped.push(String(err)));
-
-    let res;
-    try {
-      res = await fetch(`${base}/auth/saml/logout/callback?${RAW_REQUEST}&Signature=s`, {
-        redirect: "manual",
-        signal: AbortSignal.timeout(3000),
-      }).catch((err) => err);
-    } finally {
-      process.removeAllListeners("unhandledRejection");
-      for (const listener of runnerListeners) process.on("unhandledRejection", listener);
-    }
-
-    assert.deepEqual(escaped, [], "no rejection may escape the handler");
-    assert.equal(res.status, 500);
-    assert.deepEqual(fakeStore.lookups, [{ sessionIndex: "sidx-5", nameID: "nid-5" }]);
-    assert.deepEqual(fakeStore.destroyed, []);
-    assert.deepEqual(samlCalls.map((c) => c.fn), ["parseLogoutRequest"]);
+    for (const listener of runnerListeners) process.on("unhandledRejection", listener);
   }
-);
+
+  assert.deepEqual(escaped, [], "no rejection may escape the handler");
+  assert.equal(res.status, 500);
+  assert.deepEqual(fakeStore.lookups, [{ sessionIndex: "sidx-5", nameID: "nid-5" }]);
+  assert.deepEqual(fakeStore.destroyed, []);
+  assert.deepEqual(samlCalls.map((c) => c.fn), ["parseLogoutRequest"]);
+});
 
 
 

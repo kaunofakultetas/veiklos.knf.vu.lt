@@ -10,13 +10,14 @@
 //  An activity whose status changes (approve/deny/return)
 //  leaves the list immediately; a plain edit keeps PATEIKTA
 //  and the row is patched in place. Deny and return trigger a
-//  notification email to the employee on the backend. Auth
-//  rides in the session cookie; only the X-Active-Role
-//  header travels.
+//  notification email to the employee on the backend; their
+//  comment prompt is the shared CommentModal. A row the
+//  committee sent back shows the committee's reason under its
+//  title. Auth rides in the session cookie; only the
+//  X-Active-Role header travels.
 //
 //  Split into (root component last):
 //
-//    getActiveRole       — activeRole from localStorage
 //    codeToNums          — "1.2.3" → [1,2,3]
 //    compareCodes        — numeric-aware code ordering
 //    sortedSubthemes     — a theme's subthemes, code-ordered
@@ -26,34 +27,13 @@
 //    ThemeSubthemeFields — theme/subtheme, editable in edit
 //                          mode
 //    ReviewModal         — review + edit modal (own state)
-//    CommentModal        — the deny / return comment prompt
 //    ManagerReviewPage   — queue state, requests (default)
 // -----------------------------------------------------------
 
-import { useEffect, useId, useState } from "react";
-import { AppSelect } from "@/components/appCommon.jsx";
+import { useEffect, useState } from "react";
+import { AppSelect, CommentModal } from "@/components/appCommon.jsx";
+import { getActiveRole } from "@/components/activeRole.js";
 import "@/components/employee.css";
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// getActiveRole
-// -----------------------------------------------------------
-//
-// The active role for the X-Active-Role header, read fresh
-// per request.
-//
-// Used by:
-//   - ManagerReviewPage (below) — every API call
-// -----------------------------------------------------------
-
-function getActiveRole() {
-  return localStorage.getItem("activeRole") || "";
-}
 
 
 
@@ -207,8 +187,10 @@ function formatDate(iso) {
 //
 // The PATEIKTA queue: one row per activity with Patvirtinti /
 // Atmesti / Grąžinti (all three disabled and showing "..."
-// while that row's PATCH is in flight) and Peržiūrėti.
-// Loading and empty states are early returns.
+// while that row's PATCH is in flight) and Peržiūrėti. An
+// activity the committee sent back carries the committee's
+// reason under its title, so the manager sees why it came
+// back. Loading and empty states are early returns.
 //
 // Used by:
 //   - ManagerReviewPage (below)
@@ -246,7 +228,14 @@ function QueueTable({ items, loading, actingId, onApprove, onDeny, onReturn, onO
               <td>{act.full_name}</td>
               <td> {act.theme_code} — {act.theme_title} </td>
               <td> {act.subtheme_code} — {act.subtheme_title} </td>
-              <td>{act.title}</td>
+              <td>
+                {act.title}
+                {act.committee_comments && (
+                  <div className="employee-muted">
+                    Komisijos komentaras: {act.committee_comments}
+                  </div>
+                )}
+              </td>
               <td>
                 <span className={statusClass(act.status)}>
                   {act.status}
@@ -564,124 +553,6 @@ function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClos
             disabled={savingEdit || !modalEditing}
           >
             {savingEdit ? "Saugoma…" : "Išsaugoti"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// CommentModal
-// -----------------------------------------------------------
-//
-// The deny and return prompts share this one shape: employee
-// + activity meta, a comment textarea (the comment the
-// backend emails to the employee) and Atšaukti / confirm
-// buttons. The comment is required — an empty one raises
-// `emptyMessage` through onMessage and keeps the modal open.
-// Confirming hands the comment to onConfirm; the modal closes
-// on success and stays open (re-enabled) on failure, the page
-// having shown the error.
-//
-// Used by:
-//   - ManagerReviewPage (below) — once as the deny prompt,
-//     once as the return prompt
-// -----------------------------------------------------------
-
-function CommentModal({
-  activity,
-  title,
-  label,
-  placeholder,
-  initialComment,
-  confirmLabel,
-  busyLabel,
-  emptyMessage,
-  onConfirm,
-  onClose,
-  onMessage,
-}) {
-
-  const act = activity;
-
-  // The deny and return prompts are two instances of this
-  // modal, so the textarea's id cannot be a fixed string
-  const commentId = useId();
-
-  const [comment, setComment] = useState(initialComment);
-  const [saving, setSaving] = useState(false);
-
-
-  const handleConfirm = async () => {
-    if (!comment.trim()) {
-      onMessage(emptyMessage);
-      return;
-    }
-    try {
-      setSaving(true);
-      await onConfirm(comment);
-      onClose();
-    } catch {
-      setSaving(false);
-    }
-  };
-
-
-  return (
-    <div className="employee-modal-backdrop" onClick={onClose}>
-      <div
-        className="employee-modal"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="employee-modal-title">{title}</h3>
-        <div className="employee-modal-meta">
-          Darbuotojas: <strong>{act.full_name}</strong>
-          <br />
-          Veikla: <strong>{act.title}</strong>
-        </div>
-
-        {/* The label names the textarea for assistive tech;
-            block, so the class's bottom margin still applies */}
-        <div className="employee-modal-field">
-          <label
-            className="employee-modal-label"
-            htmlFor={commentId}
-            style={{ display: "block" }}
-          >
-            {label}
-          </label>
-          <textarea
-            id={commentId}
-            className="field-textarea"
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder={placeholder}
-          />
-        </div>
-
-        <div className="employee-modal-footer">
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn btn-secondary btn-sm"
-            disabled={saving}
-          >
-            Atšaukti
-          </button>
-          <button
-            type="button"
-            onClick={handleConfirm}
-            className="btn btn-primary btn-sm"
-            disabled={saving}
-          >
-            {saving ? busyLabel : confirmLabel}
           </button>
         </div>
       </div>

@@ -8,8 +8,7 @@
 //  itself. An 'error' event nobody listens to is thrown by
 //  Node's EventEmitter, so the pool needs a listener — or
 //  every such restart takes the whole backend process down
-//  with it. The pool has no listener: a known bug, pinned as
-//  an expected failure until it is fixed.
+//  with it.
 // -----------------------------------------------------------
 
 import { test } from "node:test";
@@ -33,17 +32,13 @@ import { pool } from "../src/db/pool.js";
 // a fresh connection.
 // -----------------------------------------------------------
 
-test(
-  "BUG: an idle client's connection error is logged, not thrown",
-  { todo: "known bug: db/pool.js registers no 'error' listener — pg's idle-client error is thrown and ends the backend process" },
-  (t) => {
-    const logged = [];
-    t.mock.method(console, "error", (...args) => logged.push(args.map(String).join(" ")));
+test("an idle client's connection error is logged, not thrown", (t) => {
+  const logged = [];
+  t.mock.method(console, "error", (...args) => logged.push(args.map(String).join(" ")));
 
-    const err = new Error("terminating connection due to administrator command");
-    assert.doesNotThrow(() => pool.emit("error", err, {}));
+  const err = new Error("terminating connection due to administrator command");
+  assert.doesNotThrow(() => pool.emit("error", err, {}));
 
-    assert.equal(logged.length, 1);
-    assert.match(logged[0], /terminating connection due to administrator command/);
-  }
-);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /terminating connection due to administrator command/);
+});

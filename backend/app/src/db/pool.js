@@ -26,13 +26,24 @@ const { Pool } = pg;
 //
 // Every query in the backend goes through this pool. SSL is
 // off — the connection never leaves the isolated docker
-// network.
+// network. When Postgres ends a connection that sits idle in
+// the pool (the db container restarts, the network drops), pg
+// emits that client's error on the pool itself; an 'error'
+// event nobody hears is thrown and would end the whole
+// process, so it is logged here instead. The pool has already
+// dropped the dead client and the next query opens a fresh
+// connection.
 //
 // Used by:
-//   - every file in routes/, and auth/attachRoles.js
+//   - every file in routes/, auth/attachRoles.js and
+//     db/sessionStore.js (through index.js)
 // -----------------------------------------------------------
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: false
+});
+
+pool.on("error", (err) => {
+  console.error("db pool: idle connection lost:", err.message);
 });

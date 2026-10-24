@@ -48,6 +48,20 @@ const THEMES = [
   ] },
 ];
 
+// The live catalog's shape: two theme families numbered
+// alike, so their subthemes share codes; each theme's
+// subthemes arrive out of code order
+const FAMILIES = [
+  { id: 1, code: "EKSPERTINĖ VEIKLA IR KOMUNIKACIJA 6.1.", title: "Komunikacija", total_sum: "0", pointvalue: null, subthemes: [
+    { id: 11, theme_id: 1, code: "6.1.2.", title: "Renginiai", description: null, cap: null },
+    { id: 12, theme_id: 1, code: "6.1.1.", title: "Straipsniai", description: null, cap: null },
+  ] },
+  { id: 2, code: "STUDIJŲ KOKYBĖ 6.1.", title: "Dėstymas", total_sum: "0", pointvalue: null, subthemes: [
+    { id: 22, theme_id: 2, code: "6.1.2.", title: "Gerosios praktikos", description: null, cap: null },
+    { id: 21, theme_id: 2, code: "6.1.1.", title: "Mentoriavimas", description: null, cap: null },
+  ] },
+];
+
 // An activity with every /api/activities/all column present,
 // overridable
 const activity = (over) => ({
@@ -67,7 +81,7 @@ const activity = (over) => ({
 // (no option at all)
 const ACTIVITIES = [
   activity({ id: 1, employee_eid: "u10001", full_name: "Jonas Jonaitis", title: "Paskaitų ciklas", description: "Dešimt paskaitų", manager_comments: "Tinka" }),
-  activity({ id: 2, employee_eid: "u10002", full_name: "Yvona Ylė", theme_id: 2, theme_code: "6.2.", theme_title: "Mokslas", subtheme_id: 22, subtheme_code: "6.2.10.", subtheme_title: "Straipsniai", title: "Straipsnis", status: "ĮVERTINTA", score: 0.5, committee_comments: "Gerai", created_at: "2025-03-05T09:30:00Z" }),
+  activity({ id: 2, employee_eid: "u10002", full_name: "Yvona Ylė", theme_id: 2, theme_code: "6.2.", theme_title: "Mokslas", subtheme_id: 22, subtheme_code: "6.2.10.", subtheme_title: "Straipsniai", title: "Straipsnis", status: "ĮVERTINTA", score: "0.5", committee_comments: "Gerai", created_at: "2025-03-05T09:30:00Z" }),
   activity({ id: 3, employee_eid: "u10001", full_name: "Jonas Jonaitis", theme_id: 2, theme_code: "6.2.", theme_title: "Mokslas", subtheme_id: 21, subtheme_code: "6.2.9.", subtheme_title: "Konferencijos", title: "Konferencija", status: "ATMESTA", rejection_comment: "Netinka" }),
   activity({ id: 4, employee_eid: "u10004", full_name: null, subtheme_id: 12, subtheme_code: "6.1.2.", subtheme_title: "Seminarai", title: "Seminaras", status: "PATVIRTINTA" }),
   activity({ id: 5, employee_eid: null, full_name: "Be Identifikatoriaus", title: "Be eID", status: "TIKSLINTI" }),
@@ -388,6 +402,36 @@ test("ticking a theme narrows the subtheme options and resets the subtheme filte
   expect(screen.getAllByRole("row")).toHaveLength(3);
   expect(screen.getByText("Straipsnis")).toBeInTheDocument();
   expect(screen.getByText("Konferencija")).toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// two families sharing subtheme codes
+// -----------------------------------------------------------
+//
+// With no theme ticked, the subtheme options keep each
+// theme's subthemes together, in the order the themes come
+// and in code order within each, instead of setting the two
+// families' equal codes side by side.
+// -----------------------------------------------------------
+
+test("the subtheme options keep each theme's subthemes together when two families share codes", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/activities/all", []);
+  onRequest("GET", "/api/themes", FAMILIES);
+  const { user } = renderPage(ManagerExportPage);
+
+  await user.click(within(filterNamed("Potemė")).getByRole("button"));
+  await within(filterNamed("Potemė")).findAllByRole("checkbox");
+  expect(within(filterNamed("Potemė")).getAllByRole("checkbox").map((c) => c.parentElement.textContent)).toEqual([
+    "6.1.1. — Straipsniai", "6.1.2. — Renginiai",
+    "6.1.1. — Mentoriavimas", "6.1.2. — Gerosios praktikos",
+  ]);
 });
 
 

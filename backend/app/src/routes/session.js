@@ -14,7 +14,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { verifySamlSession } from "../auth/verifySamlSession.js";
-import { attachRoles } from "../auth/attachRoles.js";
+import { attachRolesStrict } from "../auth/attachRoles.js";
 import { TBL_USERS } from "../db/tables.js";
 
 
@@ -32,15 +32,16 @@ const router = Router();
 //
 // 401 Neprisijungta without a session; otherwise the user row
 // re-read from the DB by the session's eid, plus the roles
-// (from attachRoles) as { name } objects — the shape App.jsx
-// expects. An eid missing from the users table still answers
-// 200, with user undefined.
+// (from attachRolesStrict) as { name } objects — the shape
+// App.jsx expects. A role lookup that fails is a 500, never
+// a session without roles. An eid missing from the users
+// table still answers 200, with user undefined.
 //
 // Used by:
 //   - App.jsx — the session probe on every load
 // -----------------------------------------------------------
 
-router.get("/check", verifySamlSession, attachRoles, async (req, res) => {
+router.get("/check", verifySamlSession, attachRolesStrict, async (req, res) => {
   try {
     const { rows: [user] } = await pool.query(
       `SELECT eid, email, full_name, created_at, last_login_at FROM ${TBL_USERS} WHERE eid = $1`,

@@ -13,7 +13,6 @@
 //
 //  Split into (root component last):
 //
-//    getActiveRole       — activeRole from localStorage
 //    codeToNums          — "1.2.3" → [1,2,3]
 //    compareCodes        — numeric-aware code ordering
 //    sortedSubthemes     — a theme's subthemes, code-ordered
@@ -29,28 +28,8 @@
 
 import { useEffect, useState } from "react";
 import { AppSelect } from "@/components/appCommon.jsx";
+import { getActiveRole } from "@/components/activeRole.js";
 import "@/components/employee.css";
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// getActiveRole
-// -----------------------------------------------------------
-//
-// The active role for the X-Active-Role header, read fresh
-// per request.
-//
-// Used by:
-//   - ResultsPage (below) — every API call
-// -----------------------------------------------------------
-
-function getActiveRole() {
-  return localStorage.getItem("activeRole") || "";
-}
 
 
 

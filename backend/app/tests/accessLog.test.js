@@ -4,10 +4,9 @@
 //  The access line's shape (path only, never the query), the
 //  file mode (one file per UTC day under the directory,
 //  appended, a new file when the day turns) and the stdout
-//  fallback without a directory — all against fake request /
-//  response objects, no server. A request whose client went
-//  away is never logged: a known bug, pinned as an expected
-//  failure.
+//  fallback without a directory, and one line for a request
+//  whose client went away — all against fake request /
+//  response objects, no server.
 // -----------------------------------------------------------
 
 import { test } from "node:test";
@@ -29,6 +28,19 @@ function exchange({ method = "GET", url = "/api/themes", ip = "10.0.0.5", status
 
 // appendFile is asynchronous — give it a moment
 const flushed = () => new Promise((r) => setTimeout(r, 60));
+
+// The lines of a log file once it holds `count` of them: the
+// appends go one after another, so under the full suite's
+// load the last line can take a while; after two seconds it
+// gives up and returns what is there
+async function linesIn(file, count) {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const lines = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+    if (lines.length >= count || Date.now() > deadline) return lines;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 // The duration is real elapsed time — 0 ms alone, sometimes 1
 // under the full suite's load — so lines written through the
@@ -94,21 +106,64 @@ test("file mode: daily files, appended, rolling with the day", async () => {
       middleware(req, res, () => nextCalled++);
       res.emit("finish");
     }
-    await flushed();
     assert.equal(nextCalled, 2);
-    const first = fs.readFileSync(path.join(dir, "access-2026-09-25.log"), "utf8").trim().split("\n");
+    const first = await linesIn(path.join(dir, "access-2026-09-25.log"), 2);
     assert.deepEqual(first.map((l) => withoutDuration(l.split(" ").slice(2).join(" "))), ["GET /api/themes 200 <n>ms", "GET /api/activities/my 200 <n>ms"]);
 
     clock = new Date("2026-09-26T00:00:01.000Z");
     const { req, res } = exchange({ url: "/api/me", status: 401 });
     middleware(req, res, () => nextCalled++);
     res.emit("finish");
-    await flushed();
-    assert.equal(withoutDuration(fs.readFileSync(path.join(dir, "access-2026-09-26.log"), "utf8").trim()), "2026-09-26T00:00:01.000Z 10.0.0.5 GET /api/me 401 <n>ms");
+    const second = await linesIn(path.join(dir, "access-2026-09-26.log"), 1);
+    assert.deepEqual(second.map(withoutDuration), ["2026-09-26T00:00:01.000Z 10.0.0.5 GET /api/me 401 <n>ms"]);
     assert.deepEqual(fs.readdirSync(dir).sort(), ["access-2026-09-25.log", "access-2026-09-26.log"]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// file mode — one append at a time
+// -----------------------------------------------------------
+//
+// Two appends started together can complete in either order,
+// so the lines of two requests finishing at once could land
+// swapped. A line is handed to the file only once the append
+// before it has completed, so the file keeps the order the
+// requests finished in. appendFile is replaced here, so the
+// test decides when each append completes.
+// -----------------------------------------------------------
+
+test("file mode: a line waits for the append before it, so the file keeps the finish order", async (t) => {
+  const appended = [];
+  const pending = [];
+  t.mock.method(fs, "appendFile", (file, data, cb) => {
+    appended.push(data);
+    pending.push(cb);
+  });
+  const middleware = createAccessLog({ dir: os.tmpdir(), now: () => new Date("2026-09-25T10:00:00.000Z") });
+  const settled = () => new Promise((r) => setImmediate(r));
+
+  for (const url of ["/api/themes", "/api/activities/my"]) {
+    const { req, res } = exchange({ url });
+    middleware(req, res, () => {});
+    res.emit("finish");
+  }
+  await settled();
+  assert.equal(appended.length, 1, "the second line waits for the first append");
+
+  pending.shift()(null);
+  await settled();
+  assert.equal(appended.length, 2);
+  assert.match(appended[0], / GET \/api\/themes 200 /);
+  assert.match(appended[1], / GET \/api\/activities\/my 200 /);
+  pending.shift()(null);
 });
 
 
@@ -150,35 +205,29 @@ test("without LOG_DIR the line is printed to stdout", async () => {
 // a request the client gave up on
 // -----------------------------------------------------------
 //
-// index.js promises every request as one line, but the line
-// is written on "finish" only — and a response whose client
-// went away (a cancelled attachment download, a browser that
-// gave up on a slow query) never finishes, it only closes.
-// Such a request must still leave exactly one line, and a
-// finished one must not leave two. The middleware listens
-// for "finish" alone: a known bug, pinned as an expected
-// failure until it is fixed.
+// index.js promises every request as one line, and a
+// response whose client went away (a cancelled attachment
+// download, a browser that gave up on a slow query) never
+// finishes, it only closes. Such a request still leaves
+// exactly one line, and a finished one, which closes after
+// finishing, does not leave two.
 // -----------------------------------------------------------
 
-test(
-  "BUG: a request whose client went away still leaves one line; a finished one exactly one",
-  { todo: "known bug: createAccessLog listens to res 'finish' only — an aborted request, which only 'close's, is never logged" },
-  async (t) => {
-    const lines = [];
-    t.mock.method(console, "log", (line) => lines.push(line));
-    const middleware = createAccessLog();
+test("a request whose client went away still leaves one line; a finished one exactly one", async (t) => {
+  const lines = [];
+  t.mock.method(console, "log", (line) => lines.push(line));
+  const middleware = createAccessLog();
 
-    const gone = exchange({ url: "/api/activities/10/attachment" });
-    middleware(gone.req, gone.res, () => {});
-    gone.res.emit("close");
+  const gone = exchange({ url: "/api/activities/10/attachment" });
+  middleware(gone.req, gone.res, () => {});
+  gone.res.emit("close");
 
-    const done = exchange({ url: "/api/themes" });
-    middleware(done.req, done.res, () => {});
-    done.res.emit("finish");
-    done.res.emit("close");
+  const done = exchange({ url: "/api/themes" });
+  middleware(done.req, done.res, () => {});
+  done.res.emit("finish");
+  done.res.emit("close");
 
-    await flushed();
-    assert.equal(lines.filter((l) => l.includes(" /api/activities/10/attachment ")).length, 1, "the abandoned request");
-    assert.equal(lines.filter((l) => l.includes(" /api/themes ")).length, 1, "the finished request");
-  }
-);
+  await flushed();
+  assert.equal(lines.filter((l) => l.includes(" /api/activities/10/attachment ")).length, 1, "the abandoned request");
+  assert.equal(lines.filter((l) => l.includes(" /api/themes ")).length, 1, "the finished request");
+});

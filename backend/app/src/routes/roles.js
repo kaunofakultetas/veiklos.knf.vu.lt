@@ -69,7 +69,8 @@ router.get("/", async (_req, res) => {
 //
 // Body: { user_eid, role_name }. Grants the role; re-granting
 // is a no-op (ON CONFLICT DO NOTHING). 404 when the role name
-// is unknown; a DB failure answers the usual 500.
+// is unknown or no user has the eid (the foreign key refuses
+// it); a DB failure answers the usual 500.
 //
 // Used by:
 //   - nothing calls this at the moment — the frontend assigns
@@ -98,6 +99,8 @@ router.post("/assign", async (req, res) => {
 
     res.status(204).end();
   } catch (e) {
+    // An eid with no users row fails user_roles' foreign key
+    if (e.code === "23503") return res.status(404).json({ error: "Klaida: Vartotojas nerastas" });
     console.error("POST /api/roles/assign", e);
     res.status(500).json({ error: "internal error" });
   }

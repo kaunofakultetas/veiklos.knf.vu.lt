@@ -6,8 +6,10 @@
 //  role switcher, user name and "Atsijungti" on the right.
 //
 //  Loads the caller's roles from /api/me on mount and repairs
-//  localStorage("activeRole") when it is missing or no longer
-//  owned (falls back to the first role). Until the answer the
+//  this tab's active role (components/activeRole.js) when it
+//  is missing or no longer owned (falls back to the first
+//  role). The user is named by email when VU SSO released no
+//  name. Until the answer the
 //  role block shows the stored role or "Kraunama…"; an answer
 //  without roles shows "(nėra)". Listens for the window event
 //  "app:roles-updated" — manager/roles.jsx fires it after
@@ -28,6 +30,7 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { clearActiveRole, getActiveRole, setActiveRole as storeActiveRole } from "./activeRole.js";
 import vuLogo from "@/assets/VU.png";
 import "./appHeader.css";
 
@@ -85,9 +88,7 @@ export default function AppHeader({ children }) {
   // roles ("(nėra)")
   const [rolesLoaded, setRolesLoaded] = useState(false);
 
-  const [activeRole, setActiveRole] = useState(
-    () => localStorage.getItem("activeRole") || ""
-  );
+  const [activeRole, setActiveRole] = useState(() => getActiveRole());
   const [fullName, setFullName] = useState("");
 
 
@@ -107,19 +108,19 @@ export default function AppHeader({ children }) {
         );
 
         setRoles(names);
-        setFullName(data.name || "");
+        setFullName(data.name || data.email || "");
         setRolesLoaded(true);
 
-        // Repair a stale/foreign activeRole in localStorage
-        const storedActive = localStorage.getItem("activeRole") || "";
+        // Repair a stale/foreign active role
+        const storedActive = getActiveRole();
 
         if (names.length === 0) {
           setActiveRole("");
-          localStorage.removeItem("activeRole");
+          clearActiveRole();
         } else if (!storedActive || !names.includes(storedActive)) {
           const fallback = names[0];
           setActiveRole(fallback);
-          localStorage.setItem("activeRole", fallback);
+          storeActiveRole(fallback);
         } else {
           setActiveRole(storedActive);
         }
@@ -140,7 +141,7 @@ export default function AppHeader({ children }) {
 
   const onRoleChange = (next) => {
     setActiveRole(next);
-    localStorage.setItem("activeRole", next);
+    storeActiveRole(next);
     navigate(roleToPath(next), { replace: true });
   };
 
@@ -150,7 +151,7 @@ export default function AppHeader({ children }) {
   // (a form POST followed by a 302 to VU would trip the CSP
   // form-action rule in Chromium)
   const signOut = async () => {
-    localStorage.removeItem("activeRole");
+    clearActiveRole();
     let redirect = "/";
     try {
       const res = await fetch("/auth/saml/logout", { method: "POST" });

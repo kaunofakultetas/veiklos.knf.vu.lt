@@ -12,7 +12,6 @@
 //
 //  Split into (root component last):
 //
-//    getActiveRole       — activeRole from localStorage
 //    codeToNums          — "1.2.3" → [1,2,3]
 //    compareCodes        — numeric-aware code ordering
 //    statusClass         — status → pill css class
@@ -22,28 +21,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
+import { getActiveRole } from "@/components/activeRole.js";
 import "@/components/employee.css";
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// getActiveRole
-// -----------------------------------------------------------
-//
-// The active role for the X-Active-Role header, read fresh
-// per request.
-//
-// Used by:
-//   - ExportPage (below)
-// -----------------------------------------------------------
-
-function getActiveRole() {
-  return localStorage.getItem("activeRole") || "";
-}
 
 
 
@@ -81,7 +60,8 @@ function codeToNums(code) {
 // sort would invert them); ties fall back to localeCompare.
 //
 // Used by:
-//   - ExportPage (below) — subtheme option ordering
+//   - ExportPage (below) — the subtheme options within each
+//     theme
 // -----------------------------------------------------------
 
 function compareCodes(a, b) {
@@ -345,14 +325,17 @@ export default function ExportPage() {
 
 
   // The theme tree flattened once; subthemes keep their
-  // themeId so the theme filter can narrow them
+  // themeId so the theme filter can narrow them, and their
+  // theme's place in the tree so the options stay grouped by
+  // theme — two theme families number their subthemes alike
   const allSubthemes = useMemo(() => {
     const list = [];
-    for (const t of themes) {
+    for (const [themeIndex, t] of themes.entries()) {
       for (const s of t.subthemes || []) {
         list.push({
           id: String(s.id),
           themeId: String(t.id),
+          themeIndex,
           code: s.code || "",
           label: `${s.code} — ${s.title}`,
         });
@@ -366,7 +349,7 @@ export default function ExportPage() {
       ? allSubthemes
       : allSubthemes.filter((s) => filterThemeIds.includes(s.themeId));
 
-    return [...filtered].sort((a, b) => compareCodes(a.code, b.code));
+    return [...filtered].sort((a, b) => a.themeIndex - b.themeIndex || compareCodes(a.code, b.code));
   }, [allSubthemes, filterThemeIds]);
 
 
@@ -432,7 +415,9 @@ export default function ExportPage() {
       a.title ?? "",
       a.description ?? "",
       a.status ?? "",
-      a.score ?? "",
+      // A number, not pg's NUMERIC string: Excel's SUM
+      // skips text cells
+      a.score == null ? "" : Number(a.score),
     ]);
 
     const xlsxData = [header, ...rows];

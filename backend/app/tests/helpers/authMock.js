@@ -10,9 +10,9 @@
 //  `identity.user` and answers the real middleware's 401
 //  ("Neprisijungta") when there is none.
 //
-//  attachRoles is mocked too so route tests don't have to
-//  script its three DB queries per request; the REAL
-//  attachRoles is unit-tested in auth.test.js.
+//  attachRoles and attachRolesStrict are mocked too so route
+//  tests don't have to script their three DB queries per
+//  request; the REAL ones are unit-tested in auth.test.js.
 //  requireActiveRoleIn and authorize stay real everywhere —
 //  they are pure.
 // -----------------------------------------------------------
@@ -39,6 +39,13 @@ mock.module(new URL("../../src/auth/verifySamlSession.js", import.meta.url).href
 mock.module(new URL("../../src/auth/attachRoles.js", import.meta.url).href, {
   namedExports: {
     async attachRoles(req, res, next) {
+      req.user.roles = [...(identity.user?.roles || [])];
+      next();
+    },
+    // A caller signed in with rolesUnavailable stands for a
+    // role lookup that failed: the strict loader's 500
+    async attachRolesStrict(req, res, next) {
+      if (identity.user?.rolesUnavailable) return res.status(500).json({ error: "internal error" });
       req.user.roles = [...(identity.user?.roles || [])];
       next();
     },

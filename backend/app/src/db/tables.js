@@ -1,9 +1,10 @@
 // -----------------------------------------------------------
 //  [*] DB — table name constants
 //
-//  Only users/roles/user_roles are named here — activities.js,
-//  themes.js, userRoles.js and auth/attachRoles.js write the
-//  same table names as plain SQL literals instead.
+//  Only users/roles/user_roles and saml_assertions are named
+//  here — activities.js, themes.js, userRoles.js and
+//  auth/attachRoles.js write the same table names as plain
+//  SQL literals instead.
 // -----------------------------------------------------------
 
 
@@ -60,3 +61,23 @@ export const TBL_ROLES = 'roles';
 // -----------------------------------------------------------
 
 export const TBL_USER_ROLES = 'user_roles';
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// TBL_SAML_ASSERTIONS
+// -----------------------------------------------------------
+//
+// The login assertions already used (id, expire): each ID
+// stays until its assertion expires, so the same one cannot
+// sign anyone in twice.
+//
+// Used by:
+//   - routes/saml.js — the /assert replay check
+// -----------------------------------------------------------
+
+export const TBL_SAML_ASSERTIONS = 'saml_assertions';

@@ -17,12 +17,12 @@
 //    codeToNums       — "1.2.3" → [1,2,3]
 //    compareCodes     — numeric-aware code ordering
 //    sortedSubthemes  — a theme's subthemes in code order
-//    getActiveRole    — activeRole from localStorage
 //    NewActivityPage  — the form (default export)
 // -----------------------------------------------------------
 
 import { useEffect, useState, useRef } from "react";
 import { AppSelect, ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, ATTACHMENT_TOO_BIG } from "@/components/appCommon.jsx";
+import { getActiveRole } from "@/components/activeRole.js";
 import "@/components/employee.css";
 
 
@@ -101,28 +101,6 @@ function compareCodes(a, b) {
 
 function sortedSubthemes(theme) {
   return [...(theme?.subthemes || [])].sort((a, b) => compareCodes(a.code, b.code));
-}
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// getActiveRole
-// -----------------------------------------------------------
-//
-// The active role for the X-Active-Role header — read fresh
-// per request rather than kept in state, so a role switch in
-// the header is picked up immediately.
-//
-// Used by:
-//   - NewActivityPage (below) — both API calls
-// -----------------------------------------------------------
-
-function getActiveRole() {
-  return localStorage.getItem("activeRole") || "";
 }
 
 

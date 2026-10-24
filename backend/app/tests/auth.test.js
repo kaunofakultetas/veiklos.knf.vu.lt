@@ -1,10 +1,11 @@
 // -----------------------------------------------------------
 //  [*] Regression — auth middlewares (real implementations)
 //
-//  Unit-tests the four middlewares in src/auth/ with fake
-//  req/res objects — no module mocks here, these are the real
+//  Unit-tests the middlewares in src/auth/ with fake req/res
+//  objects — no module mocks here, these are the real
 //  functions. verifySamlSession is the session gate;
-//  attachRoles runs against the fake pool.
+//  attachRoles and attachRolesStrict run against the fake
+//  pool.
 // -----------------------------------------------------------
 
 import { test, beforeEach } from "node:test";
@@ -12,7 +13,7 @@ import assert from "node:assert/strict";
 import { verifySamlSession } from "../src/auth/verifySamlSession.js";
 import { authorize } from "../src/auth/authorize.js";
 import { requireActiveRoleIn } from "../src/auth/requireActiveRole.js";
-import { attachRoles } from "../src/auth/attachRoles.js";
+import { attachRoles, attachRolesStrict } from "../src/auth/attachRoles.js";
 import { resetDb, onQuery, queryLog } from "./helpers/db.js";
 
 
@@ -468,4 +469,49 @@ test("attachRoles: DB failure fails OPEN — roles [], request continues", async
 
   assert.equal(called, true);
   assert.deepEqual(req.user.roles, []);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// attachRolesStrict
+// -----------------------------------------------------------
+//
+// The loader behind the two endpoints the SPA builds its role
+// state from: it loads exactly like attachRoles, but a lookup
+// that fails is a 500 — an empty list there would read as
+// "this user has no roles" and make the page forget the
+// active role.
+// -----------------------------------------------------------
+
+test("attachRolesStrict: loads role names like attachRoles", async () => {
+  onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 1 }]);
+  onQuery(/INSERT INTO user_roles/, { rowCount: 0 });
+  onQuery(/SELECT r\.name FROM user_roles ur/, [{ name: "Darbuotojas" }, { name: "Vadybininkas" }]);
+
+  const req = { user: { eid: "eid-1" } };
+  let called = false;
+  await attachRolesStrict(req, fakeRes(), () => (called = true));
+
+  assert.equal(called, true);
+  assert.deepEqual(req.user.roles, ["Darbuotojas", "Vadybininkas"]);
+});
+
+test("attachRolesStrict: a DB failure → 500 internal error, the request stops", async () => {
+  onQuery(/SELECT id FROM roles WHERE name = \$1/, () => {
+    throw new Error("db down");
+  });
+
+  const req = { user: { eid: "eid-1" } };
+  const res = fakeRes();
+  let called = false;
+  await attachRolesStrict(req, res, () => (called = true));
+
+  assert.equal(called, false);
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(res.body, { error: "internal error" });
 });

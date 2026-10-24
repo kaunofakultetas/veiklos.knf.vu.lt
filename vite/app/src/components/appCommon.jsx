@@ -22,15 +22,20 @@
 //  that doesn't return the id will select correctly yet
 //  display nothing.
 //
+//  CommentModal is the prompt for a verdict that must carry a
+//  reason — the manager's deny and return, the committee's
+//  return — and refuses to confirm with an empty comment.
+//
 //  Split into (root component last):
 //
 //    ATTACHMENT_ACCEPT    — accept= list for attachment inputs
 //    ATTACHMENT_MAX_BYTES — the 100 MB attachment size limit
 //    ATTACHMENT_TOO_BIG   — the message for an oversized pick
 //    AppSelect            — the shared custom dropdown
+//    CommentModal         — the required-comment prompt
 // -----------------------------------------------------------
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import "@/components/employee.css";
 
 
@@ -251,6 +256,126 @@ export function AppSelect({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// CommentModal
+// -----------------------------------------------------------
+//
+// The prompt behind every verdict that must carry a reason:
+// the employee and the activity named, a comment textarea
+// under its label and Atšaukti / confirm buttons. The
+// comment is required — an empty one raises `emptyMessage`
+// through onMessage and keeps the prompt open — and the
+// backend mails it on with the verdict. Confirming hands the
+// comment to onConfirm; the prompt closes on success and
+// stays open (re-enabled) on failure, the page having shown
+// the error.
+//
+// Used by:
+//   - manager/review.jsx — the deny and the return prompts
+//   - committee/evaluate.jsx — the return to the manager
+// -----------------------------------------------------------
+
+export function CommentModal({
+  activity,
+  title,
+  label,
+  placeholder,
+  initialComment,
+  confirmLabel,
+  busyLabel,
+  emptyMessage,
+  onConfirm,
+  onClose,
+  onMessage,
+}) {
+
+  const act = activity;
+
+  // A page can mount more than one of these prompts, so the
+  // textarea's id cannot be a fixed string
+  const commentId = useId();
+
+  const [comment, setComment] = useState(initialComment);
+  const [saving, setSaving] = useState(false);
+
+
+  const handleConfirm = async () => {
+    if (!comment.trim()) {
+      onMessage(emptyMessage);
+      return;
+    }
+    try {
+      setSaving(true);
+      await onConfirm(comment);
+      onClose();
+    } catch {
+      setSaving(false);
+    }
+  };
+
+
+  return (
+    <div className="employee-modal-backdrop" onClick={onClose}>
+      <div
+        className="employee-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="employee-modal-title">{title}</h3>
+        <div className="employee-modal-meta">
+          Darbuotojas: <strong>{act.full_name}</strong>
+          <br />
+          Veikla: <strong>{act.title}</strong>
+        </div>
+
+        {/* The label names the textarea for assistive tech;
+            block, so the class's bottom margin still
+            applies */}
+        <div className="employee-modal-field">
+          <label
+            className="employee-modal-label"
+            htmlFor={commentId}
+            style={{ display: "block" }}
+          >
+            {label}
+          </label>
+          <textarea
+            id={commentId}
+            className="field-textarea"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder={placeholder}
+          />
+        </div>
+
+        <div className="employee-modal-footer">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn btn-secondary btn-sm"
+            disabled={saving}
+          >
+            Atšaukti
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirm}
+            className="btn btn-primary btn-sm"
+            disabled={saving}
+          >
+            {saving ? busyLabel : confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -3,19 +3,18 @@
 //
 //    GET    /api/themes                       — tree of themes + subthemes
 //    POST   /api/themes                       — create theme        (manager)
-//    PATCH  /api/themes/:id                   — edit code/title     (manager)
 //    POST   /api/themes/:themeId/subthemes    — create subtheme     (manager)
-//    PATCH  /api/themes/subthemes/:id         — edit subtheme       (manager)
 //    PATCH  /api/themes/subthemes/:id/cap     — set subtheme limit  (committee)
 //    PATCH  /api/themes/:id/total-sum         — set theme budget    (committee)
 //    PATCH  /api/themes/:id/pointvalue        — set point value     (committee)
 //    DELETE /api/themes/:id                   — delete theme + subthemes (manager)
 //    DELETE /api/themes/subthemes/:id         — delete subtheme     (manager)
 //
-//  The theme/subtheme catalog. Managers own the structure
-//  (codes, titles); the committee owns the numbers (caps,
-//  budgets, point values). Reading is open to any signed-in
-//  user regardless of active role.
+//  The theme/subtheme catalog. Managers own the structure —
+//  codes and titles, created and deleted, never edited in
+//  place; the committee owns the numbers (caps, budgets,
+//  point values). Reading is open to any signed-in user
+//  regardless of active role.
 //
 //  The /subthemes/... paths live under this router (not a
 //  separate /api/subthemes) — they never collide with the
@@ -33,15 +32,27 @@ import { pool } from "../db/pool.js";
 import { verifySamlSession } from "../auth/verifySamlSession.js";
 import { attachRoles } from "../auth/attachRoles.js";
 import { requireActiveRoleIn } from "../auth/requireActiveRole.js";
+import { numberOf, requireIdParam } from "../utils/input.js";
+import { compareCodes } from "../utils/codes.js";
 
 
 const router = Router();
 
-// Guard chains: reading only needs a valid JWT; writes are
-// split by active role between manager and committee
+// Guard chains: reading only needs a signed-in session;
+// writes are split by active role between manager and
+// committee
 const readGuard = [verifySamlSession, attachRoles];
 const manageGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Vadybininkas"])];
 const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Komisijos narys"])];
+
+// An :id or :themeId that cannot be an int4 id is a 404
+// before any query
+const requireId = requireIdParam("id");
+const requireThemeId = requireIdParam("themeId");
+
+// A theme delete's refusal while activities use the theme —
+// the up-front check and the foreign key give the same one
+const MSG_THEME_IN_USE = "Klaida: negalima ištrinti temos, nes yra su ja susietų veiklų.";
 
 
 
@@ -54,8 +65,10 @@ const committeeGuard = [verifySamlSession, attachRoles, requireActiveRoleIn(["Ko
 // -----------------------------------------------------------
 //
 // The whole catalog as a tree: each theme (with total_sum and
-// pointvalue) carrying its subthemes (with cap), both sorted
-// by code. Assembled in JS from two flat queries.
+// pointvalue) carrying its subthemes (with cap), both in
+// reading order (utils/codes.js — SQL's text order would put
+// section ten before section two). Assembled in JS from two
+// flat queries.
 //
 // Used by:
 //   - employee/newActivity.jsx, employee/myActivities.jsx,
@@ -77,6 +90,8 @@ router.get("/", readGuard, async (_req, res) => {
          FROM subthemes
         ORDER BY code ASC`
     );
+    th.rows.sort((a, b) => compareCodes(a.code, b.code));
+    st.rows.sort((a, b) => compareCodes(a.code, b.code));
     const map = new Map(th.rows.map(t => [t.id, { ...t, subthemes: [] }]));
     for (const s of st.rows) map.get(s.theme_id)?.subthemes.push(s);
     res.json(Array.from(map.values()));
@@ -97,7 +112,8 @@ router.get("/", readGuard, async (_req, res) => {
 // -----------------------------------------------------------
 //
 // Body: { code, title }, both trimmed. 409 on a duplicate
-// code (unique violation 23505).
+// code (unique violation 23505). Both must be text that is
+// not blank once trimmed; anything else is the 400.
 //
 // Used by:
 //   - manager/themes.jsx — "Pridėti temą" form
@@ -106,13 +122,15 @@ router.get("/", readGuard, async (_req, res) => {
 router.post("/", manageGuard, async (req, res) => {
   try {
     const { code, title } = req.body || {};
-    if (!code || !title) return res.status(400).json({ error: "Klaida: Temos kodas ir pavadinimas yra privalomi" });
+    const cleanCode = typeof code === "string" ? code.trim() : "";
+    const cleanTitle = typeof title === "string" ? title.trim() : "";
+    if (!cleanCode || !cleanTitle) return res.status(400).json({ error: "Klaida: Temos kodas ir pavadinimas yra privalomi" });
 
     const q = await pool.query(
       `INSERT INTO themes (code, title)
        VALUES ($1, $2)
        RETURNING id, code, title`,
-      [code.trim(), title.trim()]
+      [cleanCode, cleanTitle]
     );
     res.status(201).json(q.rows[0]);
   } catch (e) {
@@ -129,128 +147,38 @@ router.post("/", manageGuard, async (req, res) => {
 
 
 // -----------------------------------------------------------
-// PATCH /api/themes/:id
-// -----------------------------------------------------------
-//
-// Partial update of code/title — other body keys are silently
-// ignored, an update with none of the allowed keys is a 400.
-//
-// Used by:
-//   - nothing calls this at the moment — the themes admin
-//     page only creates and deletes
-// -----------------------------------------------------------
-
-router.patch("/:id", manageGuard, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const allowed = ["code", "title"];
-    const sets = [];
-    const vals = [];
-    let i = 1;
-    for (const [k, v] of Object.entries(req.body || {})) {
-      if (!allowed.includes(k)) continue;
-      sets.push(`${k} = $${i++}`);
-      vals.push(v);
-    }
-    if (!sets.length) return res.status(400).json({ error: "Klaida: nėra atnaujinamų laukų" });
-    vals.push(id);
-
-    const q = await pool.query(
-      `UPDATE themes SET ${sets.join(", ")}
-        WHERE id = $${i}
-        RETURNING id, code, title`,
-      vals
-    );
-    if (q.rowCount === 0) return res.status(404).json({ error: "Klaida: nerasta" });
-    res.json(q.rows[0]);
-  } catch (e) {
-    if (e.code === "23505") return res.status(409).json({ error: "Klaida: tema su tokiu kodu jau egzistuoja" });
-    console.error("PATCH /api/themes/:id", e);
-    res.status(500).json({ error: "internal error" });
-  }
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
 // POST /api/themes/:themeId/subthemes
 // -----------------------------------------------------------
 //
 // Body: { code, title, description? }. 409 on a duplicate
-// subtheme code.
+// subtheme code. Code and title must be text that is not
+// blank once trimmed. A theme that no longer exists (deleted
+// in another tab) is a 404 — the foreign key refuses the
+// INSERT.
 //
 // Used by:
 //   - manager/themes.jsx — "Pridėti potemę" form
 // -----------------------------------------------------------
 
-router.post("/:themeId/subthemes", manageGuard, async (req, res) => {
+router.post("/:themeId/subthemes", manageGuard, requireThemeId, async (req, res) => {
   try {
     const { themeId } = req.params;
     const { code, title, description } = req.body || {};
-    if (!code || !title) return res.status(400).json({ error: "Klaida: Potemės kodas ir pavadinimas yra privalomi" });
+    const cleanCode = typeof code === "string" ? code.trim() : "";
+    const cleanTitle = typeof title === "string" ? title.trim() : "";
+    if (!cleanCode || !cleanTitle) return res.status(400).json({ error: "Klaida: Potemės kodas ir pavadinimas yra privalomi" });
 
     const q = await pool.query(
       `INSERT INTO subthemes (theme_id, code, title, description)
        VALUES ($1, $2, $3, $4)
        RETURNING id, theme_id, code, title, description, cap`,
-      [themeId, code.trim(), title.trim(), description ?? null]
+      [themeId, cleanCode, cleanTitle, description ?? null]
     );
     res.status(201).json(q.rows[0]);
   } catch (e) {
     if (e.code === "23505") return res.status(409).json({ error: "Klaida: potemė su tokiu kodu jau egzistuoja" });
+    if (e.code === "23503") return res.status(404).json({ error: "Klaida: tema nerasta" });
     console.error("POST /api/themes/:themeId/subthemes", e);
-    res.status(500).json({ error: "internal error" });
-  }
-});
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// PATCH /api/themes/subthemes/:id
-// -----------------------------------------------------------
-//
-// Partial update of a subtheme's code/title/description —
-// same shape as the theme PATCH above.
-//
-// Used by:
-//   - nothing calls this at the moment — the themes admin
-//     page only creates and deletes
-// -----------------------------------------------------------
-
-router.patch("/subthemes/:id", manageGuard, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const allowed = ["code", "title", "description"];
-    const sets = [];
-    const vals = [];
-    let i = 1;
-    for (const [k, v] of Object.entries(req.body || {})) {
-      if (!allowed.includes(k)) continue;
-      sets.push(`${k} = $${i++}`);
-      vals.push(v);
-    }
-    if (!sets.length) return res.status(400).json({ error: "Klaida: nėra atnaujinamų laukų" });
-    vals.push(id);
-
-    const q = await pool.query(
-      `UPDATE subthemes SET ${sets.join(", ")}
-        WHERE id = $${i}
-        RETURNING id, theme_id, code, title, description, cap`,
-      vals
-    );
-    if (q.rowCount === 0) return res.status(404).json({ error: "Klaida: nerasta" });
-    res.json(q.rows[0]);
-  } catch (e) {
-    if (e.code === "23505") return res.status(409).json({ error: "Klaida: Potemės kodas jau egzistuoja" });
-    console.error("PATCH /api/themes/subthemes/:id", e);
     res.status(500).json({ error: "internal error" });
   }
 });
@@ -266,14 +194,15 @@ router.patch("/subthemes/:id", manageGuard, async (req, res) => {
 // -----------------------------------------------------------
 //
 // Body: { cap } — the committee's score limit for one
-// subtheme; must be a non-negative number. Zero is allowed
+// subtheme; must be a non-negative number, sent as a number
+// or a decimal written as text (numberOf). Zero is allowed
 // and means "no points can count here".
 //
 // Used by:
 //   - committee/limits.jsx — the cap column
 // -----------------------------------------------------------
 
-router.patch("/subthemes/:id/cap", committeeGuard, async (req, res) => {
+router.patch("/subthemes/:id/cap", committeeGuard, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const { cap } = req.body || {};
@@ -282,8 +211,8 @@ router.patch("/subthemes/:id/cap", committeeGuard, async (req, res) => {
       return res.status(400).json({ error: "Klaida: Limito reikšmė privaloma." });
     }
 
-    const num = Number(cap);
-    if (!Number.isFinite(num) || num < 0) {
+    const num = numberOf(cap);
+    if (num === null || num < 0) {
       return res.status(400).json({ error: "Klaida: Limitas turi būti teigiamas skaičius." });
     }
 
@@ -324,7 +253,7 @@ router.patch("/subthemes/:id/cap", committeeGuard, async (req, res) => {
 //   - committee/limits.jsx — the total-sum column
 // -----------------------------------------------------------
 
-router.patch("/:id/total-sum", committeeGuard, async (req, res) => {
+router.patch("/:id/total-sum", committeeGuard, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const { total_sum } = req.body || {};
@@ -333,8 +262,8 @@ router.patch("/:id/total-sum", committeeGuard, async (req, res) => {
       return res.status(400).json({ error: "Klaida: Bendra sumos reikšmė privaloma." });
     }
 
-    const num = Number(total_sum);
-    if (!Number.isFinite(num) || num < 0) {
+    const num = numberOf(total_sum);
+    if (num === null || num < 0) {
       return res.status(400).json({ error: "Klaida: Bendra suma turi būti teigiamas skaičius." });
     }
 
@@ -376,7 +305,7 @@ router.patch("/:id/total-sum", committeeGuard, async (req, res) => {
 //   - committee/calculate.jsx — "Išsaugoti balo vertę"
 // -----------------------------------------------------------
 
-router.patch("/:id/pointvalue", committeeGuard, async (req, res) => {
+router.patch("/:id/pointvalue", committeeGuard, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const { pointvalue } = req.body || {};
@@ -385,8 +314,8 @@ router.patch("/:id/pointvalue", committeeGuard, async (req, res) => {
       return res.status(400).json({ error: "Klaida: Vieno balo reikšmė privaloma." });
     }
 
-    const num = Number(pointvalue);
-    if (!Number.isFinite(num) || num < 0) {
+    const num = numberOf(pointvalue);
+    if (num === null || num < 0) {
       return res.status(400).json({ error: "Klaida: Vieno balo reikšmė turi būti teigiamas skaičius." });
     }
 
@@ -421,17 +350,19 @@ router.patch("/:id/pointvalue", committeeGuard, async (req, res) => {
 //
 // Deletes a theme and its subthemes. A theme with activities
 // still attached refuses with a 409 up front — friendlier
-// than the FK error the delete would otherwise hit. The
-// cascade is manual (subthemes, then the theme) but runs in
-// one transaction on a dedicated client: an unknown theme
-// rolls the subtheme delete back and answers 404, any error
+// than the FK error the delete would otherwise hit — and an
+// activity created between that check and the delete meets
+// the foreign key, answered with the same 409. The cascade is
+// manual (subthemes, then the theme) but runs in one
+// transaction on a dedicated client: an unknown theme rolls
+// the subtheme delete back and answers 404, any other error
 // rolls back and answers 500.
 //
 // Used by:
 //   - manager/themes.jsx — theme delete button
 // -----------------------------------------------------------
 
-router.delete("/:id", manageGuard, async (req, res) => {
+router.delete("/:id", manageGuard, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const linked = await pool.query(
@@ -439,7 +370,7 @@ router.delete("/:id", manageGuard, async (req, res) => {
       [id]
     );
     if (linked.rowCount > 0)
-      return res.status(409).json({ error: "Klaida: negalima ištrinti temos, nes yra su ja susietų veiklų." });
+      return res.status(409).json({ error: MSG_THEME_IN_USE });
 
     const client = await pool.connect();
     try {
@@ -459,6 +390,9 @@ router.delete("/:id", manageGuard, async (req, res) => {
       client.release();
     }
   } catch (e) {
+    // An activity created after the check above meets the
+    // foreign key instead — the same refusal
+    if (e.code === "23503") return res.status(409).json({ error: MSG_THEME_IN_USE });
     console.error("DELETE /api/themes/:id", e);
     res.status(500).json({ error: "internal error" });
   }
@@ -474,20 +408,25 @@ router.delete("/:id", manageGuard, async (req, res) => {
 // DELETE /api/themes/subthemes/:id
 // -----------------------------------------------------------
 //
-// Deletes one subtheme; fails on the FK if activities still
-// reference it.
+// Deletes one subtheme. One that activities still reference
+// is refused by the foreign key, and that refusal is answered
+// as a 409 that says why, worded like the theme delete's
+// up-front check.
 //
 // Used by:
 //   - manager/themes.jsx — subtheme delete button
 // -----------------------------------------------------------
 
-router.delete("/subthemes/:id", manageGuard, async (req, res) => {
+router.delete("/subthemes/:id", manageGuard, requireId, async (req, res) => {
   try {
     const { id } = req.params;
     const del = await pool.query(`DELETE FROM subthemes WHERE id = $1`, [id]);
     if (del.rowCount === 0) return res.status(404).json({ error: "not found" });
     res.sendStatus(204);
   } catch (e) {
+    if (e.code === "23503") {
+      return res.status(409).json({ error: "Klaida: negalima ištrinti potemės, nes yra su ja susietų veiklų." });
+    }
     console.error("DELETE /api/themes/subthemes/:id", e);
     res.status(500).json({ error: "internal error" });
   }
