@@ -34,7 +34,8 @@ const KEY = "activeRole";
 // Used by:
 //   - App.jsx — HomeGate, Profile, RoleRoute
 //   - components/appHeader.jsx — the role switcher
-//   - every page's requests — the X-Active-Role header
+//   - components/api.js — the X-Active-Role header every
+//     request carries
 // -----------------------------------------------------------
 
 export function getActiveRole() {

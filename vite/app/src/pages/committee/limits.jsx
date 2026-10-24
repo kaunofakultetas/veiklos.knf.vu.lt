@@ -20,7 +20,7 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
-import { getActiveRole } from "@/components/activeRole.js";
+import { apiJson, apiSend } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -63,18 +63,7 @@ export default function LimitsPage() {
       setLoading(true);
       setMsg("");
       try {
-        const activeRole = getActiveRole();
-
-        const res = await fetch("/api/themes", {
-          headers: {
-            "X-Active-Role": activeRole,
-          },
-        });
-
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || `${res.status} ${res.statusText}`);
-        }
+        const data = await apiJson("/api/themes");
 
         // A non-list 200 body (an object, null, a string)
         // would blow up the forEach below and both tables
@@ -131,22 +120,7 @@ export default function LimitsPage() {
     try {
       setSavingId(subId);
       setMsg("");
-
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/themes/subthemes/${subId}/cap`, {
-        method: "PATCH",
-        headers: {
-          "X-Active-Role": activeRole,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ cap: num }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || `${res.status} ${res.statusText}`);
-      }
+      await apiSend(`/api/themes/subthemes/${subId}/cap`, { method: "PATCH", json: { cap: num } });
 
       setThemes((prev) =>
         prev.map((t) => ({
@@ -197,22 +171,7 @@ export default function LimitsPage() {
     try {
       setSavingThemeId(themeId);
       setMsg("");
-
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/themes/${themeId}/total-sum`, {
-        method: "PATCH",
-        headers: {
-          "X-Active-Role": activeRole,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ total_sum: num }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || `${res.status} ${res.statusText}`);
-      }
+      await apiSend(`/api/themes/${themeId}/total-sum`, { method: "PATCH", json: { total_sum: num } });
 
       setThemes((prev) =>
         prev.map((t) => (t.id === themeId ? { ...t, total_sum: num } : t))

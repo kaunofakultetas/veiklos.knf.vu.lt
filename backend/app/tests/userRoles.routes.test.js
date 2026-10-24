@@ -58,7 +58,7 @@ beforeEach(() => {
 // -----------------------------------------------------------
 
 function stubUserLookup(row) {
-  onQuery(/SELECT eid AS id.* FROM users WHERE LOWER\(email\) = LOWER\(\$1\)/, row ? [row] : []);
+  onQuery(/SELECT eid AS id.* FROM users WHERE email = \$1/, row ? [row] : []);
 }
 
 
@@ -204,10 +204,11 @@ test("GET: unknown user → 404", async () => {
 // -----------------------------------------------------------
 //
 // User row + catalog + owned roles combined into one body,
-// from two queries: the user lookup (trim-in-JS / LOWER-in-
-// SQL split pinned via the bound param) and one LEFT JOIN
-// keyed by the user's eid that yields catalog and ownership
-// together.
+// from two queries: the user lookup (the typed address
+// trimmed and lowercased in JS, then compared plainly — the
+// spelling sign-in stores — pinned via the bound param) and
+// one LEFT JOIN keyed by the user's eid that yields catalog
+// and ownership together.
 // -----------------------------------------------------------
 
 test("GET: returns { user, roles, allRoles } from the lookup + one catalog query", async () => {
@@ -229,8 +230,8 @@ test("GET: returns { user, roles, allRoles } from the lookup + one catalog query
 
   assert.equal(queryLog().length, 2);
   const [lookup, catalog] = queryLog();
-  assert.ok(lookup.sql.includes("LOWER(email) = LOWER($1)"));
-  assert.deepEqual(lookup.params, ["A@X"]);
+  assert.ok(lookup.sql.includes("WHERE email = $1"));
+  assert.deepEqual(lookup.params, ["a@x"]);
   assert.deepEqual(catalog.params, ["eid-1"]);
 });
 
@@ -302,17 +303,18 @@ test("assign: unknown user → 404, unknown role → 400", async () => {
 // -----------------------------------------------------------
 //
 // ON CONFLICT insert by (eid, role id) with the params
-// pinned; 204. Email and role arrive trimmed at the lookups.
+// pinned; 204. Email and role arrive trimmed at the lookups,
+// the email lowercased too.
 // -----------------------------------------------------------
 
-test("assign: grants by (eid, role id) with ON CONFLICT → 204; inputs trimmed", async () => {
+test("assign: grants by (eid, role id) with ON CONFLICT → 204; inputs trimmed, the email lowercased", async () => {
   manager();
   stubUserLookup({ id: "eid-1" });
   onQuery(/SELECT id FROM roles WHERE name = \$1/, [{ id: 2 }]);
   onQuery(/INSERT INTO user_roles/, { rowCount: 1 });
 
   const res = await api(app.base, "POST", "/api/user-roles/assign", {
-    body: { email: " a@x ", role: " Vadybininkas " },
+    body: { email: " A@X ", role: " Vadybininkas " },
   });
   assert.equal(res.status, 204);
 

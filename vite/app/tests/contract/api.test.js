@@ -2,14 +2,14 @@
 //  [*] Regression — the frontend's API contract itself
 //
 //  tests/contract/api.js is hand-kept, so its own consistency
-//  is pinned here: every fetch in src/ (literal or template
-//  URL, through fetch or the themes page's apiFetch) names an
-//  endpoint the contract lists, and the contract lists no
-//  endpoint the SPA never calls; every entry has a
-//  well-formed response descriptor and, for POST/PATCH, a
-//  request descriptor (or an explicit { empty: true }). The
-//  page tests then enforce the contract on every request and
-//  answer (helpers/contractGuard.js).
+//  is pinned here: every backend call in src/ (literal or
+//  template URL, through fetch or the shared client in
+//  components/api.js) names an endpoint the contract lists,
+//  and the contract lists no endpoint the SPA never calls;
+//  every entry has a well-formed response descriptor and,
+//  for POST/PATCH, a request descriptor (or an explicit
+//  { empty: true }). The page tests then enforce the contract
+//  on every request and answer (helpers/contractGuard.js).
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -21,6 +21,10 @@ import { API } from "./api.js";
 
 // vitest runs from the app root, so src/ is right there
 const SRC = path.resolve(process.cwd(), "src");
+
+// The shared client, whose helpers hand their path parameter
+// on to one another
+const CLIENT = path.join(SRC, "components", "api.js");
 
 
 
@@ -104,15 +108,78 @@ function callSpan(src, openIndex) {
 
 
 // -----------------------------------------------------------
+// pairsOf
+// -----------------------------------------------------------
+//
+// The [path, options] pairs written out in one apiJsonAll
+// call, each from its "[" to the matching "]" — none when the
+// call is handed a list it did not spell out.
+//
+// Used by:
+//   - spaEndpoints (below)
+// -----------------------------------------------------------
+
+function pairsOf(span) {
+  const pairs = [];
+  let i = span.indexOf("[") + 1;
+  if (i === 0) return pairs;
+  for (;;) {
+    while (/[\s,]/.test(span[i])) i++;
+    if (span[i] !== "[") return pairs;
+    const pair = callSpan(span, i);
+    pairs.push(pair);
+    i += pair.length;
+  }
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// endpointOf
+// -----------------------------------------------------------
+//
+// "METHOD /path" for one call, from its opening bracket to
+// the matching close: the first argument must be a string or
+// template literal (a ${…} segment becomes ":id", the query
+// string is dropped), the method is the `method: "…"` inside
+// that span, GET otherwise. Nothing when the first argument
+// is not a literal.
+//
+// Used by:
+//   - spaEndpoints (below)
+// -----------------------------------------------------------
+
+function endpointOf(span) {
+  const rest = span.slice(1).replace(/^\s+/, "");
+  const q = rest[0];
+  let url;
+  if (q === '"' || q === "'") url = rest.slice(1, rest.indexOf(q, 1));
+  else if (q === "`") url = rest.slice(1, rest.indexOf("`", 1)).replace(/\$\{[^}]*\}/g, ":id");
+  else return null;
+  const method = (/method:\s*["'`](\w+)["'`]/.exec(span)?.[1] ?? "GET").toUpperCase();
+  return `${method} ${url.split("?")[0]}`;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // spaEndpoints
 // -----------------------------------------------------------
 //
-// "METHOD /path" for every fetch(...) / apiFetch(...) in src/
-// whose URL is a string or template literal (a ${…} segment
-// becomes ":id", the query string is dropped); the method
-// from `method: "…"` inside that call's own parentheses, GET
-// otherwise. Commented lines and the apiFetch wrapper's own
-// delegation are skipped; a variable URL is an error, so a
+// Every endpoint src/ calls: each fetch(...), each call of
+// the shared client's apiJson, apiSend and request, and each
+// pair spelled out in an apiJsonAll call, read by endpointOf.
+// Commented lines and the helpers' own definitions are
+// skipped, and so is the client handing its path parameter
+// on; any other URL that is not a literal is an error, so a
 // new indirection must be added here deliberately.
 //
 // Used by:
@@ -123,22 +190,20 @@ function spaEndpoints() {
   const found = new Set();
   for (const file of walk(SRC)) {
     const src = fs.readFileSync(file, "utf8");
-    const re = /\b(fetch|apiFetch)\(/g;
+    const re = /\b(fetch|request|apiJson|apiSend|apiJsonAll)\(/g;
     let m;
     while ((m = re.exec(src))) {
       const lineStart = src.lastIndexOf("\n", m.index) + 1;
       if (src.slice(lineStart, m.index).trim().startsWith("//")) continue;
       if (/function\s+$/.test(src.slice(Math.max(0, m.index - 20), m.index))) continue;
       const span = callSpan(src, m.index + m[0].length - 1);
-      const rest = span.slice(1).replace(/^\s+/, "");
-      const q = rest[0];
-      let url;
-      if (q === '"' || q === "'") url = rest.slice(1, rest.indexOf(q, 1));
-      else if (q === "`") url = rest.slice(1, rest.indexOf("`", 1)).replace(/\$\{[^}]*\}/g, ":id");
-      else if (m[1] === "fetch" && /^url\b/.test(rest) && /function\s+apiFetch\(url\b/.test(src)) continue;
-      else throw new Error(`${path.relative(SRC, file)}: ${m[1]}() with a non-literal URL`);
-      const method = (/method:\s*["'`](\w+)["'`]/.exec(span)?.[1] ?? "GET").toUpperCase();
-      found.add(`${method} ${url.split("?")[0]}`);
+      const calls = m[1] === "apiJsonAll" ? pairsOf(span) : [span];
+      if (!calls.length) throw new Error(`${path.relative(SRC, file)}: apiJsonAll() with a list it does not spell out`);
+      for (const call of calls) {
+        const endpoint = endpointOf(call);
+        if (endpoint) found.add(endpoint);
+        else if (file !== CLIENT || !/^\(\s*path\b/.test(call)) throw new Error(`${path.relative(SRC, file)}: ${m[1]}() with a non-literal URL`);
+      }
     }
   }
   return found;

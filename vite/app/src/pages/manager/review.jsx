@@ -32,7 +32,7 @@
 
 import { useEffect, useState } from "react";
 import { AppSelect, CommentModal } from "@/components/appCommon.jsx";
-import { getActiveRole } from "@/components/activeRole.js";
+import { apiJson, apiJsonAll, downloadAttachment, reasonOf } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -301,7 +301,8 @@ function QueueTable({ items, loading, actingId, onApprove, onDeny, onReturn, onO
 // pair as text in view mode, two AppSelects in edit mode.
 // Picking a new theme preselects its first (code-ordered)
 // subtheme, or "" when it has none — then the subtheme field
-// shows "(potemių nėra)".
+// shows "(potemių nėra)". The pickers are named by the
+// captions through labelledBy.
 //
 // Used by:
 //   - ReviewModal (below)
@@ -332,13 +333,14 @@ function ThemeSubthemeFields({
   return (
     <>
       <div className="employee-modal-field">
-        <div className="employee-modal-label">Tema</div>
+        <div className="employee-modal-label" id="review-theme-label">Tema</div>
         {!editing ? (
           <div className="employee-modal-value">
             {act.theme_code} — {act.theme_title}
           </div>
         ) : (
           <AppSelect
+            labelledBy="review-theme-label"
             value={themeId}
             onChange={handleThemeChange}
             options={themes}
@@ -349,7 +351,7 @@ function ThemeSubthemeFields({
       </div>
 
       <div className="employee-modal-field">
-        <div className="employee-modal-label">Potemė</div>
+        <div className="employee-modal-label" id="review-subtheme-label">Potemė</div>
         {!editing ? (
           <div className="employee-modal-value">
             {act.subtheme_code} — {act.subtheme_title}
@@ -358,6 +360,7 @@ function ThemeSubthemeFields({
           <div className="employee-modal-muted">(potemių nėra)</div>
         ) : (
           <AppSelect
+            labelledBy="review-subtheme-label"
             value={subthemeId}
             onChange={(val) => onSubthemeChange(val)}
             options={subthemes}
@@ -604,38 +607,11 @@ export default function ManagerReviewPage() {
       setLoading(true);
       setMsg("");
       try {
-        const activeRole = getActiveRole();
-
-        const [actsRes, themesRes] = await Promise.all([
-          fetch("/api/activities/pending", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-          fetch("/api/themes", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-        ]);
-
-        const actsData = await actsRes.json().catch(() => ({}));
-        if (!actsRes.ok) {
-          throw new Error(
-            actsData?.error || `${actsRes.status} ${actsRes.statusText}`
-          );
-        }
+        const [actsData, themesData] = await apiJsonAll([["/api/activities/pending"], ["/api/themes"]]);
 
         // A 200 whose body is not the queue array would throw
         // on render (items.map) and blank the page — refuse it
         if (!Array.isArray(actsData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
-
-        const themesData = await themesRes.json().catch(() => ({}));
-        if (!themesRes.ok) {
-          throw new Error(
-            themesData?.error || `${themesRes.status} ${themesRes.statusText}`
-          );
-        }
 
         // The same for the theme tree (themes.find in the modal)
         if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
@@ -653,44 +629,16 @@ export default function ManagerReviewPage() {
   }, []);
 
 
-  // Attachment download via fetch + blob so the X-Active-Role
-  // header can travel along
+  // The attachment through the API client, which sends the
+  // X-Active-Role header a plain link could not
   const handleDownload = async (act) => {
     if (!act.attachment_path) return;
     try {
       setDownloadingId(act.id);
       setMsg("");
-
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/activities/${act.id}/attachment`, {
-        headers: {
-          "X-Active-Role": activeRole,
-        },
-      });
-
-      if (!res.ok) {
-        let errText = `${res.status} ${res.statusText}`;
-        try {
-          const data = await res.json();
-          if (data?.error) errText = data.error;
-        } catch {
-          // ignore — keep the HTTP status text
-        }
-        throw new Error(errText);
-      }
-
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = act.attachment_original_name || "priedas";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      await downloadAttachment(act);
     } catch (e) {
-      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${e.message}`);
+      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
     } finally {
       setDownloadingId(null);
     }
@@ -703,21 +651,7 @@ export default function ManagerReviewPage() {
     setActingId(id);
     setMsg("");
     try {
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/activities/${id}/manager`, {
-        method: "PATCH",
-        headers: {
-          "X-Active-Role": activeRole,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || `${res.status} ${res.statusText}`);
-      }
+      const data = await apiJson(`/api/activities/${id}/manager`, { method: "PATCH", json: body });
 
       if (data.status !== "PATEIKTA") {
         setItems((prev) => prev.filter((x) => x.id !== id));
@@ -727,7 +661,7 @@ export default function ManagerReviewPage() {
 
       return data;
     } catch (e) {
-      setMsg(`Klaida: ${e.message}`);
+      setMsg(`Klaida: ${reasonOf(e)}`);
       throw e;
     } finally {
       setActingId(null);

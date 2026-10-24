@@ -100,7 +100,7 @@ async function fakeQuery(sql, params = []) {
   if (/FROM user_roles ur JOIN roles r/.test(flat)) {
     return { rows: [{ name: "Darbuotojas" }, { name: "Vadybininkas" }], rowCount: 2 };
   }
-  if (/FROM users WHERE LOWER\(email\) = LOWER\(\$1\)/.test(flat)) {
+  if (/FROM users WHERE email = \$1/.test(flat)) {
     return { rows: [{ id: ATTACKER_EID, email: "atakuotojas@knf.vu.lt", full_name: "A" }], rowCount: 1 };
   }
   return { rows: [], rowCount: 1 };
@@ -140,6 +140,7 @@ class MemoryStore extends session.Store {
       samlUser: {
         nameID: "nid-manager",
         sessionIndex: "sidx-manager",
+        signedInAt: Date.now(),
         attributes: {
           eID: "eid-vadybininkas",
           "urn:oid:0.9.2342.19200300.100.1.3": "vadybininkas@knf.vu.lt",

@@ -209,3 +209,32 @@ test("AppSelect: a mousedown outside shuts the list; the document listener exist
   unmount();
   expect(mousedowns(removed)).toHaveLength(2);
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// AppSelect — named by a caption
+// -----------------------------------------------------------
+//
+// With labelledBy the trigger is named by the caption it
+// points to, then the value it shows — the listbox-button
+// pattern, so a screen reader says which field and what is
+// in it — whatever element the caption is. The chevron is
+// decoration and stays out of the name.
+// -----------------------------------------------------------
+
+test("AppSelect: labelledBy names the trigger by the caption, then the value", () => {
+  render(
+    <>
+      <div id="theme-caption">Tema</div>
+      <AppSelect labelledBy="theme-caption" value={2} onChange={() => {}} options={OPTIONS} getLabel={label} placeholder="Pasirinkite temą" />
+    </>
+  );
+  const trigger = screen.getByLabelText("Tema");
+  expect(trigger).toHaveClass("app-select-trigger");
+  expect(trigger).toHaveAccessibleName("Tema 6.2. — Mokslas");
+});

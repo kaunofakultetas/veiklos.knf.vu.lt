@@ -9,9 +9,9 @@
 //  this tab's active role (components/activeRole.js) when it
 //  is missing or no longer owned (falls back to the first
 //  role). The user is named by email when VU SSO released no
-//  name. Until the answer the
-//  role block shows the stored role or "Kraunama…"; an answer
-//  without roles shows "(nėra)". Listens for the window event
+//  name. Until the answer the role block shows the stored
+//  role or "Kraunama…"; an answer without roles shows
+//  "(nėra)". Listens for the window event
 //  "app:roles-updated" — manager/roles.jsx fires it after
 //  editing roles so the switcher refreshes without a reload.
 //
@@ -31,6 +31,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { clearActiveRole, getActiveRole, setActiveRole as storeActiveRole } from "./activeRole.js";
+import { apiJson } from "./api.js";
 import vuLogo from "@/assets/VU.png";
 import "./appHeader.css";
 
@@ -97,13 +98,16 @@ export default function AppHeader({ children }) {
   useEffect(() => {
     const loadMe = async () => {
       try {
-        const res = await fetch("/api/me");
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await apiJson("/api/me", { activeRole: false });
+
+        // /api/me always sends a roles list; a 200 without
+        // one (a page some proxy served) is no answer, and
+        // must not clear the stored role as "no roles" would
+        if (!Array.isArray(data?.roles)) return;
 
         // /api/me sends plain strings, but tolerate {name}
         // objects too ( /api/session/init's shape )
-        const names = (data.roles || []).map((r) =>
+        const names = data.roles.map((r) =>
           typeof r === "string" ? r : r.name
         );
 
@@ -125,8 +129,9 @@ export default function AppHeader({ children }) {
           setActiveRole(storedActive);
         }
       } catch {
-        // ignore — the bar just shows "Kraunama…" until a
-        // later refresh succeeds
+        // refused or unreachable: the bar keeps what it shows
+        // (the stored role, else "Kraunama…") until a later
+        // refresh succeeds
       }
     };
     loadMe();
@@ -187,16 +192,18 @@ export default function AppHeader({ children }) {
       </div>
 
       <div className="app-header-right">
-        {/* Role block: a switcher when several roles, plain
-            text when one; with no role the text is "Kraunama…"
-            until /api/me answers and "(nėra)" after */}
+        {/* Role block: a switcher named by the caption beside
+            it when several roles, plain text when one; with
+            no role the text is "Kraunama…" until /api/me
+            answers and "(nėra)" after */}
         <div className="app-role-block">
-          <span className="app-role-label">Prisijungta su role:</span>
+          <span className="app-role-label" id="app-role-label">Prisijungta su role:</span>
           {roles.length > 1 ? (
             <select
               value={activeRole}
               onChange={(e) => onRoleChange(e.target.value)}
               className="app-role-select"
+              aria-labelledby="app-role-label"
             >
               {roles.map((r) => (
                 <option key={r} value={r}>{r}</option>

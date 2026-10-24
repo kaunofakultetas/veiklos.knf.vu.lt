@@ -9,7 +9,9 @@
 //  real one. The session middleware sets it and logout clears
 //  it, and a __Host- cookie is only cleared by a Set-Cookie
 //  with the same attributes, which is why both read them
-//  from here.
+//  from here. A sign-in lasts SESSION_MAX_AGE_MS: the cookie
+//  in the browser and the session gate on the server count
+//  the same eight hours from the sign-in.
 // -----------------------------------------------------------
 
 
@@ -56,3 +58,26 @@ export const SESSION_COOKIE = "__Host-veiklos.sid";
 // -----------------------------------------------------------
 
 export const SESSION_COOKIE_OPTIONS = { path: "/", secure: true, httpOnly: true, sameSite: "lax" };
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// SESSION_MAX_AGE_MS
+// -----------------------------------------------------------
+//
+// How long a sign-in lasts: eight hours from /assert, never
+// extended by use. The cookie's lifetime in the browser, and
+// the hard limit verifySamlSession holds every session to on
+// the server — where the stored session's own expiry moves
+// with each request, so it cannot be the limit.
+//
+// Used by:
+//   - index.js — the session cookie's maxAge
+//   - auth/verifySamlSession.js — the server-side limit
+// -----------------------------------------------------------
+
+export const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;

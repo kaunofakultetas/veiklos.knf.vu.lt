@@ -355,7 +355,8 @@ test("return: the modal, Atšaukti, an empty comment refused, PATCH { action: 'r
 test("a refused verdict shows Klaida: <reason>, keeps the row and keeps the comment modal open", async () => {
   scriptQueue();
   onRequest("PATCH", "/api/activities/1/manager", { status: 500, body: { error: "DB nepasiekiama" } });
-  onRequest("PATCH", "/api/activities/2/manager", { status: 400, body: { error: "Netinkama būsena" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("PATCH", "/api/activities/2/manager", { status: 400, body: { error: "Klaida: Netinkama būsena" } });
   const { user } = renderPage(ManagerReviewPage);
   await screen.findByText("Paskaitų ciklas");
 
@@ -464,17 +465,17 @@ test("edit: the pickers, first-subtheme preselect in code order, PATCH with nume
   expect(within(m).getByRole("button", { name: "Atšaukti redagavimą" })).toBeInTheDocument();
   expect(within(m).getByRole("button", { name: "Išsaugoti" })).toBeEnabled();
   expect(within(m).getByRole("textbox")).not.toHaveAttribute("readonly");
-  expect(within(m).getByRole("button", { name: /^6\.1\. — Studijų kokybė/ })).toBeInTheDocument();
-  expect(within(m).getByRole("button", { name: /^6\.1\.1\. — Paskaitos/ })).toBeInTheDocument();
+  expect(within(m).getByRole("button", { name: "Tema 6.1. — Studijų kokybė" })).toBeInTheDocument();
+  expect(within(m).getByRole("button", { name: "Potemė 6.1.1. — Paskaitos" })).toBeInTheDocument();
 
-  await user.click(within(m).getByRole("button", { name: /^6\.1\. — Studijų kokybė/ }));
+  await user.click(within(m).getByRole("button", { name: "Tema 6.1. — Studijų kokybė" }));
   await user.click(within(m).getByRole("button", { name: "6.3. — Tuščia" }));
   expect(within(m).getByText("(potemių nėra)")).toBeInTheDocument();
 
-  await user.click(within(m).getByRole("button", { name: /^6\.3\. — Tuščia/ }));
+  await user.click(within(m).getByRole("button", { name: "Tema 6.3. — Tuščia" }));
   await user.click(within(m).getByRole("button", { name: "6.2. — Mokslas" }));
   expect(within(m).queryByText("(potemių nėra)")).not.toBeInTheDocument();
-  await user.click(within(m).getByRole("button", { name: /^6\.2\.2\. — Konferencijos/ }));
+  await user.click(within(m).getByRole("button", { name: "Potemė 6.2.2. — Konferencijos" }));
   expect(within(m).getAllByRole("button", { name: /^6\.2\.\d+\. — [^▾]+$/ }).map((b) => b.textContent))
     .toEqual(["6.2.2. — Konferencijos", "6.2.10. — Publikacijos"]);
   await user.click(within(m).getByRole("button", { name: "6.2.10. — Publikacijos" }));
@@ -558,7 +559,8 @@ test("attachment: GET /api/activities/:id/attachment with the header; a refused 
   const ACT2_WITH_FILE = { ...ACT2, attachment_path: "uploads/2.pdf", attachment_original_name: null };
   scriptQueue([ACT1, ACT2_WITH_FILE]);
   onRequest("GET", "/api/activities/1/attachment", "%PDF-1.4");
-  onRequest("GET", "/api/activities/2/attachment", { status: 404, body: { error: "Priedas nerastas" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("GET", "/api/activities/2/attachment", { status: 404, body: { error: "Klaida: Priedas nerastas" } });
   const createObjectURL = vi.fn(() => "blob:fake");
   const revokeObjectURL = vi.fn();
   Object.defineProperty(window.URL, "createObjectURL", { value: createObjectURL, configurable: true, writable: true });
@@ -656,4 +658,31 @@ test("a row the committee sent back shows the committee's reason under its title
 
   expect(within(rowNamed("Paskaitų ciklas")).getByText("Komisijos komentaras: Patikslinkite temą")).toBeInTheDocument();
   expect(within(rowNamed("Konferencijos pranešimas")).queryByText(/Komisijos komentaras/)).not.toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// accessible names
+// -----------------------------------------------------------
+//
+// In edit mode the review modal's theme and subtheme pickers
+// are named by their captions.
+// -----------------------------------------------------------
+
+test("the review modal's theme and subtheme pickers are named by their captions", async () => {
+  scriptQueue();
+  const { user } = renderPage(ManagerReviewPage);
+  await screen.findByText("Paskaitų ciklas");
+  await user.click(within(rowNamed("Paskaitų ciklas")).getByRole("button", { name: "Peržiūrėti" }));
+  const m = modal("Pateiktos veiklos peržiūra");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+
+  const [themeTrigger, subthemeTrigger] = m.querySelectorAll(".app-select-trigger");
+  expect(within(m).getByLabelText("Tema")).toBe(themeTrigger);
+  expect(within(m).getByLabelText("Potemė")).toBe(subthemeTrigger);
 });

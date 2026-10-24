@@ -98,10 +98,14 @@ export const ATTACHMENT_TOO_BIG = "Klaida: priedas per didelis (iki 100 MB)";
 //
 // Props: value, onChange(newValue), options, getLabel(o),
 // getValue(o) = String(o.id), placeholder, disabled, id (goes
-// on the trigger, for a page <label htmlFor>), label (the
-// list's aria-label, defaults to the placeholder). The list
-// shuts after a pick, on Escape and on a mousedown outside;
-// a pick or Escape hands focus back to the trigger.
+// on the trigger, for a page <label htmlFor>), labelledBy
+// (the id of the caption the page shows above it: the trigger
+// is then named by that caption followed by the value it
+// shows, the listbox-button pattern), label (the list's
+// aria-label, defaults to the placeholder). The chevron is
+// decoration, hidden from assistive tech. The list shuts
+// after a pick, on Escape and on a mousedown outside; a pick
+// or Escape hands focus back to the trigger.
 //
 // Used by:
 //   - employee/newActivity.jsx, employee/myActivities.jsx —
@@ -113,6 +117,7 @@ export const ATTACHMENT_TOO_BIG = "Klaida: priedas per didelis (iki 100 MB)";
 
 export function AppSelect({
   id,
+  labelledBy,
   label,
   value,
   onChange,
@@ -126,6 +131,11 @@ export function AppSelect({
   const rootRef = useRef(null);
   const triggerRef = useRef(null);
   const optionRefs = useRef([]);
+
+  // The trigger names itself after the caption, so it needs
+  // an id of its own even when the page gives none
+  const ownId = useId();
+  const triggerId = id || ownId;
 
   // The option to focus once the list has rendered: an arrow
   // key on a shut trigger opens the list first, and the option
@@ -226,18 +236,19 @@ export function AppSelect({
     >
       <button
         type="button"
-        id={id}
+        id={triggerId}
         ref={triggerRef}
         className="field-select app-select-trigger"
         onClick={toggleOpen}
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={expanded}
+        aria-labelledby={labelledBy ? `${labelledBy} ${triggerId}` : undefined}
       >
         <span className="app-select-label">
           {selected ? getLabel(selected) : placeholder}
         </span>
-        <span className="app-select-chevron">▾</span>
+        <span className="app-select-chevron" aria-hidden="true">▾</span>
       </button>
 
       {expanded && (

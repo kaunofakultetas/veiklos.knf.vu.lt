@@ -268,7 +268,8 @@ test("the attachment button fetches with the role header and downloads under the
 
 test("a refused download shows the prefixed reason and re-enables the button", async () => {
   const { createObjectURL, clicked } = stubDownloads();
-  onRequest("GET", "/api/activities/101/attachment", { status: 404, body: { error: "Priedas nerastas" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("GET", "/api/activities/101/attachment", { status: 404, body: { error: "Klaida: Priedas nerastas" } });
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -330,7 +331,8 @@ test("a declined delete prompt sends nothing and keeps the row", async () => {
 });
 
 test("a refused DELETE shows the prefixed reason and keeps the row", async () => {
-  onRequest("DELETE", "/api/activities/101", { status: 403, body: { error: "Veiklos trinti nebegalima" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("DELETE", "/api/activities/101", { status: 403, body: { error: "Klaida: Veiklos trinti nebegalima" } });
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -395,7 +397,8 @@ test("a declined resubmit prompt sends nothing", async () => {
 });
 
 test("a refused resubmit shows the prefixed reason and keeps the row as it was", async () => {
-  onRequest("POST", "/api/activities/102/resubmit", { status: 409, body: { error: "Veikla jau pateikta" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("POST", "/api/activities/102/resubmit", { status: 409, body: { error: "Klaida: Veikla jau pateikta" } });
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -712,7 +715,8 @@ test("an oversized pick in edit mode is refused and cleared; a valid pick replac
 // -----------------------------------------------------------
 
 test("a refused PATCH shows the prefixed reason and keeps the draft in edit mode", async () => {
-  onRequest("PATCH", "/api/activities/102", { status: 400, body: { error: "Neteisinga potemė" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("PATCH", "/api/activities/102", { status: 400, body: { error: "Klaida: Neteisinga potemė" } });
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -773,4 +777,28 @@ test("a non-array activities or theme reply is refused with a clear message inst
   expect(screen.queryByText("Kursas A")).not.toBeInTheDocument();
   expect(screen.queryAllByRole("row")).toEqual([]);
   expect(requestLog()).toHaveLength(2);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// accessible names
+// -----------------------------------------------------------
+//
+// In the edit dialog the theme and subtheme pickers are named
+// by their captions, like the dialog's other fields.
+// -----------------------------------------------------------
+
+test("the edit dialog's theme and subtheme pickers are named by their captions", async () => {
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+  await openModalFor(user, "Kursas A");
+  await user.click(within(modal()).getByRole("button", { name: "Redaguoti" }));
+
+  expect(within(modal()).getByLabelText("Tema")).toBe(selects()[0]);
+  expect(within(modal()).getByLabelText("Potemė")).toBe(selects()[1]);
 });

@@ -70,7 +70,9 @@ const bodyRows = (table) => within(table).getAllByRole("row").slice(1).map((r) =
 const themeSelect = () => screen.getByLabelText("Pasirinkite temą");
 const calcButton = () => screen.getByRole("button", { name: /Skaičiuoti|Saugoma…/ });
 const resultBox = (container) => container.querySelector(".calc-result-box");
-const pickerTrigger = () => screen.getByRole("button", { name: /\(nepasirinktas\)|Ona Onaitė|petras@vu.lt|^e3/ });
+// The employee picker's trigger, named by its caption and
+// then by whoever it shows
+const pickerTrigger = () => screen.getByRole("button", { name: /^Pasirinkite darbuotoją / });
 const pickerOptions = (container) => Array.from(container.querySelectorAll(".app-select-option")).map((b) => b.textContent);
 
 
@@ -513,4 +515,26 @@ test("a 200 whose body is not a list — any of the three — is refused with on
   expect(bodyRows(tableWith("Bendra balų suma"))).toHaveLength(3);
   expect(requestsTo("GET", "/api/activities/evaluated/employee/e1/subthemes")).toHaveLength(1);
   expect(requestLog()).toHaveLength(7);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// accessible names
+// -----------------------------------------------------------
+//
+// The two read-only sums and the employee picker are named by
+// the captions above them.
+// -----------------------------------------------------------
+
+test("the read-only sums and the employee picker are named by their captions", async () => {
+  await renderLoaded();
+
+  expect(screen.getByLabelText("Temai nustatyta bendra suma:")).toHaveAttribute("readonly");
+  expect(screen.getByLabelText("Bendra temos balų suma:")).toHaveAttribute("readonly");
+  expect(screen.getByLabelText("Pasirinkite darbuotoją")).toHaveClass("app-select-trigger");
 });

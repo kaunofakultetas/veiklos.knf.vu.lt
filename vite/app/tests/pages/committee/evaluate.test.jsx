@@ -446,7 +446,8 @@ test("a refused score shows Klaida: and keeps the modal in scoring mode", async 
 test("a refused return shows Klaida:, keeps the row and keeps the reason prompt open", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/activities/committee", QUEUE);
-  onRequest("PATCH", "/api/activities/1/committee", { status: 409, body: { error: "Veikla jau įvertinta" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("PATCH", "/api/activities/1/committee", { status: 409, body: { error: "Klaida: Veikla jau įvertinta" } });
   const { user } = renderPage(EvaluatePage);
   await screen.findByText("Seminaras apie X");
 
@@ -504,7 +505,8 @@ test("the attachment button fetches the file with X-Active-Role", async () => {
 test("a refused download is reported with the Klaida: prefix", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/activities/committee", QUEUE);
-  onRequest("GET", "/api/activities/1/attachment", { status: 404, body: { error: "Priedas nerastas" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("GET", "/api/activities/1/attachment", { status: 404, body: { error: "Klaida: Priedas nerastas" } });
   const { user } = renderPage(EvaluatePage);
   await screen.findByText("Seminaras apie X");
 
@@ -544,4 +546,24 @@ test("a 200 whose body is not a list is refused with one message, not a blank pa
   expect(screen.queryAllByRole("row")).toHaveLength(0);
   expect(screen.queryByText("Kraunama…")).not.toBeInTheDocument();
   expect(requestLog()).toHaveLength(1);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// accessible names
+// -----------------------------------------------------------
+//
+// In scoring mode the derived score is named by its caption,
+// like the comments box and the people count.
+// -----------------------------------------------------------
+
+test("scoring: the derived score is named by its caption", async () => {
+  await openScoring(ACT1);
+
+  expect(within(modal()).getByLabelText("Įvertinimas")).toHaveAttribute("readonly");
 });

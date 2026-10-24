@@ -53,6 +53,7 @@ import xpath from "xpath";
 import { SignedXml } from "xml-crypto";
 import { readFileSync } from "node:fs";
 import { X509Certificate } from "node:crypto";
+import { emailOf } from "./input.js";
 
 
 
@@ -256,9 +257,11 @@ function firstValue(value) {
 // name } from a raw samlify attribute bag (see
 // ATTRIBUTE_ALIASES). eid is VU's eID — the person's
 // permanent code, NOT the NameID, which VU SSO issues as
-// transient. Missing
-// fields come back null; name is firstName + lastName with
-// missing parts dropped, null when both are missing.
+// transient. email comes in the stored spelling (emailOf),
+// so the IdP's capitals can never split one person into two
+// accounts. Missing fields come back null; name is
+// firstName + lastName with missing parts dropped, null when
+// both are missing.
 //
 // Used by:
 //   - routes/saml.js — POST /assert (the user upsert)
@@ -283,7 +286,7 @@ export function mapSamlAttributes(attrs) {
   const lastName = pick("lastName");
   const name = [firstName, lastName].filter(Boolean).join(" ") || null;
 
-  return { eid: pick("eid"), email: pick("email"), firstName, lastName, name };
+  return { eid: pick("eid"), email: emailOf(pick("email")), firstName, lastName, name };
 }
 
 

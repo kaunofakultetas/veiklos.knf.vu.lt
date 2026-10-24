@@ -286,11 +286,13 @@ export default function createSamlRouter({ setup }) {
                 // for single logout — ours, and the IdP's, which
                 // finds this session by them; the RAW attributes
                 // feed verifySamlSession, which maps them the
-                // same way
+                // same way and counts the eight-hour limit from
+                // signedInAt
                 req.session.samlUser = {
                     nameID:       extract.nameID,
                     sessionIndex: sessionIndexOf(extract.sessionIndex),
                     attributes,
+                    signedInAt:   Date.now(),
                 };
 
                 req.session.save((err) => {

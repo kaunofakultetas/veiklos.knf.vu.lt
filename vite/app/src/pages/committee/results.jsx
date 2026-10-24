@@ -28,7 +28,7 @@
 
 import { useEffect, useState } from "react";
 import { AppSelect } from "@/components/appCommon.jsx";
-import { getActiveRole } from "@/components/activeRole.js";
+import { apiJson, apiJsonAll, downloadAttachment, reasonOf } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -272,7 +272,8 @@ function ResultsTable({ items, loading, onOpen }) {
 // pair as text in view mode, two AppSelects while re-scoring.
 // Picking a new theme preselects its first (code-ordered)
 // subtheme, or "" when it has none — then the subtheme field
-// shows "(potemių nėra)".
+// shows "(potemių nėra)". The pickers are named by the
+// captions through labelledBy.
 //
 // Used by:
 //   - ResultsModal (below)
@@ -303,13 +304,14 @@ function ThemeSubthemeFields({
   return (
     <>
       <div className="employee-modal-field">
-        <div className="employee-modal-label">Tema</div>
+        <div className="employee-modal-label" id="results-theme-label">Tema</div>
         {!editing ? (
           <div className="employee-modal-value">
             {act.theme_code} — {act.theme_title}
           </div>
         ) : (
           <AppSelect
+            labelledBy="results-theme-label"
             value={themeId}
             onChange={handleThemeChange}
             options={themes}
@@ -320,7 +322,7 @@ function ThemeSubthemeFields({
       </div>
 
       <div className="employee-modal-field">
-        <div className="employee-modal-label">Potemė</div>
+        <div className="employee-modal-label" id="results-subtheme-label">Potemė</div>
         {!editing ? (
           <div className="employee-modal-value">
             {act.subtheme_code} — {act.subtheme_title}
@@ -329,6 +331,7 @@ function ThemeSubthemeFields({
           <div className="employee-modal-muted">(potemių nėra)</div>
         ) : (
           <AppSelect
+            labelledBy="results-subtheme-label"
             value={subthemeId}
             onChange={(val) => onSubthemeChange(val)}
             options={subthemes}
@@ -535,7 +538,7 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
       setEditingScore(false);
       onMessage("Įvertinimas atnaujintas.");
     } catch (e) {
-      onMessage(`Klaida: ${e.message}`);
+      onMessage(`Klaida: ${reasonOf(e)}`);
     } finally {
       setSavingScore(false);
     }
@@ -624,9 +627,10 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
             </div>
           )}
 
-          {/* The derived score — never typed directly */}
+          {/* The derived score — never typed directly; the
+              read-only input is named by the caption */}
           <div className="employee-modal-field">
-            <div className="employee-modal-label">
+            <div className="employee-modal-label" id="results-score-label">
               Įvertinimas
             </div>
             {!editingScore ? (
@@ -639,6 +643,7 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
               </div>
             ) : (
               <input
+                aria-labelledby="results-score-label"
                 className="field-input"
                 type="number"
                 value={editScore}
@@ -715,30 +720,7 @@ export default function ResultsPage() {
       setLoading(true);
       setMsg("");
       try {
-        const activeRole = getActiveRole();
-
-        const [actsRes, themesRes] = await Promise.all([
-          fetch("/api/activities/evaluated", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-          fetch("/api/themes", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-        ]);
-
-        const actsData = await actsRes.json().catch(() => ({}));
-        if (!actsRes.ok) {
-          throw new Error(actsData?.error || `${actsRes.status} ${actsRes.statusText}`);
-        }
-
-        const themesData = await themesRes.json().catch(() => ({}));
-        if (!themesRes.ok) {
-          throw new Error(themesData?.error || `${themesRes.status} ${themesRes.statusText}`);
-        }
+        const [actsData, themesData] = await apiJsonAll([["/api/activities/evaluated"], ["/api/themes"]]);
 
         // A non-list 200 body (an object, null, a string)
         // would blow up the rows or the modal's theme lookup
@@ -758,44 +740,16 @@ export default function ResultsPage() {
   }, []);
 
 
-  // Attachment download via fetch + blob so the X-Active-Role
-  // header can travel along
+  // The attachment through the API client, which sends the
+  // X-Active-Role header a plain link could not
   const handleDownload = async (act) => {
     if (!act.attachment_path) return;
     try {
       setDownloadingId(act.id);
       setMsg("");
-
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/activities/${act.id}/attachment`, {
-        headers: {
-          "X-Active-Role": activeRole,
-        },
-      });
-
-      if (!res.ok) {
-        let errText = `${res.status} ${res.statusText}`;
-        try {
-          const data = await res.json();
-          if (data?.error) errText = data.error;
-        } catch {
-          // ignore JSON
-        }
-        throw new Error(errText);
-      }
-
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = act.attachment_original_name || "priedas";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      await downloadAttachment(act);
     } catch (e) {
-      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${e.message}`);
+      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
     } finally {
       setDownloadingId(null);
     }
@@ -813,24 +767,7 @@ export default function ResultsPage() {
   // modal in place (re-scoring keeps ĮVERTINTA). Throws on a
   // failed response — the modal shows the message
   const handleRescore = async (body) => {
-    const activeRole = getActiveRole();
-
-    const res = await fetch(
-      `/api/activities/${selectedActivity.id}/committee`,
-      {
-        method: "PATCH",
-        headers: {
-          "X-Active-Role": activeRole,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      }
-    );
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data?.error || `${res.status} ${res.statusText}`);
-    }
+    const data = await apiJson(`/api/activities/${selectedActivity.id}/committee`, { method: "PATCH", json: body });
 
     setItems((prev) => prev.map((x) => (x.id === data.id ? data : x)));
     setSelectedActivity(data);

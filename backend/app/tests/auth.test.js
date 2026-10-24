@@ -88,6 +88,43 @@ test("verifySamlSession: no session → 401 Neprisijungta", async () => {
 
 
 // -----------------------------------------------------------
+// verifySamlSession — eight hours from the sign-in
+// -----------------------------------------------------------
+//
+// A sign-in lasts eight hours from the moment /assert stored
+// it, however busy the session has been since: an older one
+// — or one that carries no sign-in time at all — is the same
+// Neprisijungta 401, and the session itself is destroyed, so
+// a copied cookie stops working on the server too. Just
+// inside the limit, the request goes through.
+// -----------------------------------------------------------
+
+test("verifySamlSession: a sign-in older than 8 hours, or one without its time → 401, session destroyed", async () => {
+  const attributes = { eID: "112546", mail: "u1@vu.lt" };
+  for (const signedInAt of [Date.now() - 8 * 60 * 60 * 1000 - 1000, undefined, "yesterday"]) {
+    let destroyed = false;
+    const req = { session: { samlUser: { attributes, signedInAt }, destroy: (cb) => { destroyed = true; cb?.(); } } };
+    const res = fakeRes();
+    verifySamlSession(req, res, () => res.resolveNext());
+    assert.equal(await res.done, "json", String(signedInAt));
+    assert.equal(res.statusCode, 401);
+    assert.deepEqual(res.body, { error: "Neprisijungta" });
+    assert.equal(destroyed, true, "the session is destroyed");
+  }
+
+  const req = { session: { samlUser: { attributes, signedInAt: Date.now() - 8 * 60 * 60 * 1000 + 60_000 } } };
+  let called = false;
+  verifySamlSession(req, fakeRes(), () => (called = true));
+  assert.equal(called, true, "a minute inside the limit still passes");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // verifySamlSession — attribute mapping
 // -----------------------------------------------------------
 //
@@ -99,6 +136,7 @@ test("verifySamlSession: maps VU SSO attributes onto req.user", async () => {
   const req = {
     session: {
       samlUser: {
+        signedInAt: Date.now(),
         attributes: {
           eID: "112546",
           "urn:oid:0.9.2342.19200300.100.1.3": ["jonas.jonaitis@knf.vu.lt"],
@@ -134,6 +172,7 @@ test("verifySamlSession: friendly names and partial names", async () => {
   const req = {
     session: {
       samlUser: {
+        signedInAt: Date.now(),
         attributes: { eid: "300003", mail: "kitas@vu.lt", sn: "Kazlauskaitė" },
       },
     },
@@ -142,6 +181,36 @@ test("verifySamlSession: friendly names and partial names", async () => {
   verifySamlSession(req, fakeRes(), () => {});
 
   assert.deepEqual(req.user, { eid: "300003", email: "kitas@vu.lt", name: "Kazlauskaitė" });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// verifySamlSession — the email's spelling
+// -----------------------------------------------------------
+//
+// req.user carries the address in the spelling the users
+// table holds — lowercase — even for a session whose stored
+// attributes spell it with capitals.
+// -----------------------------------------------------------
+
+test("verifySamlSession: req.user's email is lowercase, as stored", async () => {
+  const req = {
+    session: {
+      samlUser: {
+        signedInAt: Date.now(),
+        attributes: { eID: "112546", mail: "Ona.Onaite@VU.lt" },
+      },
+    },
+  };
+
+  verifySamlSession(req, fakeRes(), () => {});
+
+  assert.equal(req.user.email, "ona.onaite@vu.lt");
 });
 
 

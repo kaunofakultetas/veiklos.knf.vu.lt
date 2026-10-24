@@ -13,7 +13,6 @@
 //
 //  Split into (root component last):
 //
-//    apiFetch        — fetch with auth headers + error text
 //    codeToNums      — "1.2.3" → [1,2,3]
 //    compareCodes    — numeric-aware code ordering
 //    sortedSubthemes — a theme's subthemes, code-ordered
@@ -27,53 +26,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppSelect } from "@/components/appCommon.jsx";
-import { getActiveRole } from "@/components/activeRole.js";
+import { apiJson, apiSend } from "@/components/api.js";
 import "@/components/employee.css";
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// apiFetch
-// -----------------------------------------------------------
-//
-// fetch wrapper: the X-Active-Role header always, Content-Type
-// application/json only when there is a body, the backend's
-// error text (or the HTTP status) as the thrown message.
-// Resolves with the parsed JSON, or null for bodiless
-// responses (204 on delete).
-//
-// Used by:
-//   - ThemesPage (below) — load and every mutation
-// -----------------------------------------------------------
-
-async function apiFetch(url, init = {}) {
-  const activeRole = getActiveRole();
-
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      ...(init.headers || {}),
-      "X-Active-Role": activeRole,
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
-    },
-  });
-
-  let data = null;
-  try {
-    data = await res.json();
-  } catch {
-    // ignore — 204s have no body
-  }
-
-  if (!res.ok) {
-    throw new Error(data?.error || `${res.status} ${res.statusText}`);
-  }
-  return data;
-}
 
 
 
@@ -249,14 +203,15 @@ function NewThemeForm({ onSubmit }) {
 // -----------------------------------------------------------
 //
 // "Nauja potemė": parent theme (an AppSelect over the loaded
-// themes, its value owned by the page since load() seeds it),
-// code, title and description. Code and title are required;
-// the description is marked required in the UI but checked
-// as required by neither this form nor the backend. Hands
-// { code, title, description } plus a reset callback (the
-// three own fields, not the parent) to onSubmit, and keeps
-// the button disabled until onSubmit's promise settles, so a
-// double-click cannot create the subtheme twice.
+// themes, named by its caption, its value owned by the page
+// since load() seeds it), code, title and description. Code
+// and title are required; the description is marked required
+// in the UI but checked as required by neither this form nor
+// the backend. Hands { code, title, description } plus a
+// reset callback (the three own fields, not the parent) to
+// onSubmit, and keeps the button disabled until onSubmit's
+// promise settles, so a double-click cannot create the
+// subtheme twice.
 //
 // Used by:
 //   - ThemesPage (below) — left panel
@@ -291,10 +246,11 @@ function NewSubthemeForm({ themes, parentId, onParentChange, onSubmit }) {
       <h2 className="section-title">Nauja potemė</h2>
 
       <div className="field">
-        <label className="field-label">
+        <label className="field-label" id="subtheme-parent-label">
           Priklauso temai <span className="required-mark">*</span>
         </label>
         <AppSelect
+          labelledBy="subtheme-parent-label"
           value={parentId}
           onChange={(val) => onParentChange(val)}
           options={themes}
@@ -531,8 +487,9 @@ function ThemeTree({ themes, loading, expanded, onToggle, onDeleteTheme, onDelet
 //
 // Owns the tree, the expanded map, the subtheme form's parent
 // theme (load() seeds it with the first theme) and one status
-// line shared by both forms; every mutation goes through
-// apiFetch and reloads the whole tree.
+// line shared by both forms, which shows the backend's text
+// for a refused request; every successful mutation reloads
+// the whole tree.
 //
 // Used by:
 //   - App.jsx — route /manager/themes
@@ -556,7 +513,7 @@ export default function ThemesPage() {
     setLoading(true);
     setMsg("");
     try {
-      const data = await apiFetch("/api/themes");
+      const data = await apiJson("/api/themes");
 
       // A 200 whose body is not the tree array would throw on
       // render (themes.map) and blank the page — refuse it
@@ -600,9 +557,9 @@ export default function ThemesPage() {
   const createTheme = async ({ code, title }, reset) => {
     setMsg("");
     try {
-      await apiFetch("/api/themes", {
+      await apiSend("/api/themes", {
         method: "POST",
-        body: JSON.stringify({ code, title }),
+        json: { code, title },
       });
       reset();
       await load();
@@ -616,13 +573,13 @@ export default function ThemesPage() {
   const createSubtheme = async ({ code, title, description }, reset) => {
     setMsg("");
     try {
-      await apiFetch(`/api/themes/${subParent}/subthemes`, {
+      await apiSend(`/api/themes/${subParent}/subthemes`, {
         method: "POST",
-        body: JSON.stringify({
+        json: {
           code,
           title,
           description: description || null,
-        }),
+        },
       });
       reset();
       await load();
@@ -644,7 +601,7 @@ export default function ThemesPage() {
     if (!window.confirm("Ar tikrai pašalinti šią temą ir visas potemes?"))
       return;
     try {
-      await apiFetch(`/api/themes/${id}`, { method: "DELETE" });
+      await apiSend(`/api/themes/${id}`, { method: "DELETE" });
       await load();
       setMsg("Tema pašalinta.");
     } catch (e) {
@@ -657,7 +614,7 @@ export default function ThemesPage() {
     setMsg("");
     if (!window.confirm("Ar tikrai pašalinti šią potemę?")) return;
     try {
-      await apiFetch(`/api/themes/subthemes/${id}`, { method: "DELETE" });
+      await apiSend(`/api/themes/subthemes/${id}`, { method: "DELETE" });
       await load();
       setMsg("Potemė pašalinta.");
     } catch (e) {

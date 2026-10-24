@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
-import { getActiveRole } from "@/components/activeRole.js";
+import { apiJsonAll } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -250,38 +250,12 @@ export default function ExportPage() {
       setLoading(true);
       setMsg("");
       try {
-        const activeRole = getActiveRole();
+        const [themesData, actsData] = await apiJsonAll([["/api/themes"], ["/api/activities/my"]]);
 
-        const [themesRes, actsRes] = await Promise.all([
-          fetch("/api/themes", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-          fetch("/api/activities/my", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-        ]);
-
-        const themesData = await themesRes.json().catch(() => ({}));
-        if (!themesRes.ok) {
-          throw new Error(
-            themesData?.error ||
-              `${themesRes.status} ${themesRes.statusText}`
-          );
-        }
         // Anything but the array (an object, null…) would
         // blank the page at themes.map() on the next render
         if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
-        const actsData = await actsRes.json().catch(() => ({}));
-        if (!actsRes.ok) {
-          throw new Error(
-            actsData?.error || `${actsRes.status} ${actsRes.statusText}`
-          );
-        }
         // Same for the rows: activities.filter() on the next
         // render would blank the page
         if (!Array.isArray(actsData)) throw new Error("Klaida: netikėtas serverio atsakymas.");

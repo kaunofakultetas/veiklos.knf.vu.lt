@@ -49,7 +49,7 @@ import createSamlRouter from './routes/saml.js';
 
 // Auth middleware
 import { verifySamlSession } from './auth/verifySamlSession.js';
-import { SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from './auth/sessionCookie.js';
+import { SESSION_COOKIE, SESSION_COOKIE_OPTIONS, SESSION_MAX_AGE_MS } from './auth/sessionCookie.js';
 import { attachRoles, attachRolesStrict } from './auth/attachRoles.js';
 
 
@@ -123,7 +123,7 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     ...SESSION_COOKIE_OPTIONS,
-    maxAge: 8 * 60 * 60 * 1000, // 8 hours
+    maxAge: SESSION_MAX_AGE_MS,
   },
 }));
 

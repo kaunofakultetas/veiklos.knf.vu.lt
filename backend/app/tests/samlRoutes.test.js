@@ -140,16 +140,15 @@ const fakeSp = {
     if (!nextExtract) throw new Error("bad signature");
     return { samlContent: nextSamlContent ?? responseWith(nextAssertionId), extract: nextExtract };
   },
-  // samlify rejects redirect-binding messages with bare
-  // strings, not Errors — mirrored here
+  // samlify rejects with Errors whose message is the code
   parseLogoutRequest: async (idp, binding, message) => {
     logCall("parseLogoutRequest", { idp, binding, message });
-    if (!nextLogoutRequest) throw "ERR_FAILED_MESSAGE_SIGNATURE_VERIFICATION";
+    if (!nextLogoutRequest) throw new Error("ERR_FAILED_MESSAGE_SIGNATURE_VERIFICATION");
     return nextLogoutRequest;
   },
   parseLogoutResponse: async (idp, binding, message) => {
     logCall("parseLogoutResponse", { idp, binding, message });
-    if (!logoutResponseVerifies) throw "ERR_FAILED_MESSAGE_SIGNATURE_VERIFICATION";
+    if (!logoutResponseVerifies) throw new Error("ERR_FAILED_MESSAGE_SIGNATURE_VERIFICATION");
     return { extract: { response: { inResponseTo: "_our-req-1" } } };
   },
   createLogoutResponse: (idp, requestInfo, binding, relayState) => {
@@ -386,6 +385,34 @@ test("assert: VU attributes → upsert by eID, session stored, redirect /", asyn
   // the SessionIndex is stored as one string — what the
   // store searches by and our LogoutRequest sends
   assert.equal(lastSession.samlUser.sessionIndex, "sidx-1");
+
+  // and the moment of the sign-in, which the eight-hour
+  // limit counts from
+  assert.ok(Math.abs(lastSession.samlUser.signedInAt - Date.now()) < 5000, "the sign-in time is stamped");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// assert — the email's spelling
+// -----------------------------------------------------------
+//
+// The upsert stores the address trimmed and lowercased,
+// whatever capitals the IdP sends, so the user row and every
+// lookup by email agree on one spelling.
+// -----------------------------------------------------------
+
+test("assert: the email is upserted lowercase, whatever the IdP's capitals", async () => {
+  nextExtract = { audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: " Jonas.Jonaitis@KNF.VU.lt " } };
+  stubReturningUser();
+
+  const res = await post("/auth/saml/assert");
+  assert.equal(res.status, 302);
+  assert.deepEqual(queryLog().find((q) => q.sql.startsWith("INSERT INTO users")).params, ["112546", "jonas.jonaitis@knf.vu.lt", null]);
 });
 
 

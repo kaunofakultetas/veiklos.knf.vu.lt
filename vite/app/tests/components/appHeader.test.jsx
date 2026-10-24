@@ -3,10 +3,11 @@
 //
 //  The shared top bar against the scripted fetch: /api/me on
 //  mount (roles as strings or { name } objects, the name with
-//  its email and "—" fallbacks, a refused answer changing
-//  nothing), the activeRole repair rules and the "(nėra)"
-//  text once an answer holds no roles, the role switcher only
-//  for several roles and its navigation, the brand click, the
+//  its email and "—" fallbacks, a refused answer — or a 200
+//  that is not /api/me's — changing nothing), the activeRole
+//  repair rules and the "(nėra)" text once an answer holds no
+//  roles, the role switcher only for several roles, named by
+//  its caption, and its navigation, the brand click, the
 //  "app:roles-updated" refetch, and sign-out — the POST, the
 //  cleared role, and the redirect (a 2xx answer's, or "/"
 //  when the answer is refused, not JSON, or the request
@@ -155,6 +156,20 @@ test("a role lookup that failed (500) leaves the stored role alone too", async (
   expect(screen.getByText("Komisijos narys")).toHaveClass("app-role-value");
   expect(screen.getByText("—")).toHaveClass("app-user-name");
   expect(sessionStorage.getItem("activeRole")).toBe("Komisijos narys");
+  expect(localStorage.getItem("activeRole")).toBe("Komisijos narys");
+});
+
+test("a 200 that is not /api/me's answer (a proxy's page, no roles list) leaves the stored role alone", async () => {
+  signInAs("Komisijos narys");
+  // Not the contract's shape on purpose, so not guarded
+  onRequest("GET", "/api/me", { status: 200, body: "<!doctype html><title>Proxy</title>" }, { offContract: true });
+  renderHeader();
+  await settle();
+
+  expect(requestsTo("GET", "/api/me")).toHaveLength(1);
+  expect(screen.getByText("Komisijos narys")).toHaveClass("app-role-value");
+  expect(screen.queryByText("(nėra)")).not.toBeInTheDocument();
+  expect(screen.getByText("—")).toHaveClass("app-user-name");
   expect(localStorage.getItem("activeRole")).toBe("Komisijos narys");
 });
 
@@ -371,4 +386,25 @@ test("a failed logout request lands on /", async () => {
   await waitFor(() => expect(location.href).toBe("/"));
   expect(localStorage.getItem("activeRole")).toBeNull();
   expect(requestsTo("POST", "/auth/saml/logout")).toHaveLength(1);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// accessible names
+// -----------------------------------------------------------
+//
+// The role switcher is named by the "Prisijungta su role:"
+// caption beside it.
+// -----------------------------------------------------------
+
+test("the role switcher is named by its caption", async () => {
+  onRequest("GET", "/api/me", ME);
+  renderHeader();
+
+  expect(await screen.findByLabelText("Prisijungta su role:")).toBe(screen.getByRole("combobox"));
 });

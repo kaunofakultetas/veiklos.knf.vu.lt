@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
-import { getActiveRole } from "@/components/activeRole.js";
+import { apiJsonAll } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -198,7 +198,8 @@ function MultiSelectDropdown({
       </button>
 
       {/* A named group, so a screen reader says which filter
-          the checkboxes belong to */}
+          the checkboxes belong to; the search box, with only
+          a placeholder, is named after the filter too */}
       {open && (
         <div className="multi-select-menu" role="group" aria-label={label}>
           {withSearch && (
@@ -206,6 +207,7 @@ function MultiSelectDropdown({
               <input
                 type="text"
                 className="field-input multi-select-search"
+                aria-label={`Paieška: ${label}`}
                 placeholder="Ieškoti…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -272,38 +274,11 @@ export default function ManagerExportPage() {
       setLoading(true);
       setMsg("");
       try {
-        const activeRole = getActiveRole();
-
-        const [actsRes, themesRes] = await Promise.all([
-          fetch("/api/activities/all", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-          fetch("/api/themes", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-        ]);
-
-        const actsData = await actsRes.json().catch(() => ({}));
-        if (!actsRes.ok) {
-          throw new Error(
-            actsData?.error || `${actsRes.status} ${actsRes.statusText}`
-          );
-        }
+        const [actsData, themesData] = await apiJsonAll([["/api/activities/all"], ["/api/themes"]]);
 
         // A 200 whose body is not the activities array would
         // throw on render (activities.filter) and blank the page
         if (!Array.isArray(actsData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
-
-        const themesData = await themesRes.json().catch(() => ({}));
-        if (!themesRes.ok) {
-          throw new Error(
-            themesData?.error || `${themesRes.status} ${themesRes.statusText}`
-          );
-        }
 
         // The same for the theme tree (themes.map)
         if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");

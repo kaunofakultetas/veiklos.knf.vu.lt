@@ -606,3 +606,24 @@ test("a 200 whose body is not an array, for either list, shows one message and k
   expect(screen.queryByText("Paskaitų ciklas")).not.toBeInTheDocument();
   expect(requestLog()).toHaveLength(4);
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// accessible names
+// -----------------------------------------------------------
+//
+// The employee filter's search box has a placeholder only,
+// so it carries a name of its own.
+// -----------------------------------------------------------
+
+test("the employee filter's search box is named", async () => {
+  const user = await loadPage();
+  await user.click(within(filterNamed("Darbuotojas")).getByRole("button"));
+
+  expect(within(filterNamed("Darbuotojas")).getByRole("textbox", { name: "Paieška: Darbuotojas" })).toHaveAttribute("placeholder", "Ieškoti…");
+});

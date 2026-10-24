@@ -6,8 +6,10 @@
 //    POST /api/user-roles/remove      — revoke a role by email
 //
 //  The role administration API behind the manager's roles
-//  page. Users are looked up by email, case-insensitively and
-//  trimmed; role names are matched exactly (trimmed).
+//  page. Users are looked up by email in the one spelling
+//  sign-in stores, trimmed and lowercased (emailOf in
+//  utils/input.js); role names are matched exactly
+//  (trimmed).
 //
 //  Auth: index.js mounts the router behind verifySamlSession
 //  + attachRoles, and the router itself adds managerOnly once
@@ -25,6 +27,7 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { authorize } from "../auth/authorize.js";
+import { emailOf } from "../utils/input.js";
 
 
 // The role every signed-in user gets automatically
@@ -57,15 +60,16 @@ router.use(managerOnly);
 // readEmailAndRole
 // -----------------------------------------------------------
 //
-// The { email, role } body of assign/remove, both trimmed;
-// either missing → null, so the caller answers 400.
+// The { email, role } body of assign/remove: the email in
+// the stored spelling (emailOf), the role trimmed; either
+// missing → null, so the caller answers 400.
 //
 // Used by:
 //   - POST /assign, POST /remove (below)
 // -----------------------------------------------------------
 
 function readEmailAndRole(body) {
-  const email = String(body?.email ?? "").trim();
+  const email = emailOf(body?.email);
   const role = String(body?.role ?? "").trim();
   if (!email || !role) return null;
   return { email, role };
@@ -81,9 +85,10 @@ function readEmailAndRole(body) {
 // findUserByEmail
 // -----------------------------------------------------------
 //
-// The email→user lookup every route starts with: case-
-// insensitive in SQL, eid aliased as id (the shape the page
-// expects). null when there is no such user.
+// The email→user lookup every route starts with, given the
+// address already in the stored spelling (emailOf), so a
+// plain comparison finds the row; eid aliased as id (the
+// shape the page expects). null when there is no such user.
 //
 // Used by:
 //   - GET /, POST /assign, POST /remove (below)
@@ -93,7 +98,7 @@ async function findUserByEmail(email) {
   const u = await pool.query(
     `SELECT eid AS id, email, full_name
        FROM users
-      WHERE LOWER(email) = LOWER($1)
+      WHERE email = $1
       LIMIT 1`,
     [email]
   );
@@ -144,7 +149,7 @@ async function findRoleId(name) {
 
 router.get("/", async (req, res) => {
   try {
-    const email = String(req.query.email ?? "").trim();
+    const email = emailOf(req.query.email);
     if (!email) return res.status(400).json({ error: MSG_EMAIL_REQUIRED });
 
     const user = await findUserByEmail(email);

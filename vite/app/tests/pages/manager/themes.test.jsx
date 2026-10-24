@@ -69,7 +69,7 @@ function scriptTree(initial = THEMES) {
 
 // Wait for the first load to land: the subtheme form's parent
 // picker shows the first theme
-const loaded = () => screen.findByRole("button", { name: /^6\.1\. — Studijų kokybė/ });
+const loaded = () => screen.findByRole("button", { name: "Priklauso temai * 6.1. — Studijų kokybė" });
 
 
 
@@ -145,7 +145,7 @@ test("an empty tree shows (temų nėra) and keeps Sukurti potemę disabled for l
   const { user } = renderPage(ThemesPage);
 
   expect(await screen.findByText("(temų nėra)")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /^Pasirinkite temą/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Priklauso temai * Pasirinkite temą" })).toBeInTheDocument();
 
   await user.type(subCode(), "6.1.1.");
   await user.type(subTitle(), "Paskaitos");
@@ -308,10 +308,10 @@ test("create subtheme: parent picked, POST { code, title, description: null }, r
   await loaded();
   await user.click(screen.getByRole("button", { name: "Išskleisti viską" }));
 
-  await user.click(screen.getByRole("button", { name: /^6\.1\. — Studijų kokybė/ }));
+  await user.click(screen.getByRole("button", { name: "Priklauso temai * 6.1. — Studijų kokybė" }));
   expect(screen.getByRole("button", { name: "6.1. — Studijų kokybė" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "6.2. — Mokslas" }));
-  expect(screen.getByRole("button", { name: /^6\.2\. — Mokslas/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Priklauso temai * 6.2. — Mokslas" })).toBeInTheDocument();
 
   const button = screen.getByRole("button", { name: "Sukurti potemę" });
   await user.type(subCode(), "6.2.1.");
@@ -332,7 +332,7 @@ test("create subtheme: parent picked, POST { code, title, description: null }, r
   expect(within(subthemeRow("Projektai")).getByRole("button", { name: "Pašalinti" })).toBeInTheDocument();
   expect(subCode().value).toBe("");
   expect(subTitle().value).toBe("");
-  expect(screen.getByRole("button", { name: /^6\.2\. — Mokslas/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Priklauso temai * 6.2. — Mokslas" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Sukurti potemę" })).toBeDisabled();
 });
 
@@ -617,6 +617,30 @@ test("a 200 whose body is not an array shows one message and keeps the page", as
   expect(screen.getByRole("heading", { name: "Temos ir potemės" })).toBeInTheDocument();
   expect(screen.getByText("(temų nėra)")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Pašalinti temą" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /^Pasirinkite temą/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Priklauso temai * Pasirinkite temą" })).toBeInTheDocument();
   expect(requestLog()).toHaveLength(1);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// accessible names
+// -----------------------------------------------------------
+//
+// The new subtheme's parent picker is named by its caption,
+// then the theme it shows.
+// -----------------------------------------------------------
+
+test("the parent theme picker is named by its caption", async () => {
+  scriptTree();
+  renderPage(ThemesPage);
+  await loaded();
+
+  const trigger = screen.getByLabelText("Priklauso temai *");
+  expect(trigger).toHaveClass("app-select-trigger");
+  expect(trigger).toHaveAccessibleName("Priklauso temai * 6.1. — Studijų kokybė");
 });

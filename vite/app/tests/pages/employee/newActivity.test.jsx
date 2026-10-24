@@ -117,9 +117,8 @@ test("loads the tree with X-Active-Role and preselects the first theme and its f
 //
 // The title, description and file inputs are reachable by
 // their labels (htmlFor ↔ id), spelled "Registruojamos …" —
-// the old "Registuojamos" is gone. The two picker labels are
-// not linked: AppSelect renders a button, and naming it is
-// AppSelect's own business.
+// the old "Registuojamos" is gone. The two pickers are named
+// by their captions too, followed by the value they show.
 // -----------------------------------------------------------
 
 test("the title, description and file inputs are reachable by their labels", async () => {
@@ -132,6 +131,9 @@ test("the title, description and file inputs are reachable by their labels", asy
   expect(screen.getByLabelText("Registruojamos veiklos aprašymas *")).toBe(descriptionInput());
   expect(screen.getByLabelText("Pridėkite failą (jei reikia)")).toBe(fileInput());
   expect(screen.queryByText(/Registuojamos/)).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Pasirinkite temą *")).toBe(triggers()[0]);
+  expect(screen.getByLabelText("Pasirinkite potemę *")).toBe(triggers()[1]);
+  expect(triggers()[0]).toHaveAccessibleName(`Pasirinkite temą * ${triggers()[0].textContent.replace("▾", "").trim()}`);
 });
 
 
@@ -405,7 +407,8 @@ test("an oversized pick is refused on the spot and never sent", async () => {
 test("a refused POST shows the prefixed reason and keeps the draft", async () => {
   signInAs("Darbuotojas");
   onRequest("GET", "/api/themes", THEMES);
-  onRequest("POST", "/api/activities", { status: 400, body: { error: "Trūksta pavadinimo" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("POST", "/api/activities", { status: 400, body: { error: "Klaida: Trūksta pavadinimo" } });
   const { user } = renderPage(NewActivityPage);
   await themesLoaded();
 

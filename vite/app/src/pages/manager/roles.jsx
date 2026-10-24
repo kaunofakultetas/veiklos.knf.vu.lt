@@ -12,12 +12,14 @@
 //  role gets a confirm first (they would lock themselves out
 //  of this page).
 //
-//  Auth rides in the session cookie — the /api/user-roles
-//  endpoints are manager-only on the backend since the
-//  VU SSO (SAML) migration.
+//  Auth rides in the session cookie alone: the backend holds
+//  the /api/user-roles endpoints to the signed-in user's own
+//  manager role whatever role the tab has active, so these
+//  calls send no X-Active-Role.
 // -----------------------------------------------------------
 
 import { useState, useEffect } from "react";
+import { apiJson, apiSend } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -57,9 +59,7 @@ export default function RolesPage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/me");
-        if (!res.ok) return;
-        const data = await res.json().catch(() => ({}));
+        const data = await apiJson("/api/me", { activeRole: false });
         setCurrentUserEmail((data.email || "").toLowerCase());
       } catch {
         // ignore — the self-removal confirm just won't trigger
@@ -74,11 +74,10 @@ export default function RolesPage() {
     setMsg("");
     setLoading(true);
     try {
-      const res = await fetch(
-        `/api/user-roles?email=${encodeURIComponent(email)}`
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Klaida: Nepavyko įkelti naudotojo.");
+      const data = await apiJson(`/api/user-roles?email=${encodeURIComponent(email)}`, {
+        activeRole: false,
+        fallback: "Klaida: Nepavyko įkelti naudotojo.",
+      });
 
       // roles is mapped and allRoles filtered on render — a 200
       // without both arrays blanks the page or shows nothing
@@ -109,15 +108,12 @@ export default function RolesPage() {
     if (!assignRole) return;
     setMsg("");
     try {
-      const res = await fetch("/api/user-roles/assign", {
+      await apiSend("/api/user-roles/assign", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: user.email, role: assignRole }),
+        json: { email: user.email, role: assignRole },
+        activeRole: false,
+        fallback: "Nepavyko priskirti rolės.",
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data?.error || "Nepavyko priskirti rolės.");
-      }
 
       const next = [...roles, assignRole].sort();
       setRoles(next);
@@ -150,15 +146,12 @@ export default function RolesPage() {
     }
 
     try {
-      const res = await fetch("/api/user-roles/remove", {
+      await apiSend("/api/user-roles/remove", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: user.email, role }),
+        json: { email: user.email, role },
+        activeRole: false,
+        fallback: "Nepavyko pašalinti rolės.",
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data?.error || "Nepavyko pašalinti rolės.");
-      }
 
       const next = roles.filter((r) => r !== role);
       setRoles(next);

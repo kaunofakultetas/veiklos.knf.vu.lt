@@ -133,6 +133,34 @@ beforeEach(() => {
 
 
 // -----------------------------------------------------------
+// withStatements
+// -----------------------------------------------------------
+//
+// The fake IdP's response template with its AuthnStatement
+// (a password sign-in at `now`, session index _session-1)
+// and its attributes spliced in as XML, ahead of the value
+// replacement that would escape them.
+//
+// Used by:
+//   - fakeIdp (below) — loginResponseFor
+// -----------------------------------------------------------
+
+function withStatements(template, now, attributesXml) {
+  return template
+    .replace(
+      "{AuthnStatement}",
+      `<saml:AuthnStatement AuthnInstant="${now.toISOString()}" SessionIndex="_session-1"><saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:Password</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>`
+    )
+    .replace("<saml:AttributeStatement></saml:AttributeStatement>", `<saml:AttributeStatement>${attributesXml}</saml:AttributeStatement>`);
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // fakeIdp
 // -----------------------------------------------------------
 //
@@ -165,8 +193,9 @@ function fakeIdp({ encrypted }) {
       { Binding: saml.Constants.namespace.binding.redirect, Location: "https://idp.test.local/slo" },
     ],
     // Handing samlify its own default template makes it call
-    // our tag replacement, where the attributes go in
-    loginResponseTemplate: { context: saml.SamlLib.defaultLoginResponseTemplate.context },
+    // our tag replacement; with no attributes declared it
+    // builds an empty AttributeStatement that ours fill
+    loginResponseTemplate: { context: saml.SamlLib.defaultLoginResponseTemplate.context, attributes: [] },
   });
   fs.writeFileSync(FAKE_IDP_FILE, idp.getMetadata());
 
@@ -187,7 +216,11 @@ function fakeIdp({ encrypted }) {
       {},
       (template) => ({
         id: "_resp-1",
-        context: saml.SamlLib.replaceTagsByValue(template, {
+        // samlify escapes every value it fills in, so the two
+        // statements — XML, not text — are spliced into the
+        // template first and only the plain values go through
+        // replaceTagsByValue
+        context: saml.SamlLib.replaceTagsByValue(withStatements(template, now, attrs), {
           ID: "_resp-1",
           AssertionID: assertionId,
           Destination: acs,
@@ -202,8 +235,6 @@ function fakeIdp({ encrypted }) {
           NameIDFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:transient",
           NameID: "_nameid-1",
           InResponseTo: "_req-1",
-          AuthnStatement: `<saml:AuthnStatement AuthnInstant="${now.toISOString()}" SessionIndex="_session-1"><saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:Password</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>`,
-          AttributeStatement: `<saml:AttributeStatement>${attrs}</saml:AttributeStatement>`,
         }),
       })
     );
@@ -685,6 +716,28 @@ test("mapper: empties are nulls, partial names join cleanly", () => {
 
 
 // -----------------------------------------------------------
+// mapSamlAttributes — the email's spelling
+// -----------------------------------------------------------
+//
+// The address comes out trimmed and lowercased, whatever
+// capitals the IdP sends, so one person never becomes two
+// accounts by the spelling of their email; an address of
+// nothing but spaces is no address.
+// -----------------------------------------------------------
+
+test("mapper: the email is trimmed and lowercased; blanks are null", () => {
+  assert.equal(mapSamlAttributes({ eID: "112546", mail: " Jonas.Jonaitis@KNF.VU.lt " }).email, "jonas.jonaitis@knf.vu.lt");
+  assert.equal(mapSamlAttributes({ eID: "112546", "urn:oid:0.9.2342.19200300.100.1.3": ["Ona@VU.LT"] }).email, "ona@vu.lt");
+  assert.equal(mapSamlAttributes({ eID: "112546", mail: "   " }).email, null);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // enrichSpMetadata — the FEDI blocks
 // -----------------------------------------------------------
 //
@@ -836,8 +889,19 @@ test("logout response from the IdP: verified; tampered or unsigned → refused",
   assert.equal(extract.response.inResponseTo, "_our-req-1");
   assert.equal(extract.issuer, FAKE_IDP_ENTITY);
 
+  // an octet string that no longer matches the query is
+  // refused before the signature is looked at; the response
+  // re-encoded with another InResponseTo, under the original
+  // signature, reaches the signature check and fails it
   await assert.rejects(
     () => sp.parseLogoutResponse(setup.idp, "redirect", { ...message, octetString: message.octetString.replace("SAMLResponse=", "SAMLResponse=A") }),
+    /ERR_OCTET_STRING_MISMATCH/
+  );
+  const altered = new URL(context);
+  const xml = zlib.inflateRawSync(Buffer.from(altered.searchParams.get("SAMLResponse"), "base64")).toString();
+  altered.searchParams.set("SAMLResponse", zlib.deflateRawSync(xml.replace("_our-req-1", "_their-req-9")).toString("base64"));
+  await assert.rejects(
+    () => sp.parseLogoutResponse(setup.idp, "redirect", redirectMessage(altered.toString())),
     /ERR_FAILED_MESSAGE_SIGNATURE_VERIFICATION/
   );
   const { SigAlg, Signature, ...unsigned } = message.query;

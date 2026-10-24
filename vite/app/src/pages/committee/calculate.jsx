@@ -33,8 +33,8 @@
 //    CalculatePage        — state, loads, save (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useState } from "react";
-import { getActiveRole } from "@/components/activeRole.js";
+import { useEffect, useId, useState } from "react";
+import { apiJson, apiJsonAll, apiSend } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -185,11 +185,12 @@ function ThemeTotalsTable({ themeTotals, loading }) {
 //
 // The left panel's "Skaičiuoklė" block: theme <select>, the
 // theme's budget and score sum as read-only inputs (blank
-// until a theme is picked), the "Skaičiuoti" button and the
-// "1 balo vertė" result box. The button is disabled without
-// a theme, when valuePerScore is null/non-finite, or while
-// saving; the box shows the value only after a successful
-// save (hasCalculated).
+// until a theme is picked, each named by the caption above
+// it), the "Skaičiuoti" button and the "1 balo vertė" result
+// box. The button is disabled without a theme, when
+// valuePerScore is null/non-finite, or while saving; the box
+// shows the value only after a successful save
+// (hasCalculated).
 //
 // Used by:
 //   - CalculatePage (below) — left panel
@@ -241,12 +242,13 @@ function PointValueCalculator({
       </div>
 
       <div style={{ marginBottom: 10 }}>
-        <div className="employee-modal-muted">
+        <div className="employee-modal-muted" id="calc-total-sum-label">
           Temai nustatyta bendra suma:
         </div>
         <input
           type="text"
           readOnly
+          aria-labelledby="calc-total-sum-label"
           value={selectedThemeId ? totalSum : ""}
           placeholder="-"
           className="field-input"
@@ -254,12 +256,13 @@ function PointValueCalculator({
       </div>
 
       <div style={{ marginBottom: 10 }}>
-        <div className="employee-modal-muted">
+        <div className="employee-modal-muted" id="calc-score-sum-label">
           Bendra temos balų suma:
         </div>
         <input
           type="text"
           readOnly
+          aria-labelledby="calc-score-sum-label"
           value={selectedThemeId ? scoreSum : ""}
           placeholder="-"
           className="field-input"
@@ -310,16 +313,21 @@ function PointValueCalculator({
 // (with a search box) rather than using AppSelect. The
 // open/closed and search-term state is its own; picking an
 // option reports the eid up, closes the list and clears the
-// search. Loading and empty states are early returns.
+// search. labelledBy is the id of the caption the page shows
+// above it: the trigger is named by that caption followed by
+// the employee it shows, and the chevron is decoration,
+// hidden from assistive tech. Loading and empty states are
+// early returns.
 //
 // Used by:
 //   - CalculatePage (below) — right panel
 // -----------------------------------------------------------
 
-function EmployeePicker({ employees, loading, selectedEid, onSelect }) {
+function EmployeePicker({ employees, loading, selectedEid, onSelect, labelledBy }) {
 
   const [open, setOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const triggerId = useId();
 
 
   const options = employees.map((e) => ({
@@ -356,6 +364,8 @@ function EmployeePicker({ employees, loading, selectedEid, onSelect }) {
     <>
       <button
         type="button"
+        id={triggerId}
+        aria-labelledby={`${labelledBy} ${triggerId}`}
         className="field-select app-select-trigger"
         style={{
           width: "100%",
@@ -368,7 +378,7 @@ function EmployeePicker({ employees, loading, selectedEid, onSelect }) {
         <span className="app-select-label">
           {selectedLabel}
         </span>
-        <span className="app-select-chevron">▾</span>
+        <span className="app-select-chevron" aria-hidden="true">▾</span>
       </button>
 
       {open && (
@@ -566,34 +576,10 @@ export default function CalculatePage() {
       setEmployeesLoading(true);
       setMsg("");
       try {
-        const activeRole = getActiveRole();
-
-        const [themesRes, employeesRes] = await Promise.all([
-          fetch("/api/activities/evaluated/theme-totals", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-          fetch("/api/activities/evaluated/employees", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
+        const [themesData, employeesData] = await apiJsonAll([
+          ["/api/activities/evaluated/theme-totals"],
+          ["/api/activities/evaluated/employees"],
         ]);
-
-        const themesData = await themesRes.json().catch(() => ({}));
-        if (!themesRes.ok) {
-          throw new Error(
-            themesData?.error || `${themesRes.status} ${themesRes.statusText}`
-          );
-        }
-
-        const employeesData = await employeesRes.json().catch(() => ({}));
-        if (!employeesRes.ok) {
-          throw new Error(
-            employeesData?.error || `${employeesRes.status} ${employeesRes.statusText}`
-          );
-        }
 
         // A non-list 200 body (an object, null, a string)
         // would blow up the table or the picker on render
@@ -634,21 +620,7 @@ export default function CalculatePage() {
       setMsg("");
 
       try {
-        const activeRole = getActiveRole();
-
-        const res = await fetch(
-          `/api/activities/evaluated/employee/${selectedEmployeeEid}/subthemes`,
-          {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }
-        );
-
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || `${res.status} ${res.statusText}`);
-        }
+        const data = await apiJson(`/api/activities/evaluated/employee/${selectedEmployeeEid}/subthemes`);
 
         // A non-list 200 body (an object, null, a string)
         // would blow up the results table on the next render
@@ -706,25 +678,7 @@ export default function CalculatePage() {
     try {
       setSavingPoint(true);
       setMsg("");
-
-      const activeRole = getActiveRole();
-
-      const res = await fetch(
-        `/api/themes/${selectedTheme.theme_id}/pointvalue`,
-        {
-          method: "PATCH",
-          headers: {
-            "X-Active-Role": activeRole,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ pointvalue: rounded }),
-        }
-      );
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || `${res.status} ${res.statusText}`);
-      }
+      await apiSend(`/api/themes/${selectedTheme.theme_id}/pointvalue`, { method: "PATCH", json: { pointvalue: rounded } });
 
       setThemeTotals((prev) =>
         prev.map((t) =>
@@ -798,7 +752,7 @@ export default function CalculatePage() {
                 <h3>Darbuotojo veiklos pagal temas ir potemes</h3>
 
                 <div style={{ marginBottom: 12, position: "relative" }}>
-                  <div className="employee-modal-muted">
+                  <div className="employee-modal-muted" id="calc-employee-label">
                     Pasirinkite darbuotoją
                   </div>
                   <EmployeePicker
@@ -806,6 +760,7 @@ export default function CalculatePage() {
                     loading={employeesLoading}
                     selectedEid={selectedEmployeeEid}
                     onSelect={setSelectedEmployeeEid}
+                    labelledBy="calc-employee-label"
                   />
                 </div>
 

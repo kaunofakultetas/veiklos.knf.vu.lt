@@ -29,7 +29,7 @@
 
 import { useEffect, useState } from "react";
 import { AppSelect, ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, ATTACHMENT_TOO_BIG } from "@/components/appCommon.jsx";
-import { getActiveRole } from "@/components/activeRole.js";
+import { apiJson, apiJsonAll, apiSend, downloadAttachment, reasonOf } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -330,7 +330,9 @@ function ActivitiesTable({
 // pair as text in view mode, two AppSelects in edit mode.
 // Picking a new theme preselects its first subtheme (in the
 // order the API returned them), or "" when it has none — then
-// the subtheme field shows "(potemių nėra)".
+// the subtheme field shows "(potemių nėra)". The pickers are
+// named by the captions (ids activity-edit-theme-label and
+// activity-edit-subtheme-label) through labelledBy.
 //
 // Used by:
 //   - ActivityModal (below)
@@ -365,13 +367,14 @@ function ThemeSubthemeFields({
   return (
     <>
       <div className="employee-modal-field">
-        <div className="employee-modal-label">Tema</div>
+        <div className="employee-modal-label" id="activity-edit-theme-label">Tema</div>
         {!editing ? (
           <div className="employee-modal-value">
             {act.theme_code} — {act.theme_title}
           </div>
         ) : (
           <AppSelect
+            labelledBy="activity-edit-theme-label"
             value={themeId}
             onChange={handleThemeChange}
             options={themes}
@@ -382,7 +385,7 @@ function ThemeSubthemeFields({
       </div>
 
       <div className="employee-modal-field">
-        <div className="employee-modal-label">Potemė</div>
+        <div className="employee-modal-label" id="activity-edit-subtheme-label">Potemė</div>
         {!editing ? (
           <div className="employee-modal-value">
             {act.subtheme_code} — {act.subtheme_title}
@@ -391,6 +394,7 @@ function ThemeSubthemeFields({
           <div className="employee-modal-muted">(potemių nėra)</div>
         ) : (
           <AppSelect
+            labelledBy="activity-edit-subtheme-label"
             value={subthemeId}
             onChange={(val) => onSubthemeChange(val)}
             options={subthemesForEdit}
@@ -499,8 +503,9 @@ function AttachmentField({ act, editing, downloading, onDownload, file, onFileCh
 // The field captions are divs, not <label>s —
 // .employee-modal-label counts on the div's block display and
 // an inline <label> would share the input's line — so the
-// edit inputs take their accessible names from the captions
-// through aria-labelledby (ids activity-edit-*-label).
+// edit inputs and pickers take their accessible names from
+// the captions through aria-labelledby (ids
+// activity-edit-*-label).
 //
 // Used by:
 //   - MyActivitiesPage (below) — while an activity is selected
@@ -578,7 +583,7 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
       setEditing(false);
       onMessage("Veikla sėkmingai atnaujinta.");
     } catch (e) {
-      onMessage(`Klaida: Nepavyko atnaujinti: ${e.message}`);
+      onMessage(`Klaida: Nepavyko atnaujinti: ${reasonOf(e)}`);
     } finally {
       setSavingEdit(false);
     }
@@ -738,37 +743,12 @@ export default function MyActivitiesPage() {
       setLoading(true);
       setMsg("");
       try {
-        const activeRole = getActiveRole();
+        const [actsData, themesData] = await apiJsonAll([["/api/activities/my"], ["/api/themes"]]);
 
-        const [actsRes, themesRes] = await Promise.all([
-          fetch("/api/activities/my", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-          fetch("/api/themes", {
-            headers: {
-              "X-Active-Role": activeRole,
-            },
-          }),
-        ]);
-
-        const actsData = await actsRes.json().catch(() => ({}));
-        if (!actsRes.ok) {
-          throw new Error(
-            actsData?.error || `${actsRes.status} ${actsRes.statusText}`
-          );
-        }
         // Anything but the array (an object, null…) would
         // blank the page at items.map() on the next render
         if (!Array.isArray(actsData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
-        const themesData = await themesRes.json().catch(() => ({}));
-        if (!themesRes.ok) {
-          throw new Error(
-            themesData?.error || `${themesRes.status} ${themesRes.statusText}`
-          );
-        }
         // Same for the tree: the modal's pickers run .find()
         // over it and would blank the page when one opens
         if (!Array.isArray(themesData)) throw new Error("Klaida: netikėtas serverio atsakymas.");
@@ -786,44 +766,16 @@ export default function MyActivitiesPage() {
   }, []);
 
 
-  // Attachment download via fetch + blob so the X-Active-Role
-  // header can travel along
+  // The attachment through the API client, which sends the
+  // X-Active-Role header a plain link could not
   const handleDownload = async (act) => {
     if (!act.attachment_path) return;
     try {
       setDownloadingId(act.id);
       setMsg("");
-
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/activities/${act.id}/attachment`, {
-        headers: {
-          "X-Active-Role": activeRole,
-        },
-      });
-
-      if (!res.ok) {
-        let errText = `${res.status} ${res.statusText}`;
-        try {
-          const data = await res.json();
-          if (data?.error) errText = data.error;
-        } catch {
-          // ignore — keep the HTTP status text
-        }
-        throw new Error(errText);
-      }
-
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = act.attachment_original_name || "priedas";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      await downloadAttachment(act);
     } catch (e) {
-      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${e.message}`);
+      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
     } finally {
       setDownloadingId(null);
     }
@@ -835,31 +787,12 @@ export default function MyActivitiesPage() {
     try {
       setDeletingId(act.id);
       setMsg("");
-
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/activities/${act.id}`, {
-        method: "DELETE",
-        headers: {
-          "X-Active-Role": activeRole,
-        },
-      });
-
-      if (!res.ok) {
-        let errText = `${res.status} ${res.statusText}`;
-        try {
-          const data = await res.json();
-          if (data?.error) errText = data.error;
-        } catch {
-          // ignore — keep the HTTP status text
-        }
-        throw new Error(errText);
-      }
+      await apiSend(`/api/activities/${act.id}`, { method: "DELETE" });
 
       setItems((prev) => prev.filter((x) => x.id !== act.id));
       setMsg("Veikla sėkmingai ištrinta.");
     } catch (e) {
-      setMsg(`Klaida: Nepavyko ištrinti veiklos: ${e.message}`);
+      setMsg(`Klaida: Nepavyko ištrinti veiklos: ${reasonOf(e)}`);
     } finally {
       setDeletingId(null);
     }
@@ -873,20 +806,7 @@ export default function MyActivitiesPage() {
     try {
       setResubmittingId(act.id);
       setMsg("");
-
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/activities/${act.id}/resubmit`, {
-        method: "POST",
-        headers: {
-          "X-Active-Role": activeRole,
-        },
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || `${res.status} ${res.statusText}`);
-      }
+      const data = await apiJson(`/api/activities/${act.id}/resubmit`, { method: "POST" });
 
       // Patch the row (and the open modal) with the returned
       // fresh copy
@@ -897,7 +817,7 @@ export default function MyActivitiesPage() {
 
       setMsg("Veikla sėkmingai pateikta iš naujo.");
     } catch (e) {
-      setMsg(`Klaida: Nepavyko pateikti iš naujo: ${e.message}`);
+      setMsg(`Klaida: Nepavyko pateikti iš naujo: ${reasonOf(e)}`);
     } finally {
       setResubmittingId(null);
     }
@@ -908,20 +828,7 @@ export default function MyActivitiesPage() {
   // the open modal in place. Throws on a failed response —
   // the modal shows the message
   const handleSave = async (formData) => {
-    const activeRole = getActiveRole();
-
-    const res = await fetch(`/api/activities/${selectedActivity.id}`, {
-      method: "PATCH",
-      headers: {
-        "X-Active-Role": activeRole,
-      },
-      body: formData,
-    });
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data?.error || `${res.status} ${res.statusText}`);
-    }
+    const data = await apiJson(`/api/activities/${selectedActivity.id}`, { method: "PATCH", form: formData });
 
     setItems((prev) => prev.map((x) => (x.id === data.id ? data : x)));
     setSelectedActivity(data);

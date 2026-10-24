@@ -3,12 +3,14 @@
 //
 //  The checks a value must pass before it reaches Postgres or
 //  is stored as a number. Ids must fit the int4 columns they
-//  are compared with: anything else ("abc", "1.5",
-//  2147483648) is refused by Postgres itself and would
-//  surface as a 500 with a stack trace in the log. Amounts
-//  must be real numbers rather than whatever Number() can
-//  coerce, so a blank string, a boolean, an array or a hex
-//  string is not quietly stored as 0, 1 or 500.
+//  are compared with: anything else — text, a fraction, a
+//  number past the int4 range — is refused by Postgres itself
+//  and would surface as a 500 with a stack trace in the log.
+//  Amounts must be real numbers rather than whatever Number()
+//  can coerce, so a blank string, a boolean, an array or a
+//  hex string is not quietly stored as a number it never
+//  spelled. Email addresses have one spelling — trimmed and
+//  lowercase — in the users table and in every lookup.
 // -----------------------------------------------------------
 
 
@@ -101,4 +103,31 @@ export function numberOf(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "string" && DECIMAL_TEXT.test(value)) return Number(value);
   return null;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// emailOf
+// -----------------------------------------------------------
+//
+// An email address in the app's one spelling — trimmed and
+// lowercased — so a sign-in or a lookup that capitalises it
+// differently still meets the same user row, and one person
+// can never end up as two accounts. null when nothing is
+// left of it.
+//
+// Used by:
+//   - utils/saml.js — mapSamlAttributes, the signed-in user's
+//     address
+//   - routes/userRoles.js — the address a manager looks up
+// -----------------------------------------------------------
+
+export function emailOf(value) {
+  const email = String(value ?? "").trim().toLowerCase();
+  return email || null;
 }

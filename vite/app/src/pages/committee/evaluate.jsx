@@ -28,7 +28,7 @@
 
 import { useEffect, useState } from "react";
 import { CommentModal } from "@/components/appCommon.jsx";
-import { getActiveRole } from "@/components/activeRole.js";
+import { apiJson, downloadAttachment, reasonOf } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -463,9 +463,10 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
             </div>
           )}
 
-          {/* The derived score — never typed directly */}
+          {/* The derived score — never typed directly; the
+              read-only input is named by the caption */}
           <div className="employee-modal-field">
-            <div className="employee-modal-label">
+            <div className="employee-modal-label" id="evaluate-score-label">
               Įvertinimas
             </div>
             {!editingScore ? (
@@ -478,6 +479,7 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
               </div>
             ) : (
               <input
+                aria-labelledby="evaluate-score-label"
                 className="field-input"
                 type="number"
                 value={editScore}
@@ -558,18 +560,7 @@ export default function EvaluatePage() {
       setLoading(true);
       setMsg("");
       try {
-        const activeRole = getActiveRole();
-
-        const res = await fetch("/api/activities/committee", {
-          headers: {
-            "X-Active-Role": activeRole,
-          },
-        });
-
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || `${res.status} ${res.statusText}`);
-        }
+        const data = await apiJson("/api/activities/committee");
 
         // A non-list 200 body (an object, null, a string)
         // would blow up the row map on the next render
@@ -587,44 +578,16 @@ export default function EvaluatePage() {
   }, []);
 
 
-  // Attachment download via fetch + blob so the X-Active-Role
-  // header can travel along
+  // The attachment through the API client, which sends the
+  // X-Active-Role header a plain link could not
   const handleDownload = async (act) => {
     if (!act.attachment_path) return;
     try {
       setDownloadingId(act.id);
       setMsg("");
-
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/activities/${act.id}/attachment`, {
-        headers: {
-          "X-Active-Role": activeRole,
-        },
-      });
-
-      if (!res.ok) {
-        let errText = `${res.status} ${res.statusText}`;
-        try {
-          const data = await res.json();
-          if (data?.error) errText = data.error;
-        } catch {
-          // ignore — keep the HTTP status text
-        }
-        throw new Error(errText);
-      }
-
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = act.attachment_original_name || "priedas";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      await downloadAttachment(act);
     } catch (e) {
-      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${e.message}`);
+      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
     } finally {
       setDownloadingId(null);
     }
@@ -637,21 +600,7 @@ export default function EvaluatePage() {
     setActingId(id);
     setMsg("");
     try {
-      const activeRole = getActiveRole();
-
-      const res = await fetch(`/api/activities/${id}/committee`, {
-        method: "PATCH",
-        headers: {
-          "X-Active-Role": activeRole,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || `${res.status} ${res.statusText}`);
-      }
+      const data = await apiJson(`/api/activities/${id}/committee`, { method: "PATCH", json: body });
 
       if (data.status !== "PATVIRTINTA") {
         setItems((prev) => prev.filter((x) => x.id !== id));
@@ -661,7 +610,7 @@ export default function EvaluatePage() {
 
       return data;
     } catch (e) {
-      setMsg(`Klaida: ${e.message}`);
+      setMsg(`Klaida: ${reasonOf(e)}`);
       throw e;
     } finally {
       setActingId(null);

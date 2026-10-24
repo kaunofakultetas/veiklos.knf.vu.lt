@@ -441,7 +441,8 @@ test("a theme without subthemes saves subtheme_id null", async () => {
 // -----------------------------------------------------------
 
 test("a refused re-score shows Klaida: and keeps the modal in re-scoring mode", async () => {
-  onRequest("PATCH", "/api/activities/5/committee", { status: 400, body: { error: "Neteisingas įvertinimas" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("PATCH", "/api/activities/5/committee", { status: 400, body: { error: "Klaida: Neteisingas įvertinimas" } });
   const user = await openRescoring(ACT5);
 
   await user.type(within(modal()).getAllByRole("spinbutton")[0], "3");
@@ -499,7 +500,8 @@ test("a refused download is reported with the Klaida: prefix; opening a row clea
   signInAs("Komisijos narys");
   onRequest("GET", "/api/activities/evaluated", EVALUATED);
   onRequest("GET", "/api/themes", THEMES);
-  onRequest("GET", "/api/activities/5/attachment", { status: 404, body: { error: "Priedas nerastas" } });
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("GET", "/api/activities/5/attachment", { status: 404, body: { error: "Klaida: Priedas nerastas" } });
   const { user } = renderPage(ResultsPage);
   await screen.findByText("Seminaras apie X");
 
@@ -554,4 +556,26 @@ test("a 200 whose body is not a list — either list — is refused with one mes
     unmount();
   }
   expect(requestLog()).toHaveLength(4);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// accessible names
+// -----------------------------------------------------------
+//
+// While re-scoring, the theme and subtheme pickers and the
+// derived score are named by their captions.
+// -----------------------------------------------------------
+
+test("re-scoring: the pickers and the derived score are named by their captions", async () => {
+  await openRescoring(ACT5);
+
+  expect(within(modal()).getByLabelText("Tema")).toBe(within(fieldNamed("Tema")).getByRole("button"));
+  expect(within(modal()).getByLabelText("Potemė")).toBe(within(fieldNamed("Potemė")).getByRole("button"));
+  expect(within(modal()).getByLabelText("Įvertinimas")).toHaveAttribute("readonly");
 });

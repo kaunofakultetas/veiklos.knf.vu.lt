@@ -1,10 +1,10 @@
 // -----------------------------------------------------------
 //  [*] Entry — React bootstrap
 //
-//  Mounts the app into #root inside StrictMode. Since the
-//  VU SSO (SAML) migration there is no auth provider here —
-//  the session lives in a cookie, so App talks to the backend
-//  with plain fetch.
+//  Mounts the app into #root inside StrictMode. There is no
+//  auth provider here: the session lives in a cookie the
+//  browser sends by itself, so the pages reach the backend
+//  through the plain fetch of components/api.js.
 // -----------------------------------------------------------
 
 import React from 'react'

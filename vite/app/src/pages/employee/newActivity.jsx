@@ -22,7 +22,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { AppSelect, ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, ATTACHMENT_TOO_BIG } from "@/components/appCommon.jsx";
-import { getActiveRole } from "@/components/activeRole.js";
+import { apiJson, apiSend, reasonOf } from "@/components/api.js";
 import "@/components/employee.css";
 
 
@@ -150,16 +150,7 @@ export default function NewActivityPage() {
       setLoadingThemes(true);
       setMsg("");
       try {
-        const activeRole = getActiveRole();
-        const res = await fetch("/api/themes", {
-          headers: {
-            "X-Active-Role": activeRole,
-          },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || `${res.status} ${res.statusText}`);
-        }
+        const data = await apiJson("/api/themes");
         // Anything but the array (an object, null…) would
         // blank the page at themes.find() on the next render
         if (!Array.isArray(data)) throw new Error("Klaida: netikėtas serverio atsakymas.");
@@ -206,7 +197,6 @@ export default function NewActivityPage() {
 
     try {
       setSubmitting(true);
-      const activeRole = getActiveRole();
 
       const formData = new FormData();
       formData.append("theme_id", selectedThemeId);
@@ -219,18 +209,7 @@ export default function NewActivityPage() {
         formData.append("attachment", file);
       }
 
-      const res = await fetch("/api/activities", {
-        method: "POST",
-        headers: {
-          "X-Active-Role": activeRole,
-        },
-        body: formData,
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || `${res.status} ${res.statusText}`);
-      }
+      await apiSend("/api/activities", { method: "POST", form: formData });
 
       // Reset the text fields and file, keep the selection —
       // registering several activities in a row usually stays
@@ -246,7 +225,7 @@ export default function NewActivityPage() {
 
       setMsg("Veikla sėkmingai pateikta.");
     } catch (e) {
-      setMsg(`Nepavyko pateikti: ${e.message}`);
+      setMsg(`Nepavyko pateikti: ${reasonOf(e)}`);
     } finally {
       setSubmitting(false);
     }
@@ -271,17 +250,17 @@ export default function NewActivityPage() {
 
               {/* Theme picker — changing it re-sorts and
                   preselects the new theme's first subtheme.
-                  Neither picker label is linked with htmlFor:
-                  AppSelect renders a button, not a native
-                  control, and wiring that up is its job */}
+                  Both pickers are named by their captions
+                  through labelledBy */}
               <div className="field">
-                <label className="field-label">
+                <label className="field-label" id="new-activity-theme-label">
                   Pasirinkite temą <span className="required-mark">*</span>
                 </label>
                 {loadingThemes ? (
                   <div className="employee-muted">Kraunamos temos…</div>
                 ) : (
                   <AppSelect
+                    labelledBy="new-activity-theme-label"
                     value={selectedThemeId}
                     onChange={(val) => {
                       setSelectedThemeId(val);
@@ -301,10 +280,11 @@ export default function NewActivityPage() {
 
               {/* Subtheme picker */}
               <div className="field">
-                <label className="field-label">
+                <label className="field-label" id="new-activity-subtheme-label">
                   Pasirinkite potemę <span className="required-mark">*</span>
                 </label>
                 <AppSelect
+                  labelledBy="new-activity-subtheme-label"
                   value={selectedSubthemeId}
                   onChange={(val) => setSelectedSubthemeId(val)}
                   options={subthemes}
