@@ -5,7 +5,9 @@
 //  file mode (one file per UTC day under the directory,
 //  appended, a new file when the day turns) and the stdout
 //  fallback without a directory — all against fake request /
-//  response objects, no server.
+//  response objects, no server. A request whose client went
+//  away is never logged: a known bug, pinned as an expected
+//  failure.
 // -----------------------------------------------------------
 
 import { test } from "node:test";
@@ -137,3 +139,46 @@ test("without LOG_DIR the line is printed to stdout", async () => {
   }
   assert.deepEqual(printed.map(withoutDuration), ["2026-09-25T10:00:00.000Z 10.0.0.5 GET /api/health 200 <n>ms"]);
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// a request the client gave up on
+// -----------------------------------------------------------
+//
+// index.js promises every request as one line, but the line
+// is written on "finish" only — and a response whose client
+// went away (a cancelled attachment download, a browser that
+// gave up on a slow query) never finishes, it only closes.
+// Such a request must still leave exactly one line, and a
+// finished one must not leave two. The middleware listens
+// for "finish" alone: a known bug, pinned as an expected
+// failure until it is fixed.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a request whose client went away still leaves one line; a finished one exactly one",
+  { todo: "known bug: createAccessLog listens to res 'finish' only — an aborted request, which only 'close's, is never logged" },
+  async (t) => {
+    const lines = [];
+    t.mock.method(console, "log", (line) => lines.push(line));
+    const middleware = createAccessLog();
+
+    const gone = exchange({ url: "/api/activities/10/attachment" });
+    middleware(gone.req, gone.res, () => {});
+    gone.res.emit("close");
+
+    const done = exchange({ url: "/api/themes" });
+    middleware(done.req, done.res, () => {});
+    done.res.emit("finish");
+    done.res.emit("close");
+
+    await flushed();
+    assert.equal(lines.filter((l) => l.includes(" /api/activities/10/attachment ")).length, 1, "the abandoned request");
+    assert.equal(lines.filter((l) => l.includes(" /api/themes ")).length, 1, "the finished request");
+  }
+);

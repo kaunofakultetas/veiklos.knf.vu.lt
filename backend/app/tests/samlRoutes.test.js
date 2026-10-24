@@ -50,12 +50,14 @@ let lastSession = null;
 // The fake session store: every session id destroyed through
 // it, in order — the path an IdP-initiated logout takes when
 // no cookie came along — and the login lookup, scripted per
-// test (loginSids) and recorded (lookups); a destroyed sid
+// test (loginSids), recorded (lookups) and able to fail like
+// a database that is down (lookupFails); a destroyed sid
 // drops out of loginSids like a deleted row would
 const fakeStore = {
   destroyed: [],
   loginSids: [],
   lookups: [],
+  lookupFails: false,
   destroy(sid, cb) {
     this.destroyed.push(sid);
     this.loginSids = this.loginSids.filter((s) => s !== sid);
@@ -63,6 +65,7 @@ const fakeStore = {
   },
   async sidsForLogin(ids) {
     this.lookups.push(ids);
+    if (this.lookupFails) throw new Error("connect ECONNREFUSED 127.0.0.1:5432");
     return this.loginSids.slice();
   },
 };
@@ -259,6 +262,7 @@ beforeEach(() => {
   fakeStore.destroyed.length = 0;
   fakeStore.loginSids = [];
   fakeStore.lookups.length = 0;
+  fakeStore.lookupFails = false;
   lastSession = null;
   askedOrigins.length = 0;
 });
@@ -776,6 +780,64 @@ test("callback: cookie-less IdP-initiated logout ends the login's sessions throu
   assert.deepEqual(fakeStore.destroyed, ["sid-login", "sid-login-tab2"]);
   assert.equal(fakeStore.lookups.length, 3);
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// callback — the session store fails
+// -----------------------------------------------------------
+//
+// Finding the login's sessions is a database query. When it
+// fails, those sessions cannot be ended, so the request is
+// answered with a 500 and the IdP is not told the logout
+// succeeded. The rejection must never escape the handler:
+// Express 4 leaves a rejected async handler unanswered, and
+// Node ends the whole backend process on the unhandled
+// rejection. The test holds the process's unhandledRejection
+// listeners while the request runs, so an escaping rejection
+// is caught and asserted on here instead of reaching the test
+// runner. The await sits outside any try: a known bug, pinned
+// as an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test(
+  "BUG: callback: the store lookup fails → 500, nothing destroyed, no answer to the IdP",
+  {
+    todo: "known bug: GET /logout/callback awaits sidsForLogin outside any try — a database error rejects the handler, the request hangs and Node ends the process",
+    timeout: 10_000,
+  },
+  async () => {
+    fakeStore.lookupFails = true;
+    fakeStore.loginSids = ["sid-login"];
+    nextLogoutRequest = { extract: { request: { id: "_idp-req-5" }, nameID: "nid-5", sessionIndex: "sidx-5" } };
+
+    const runnerListeners = process.listeners("unhandledRejection");
+    process.removeAllListeners("unhandledRejection");
+    const escaped = [];
+    process.on("unhandledRejection", (err) => escaped.push(String(err)));
+
+    let res;
+    try {
+      res = await fetch(`${base}/auth/saml/logout/callback?${RAW_REQUEST}&Signature=s`, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(3000),
+      }).catch((err) => err);
+    } finally {
+      process.removeAllListeners("unhandledRejection");
+      for (const listener of runnerListeners) process.on("unhandledRejection", listener);
+    }
+
+    assert.deepEqual(escaped, [], "no rejection may escape the handler");
+    assert.equal(res.status, 500);
+    assert.deepEqual(fakeStore.lookups, [{ sessionIndex: "sidx-5", nameID: "nid-5" }]);
+    assert.deepEqual(fakeStore.destroyed, []);
+    assert.deepEqual(samlCalls.map((c) => c.fn), ["parseLogoutRequest"]);
+  }
+);
 
 
 

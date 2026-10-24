@@ -13,6 +13,13 @@
 //  single-table statements — and is validated against a
 //  planted phantom column so it cannot silently go blind.
 //
+//  Every time column must also carry its zone: the database
+//  runs on the host's clock and the backend on UTC, and only
+//  TIMESTAMPTZ keeps the two agreeing on what time it was
+//  (five columns still lack it: a known bug, pinned as an
+//  expected failure). And the codes the theme routes promise
+//  a 409 for must be declared unique (pinned the same way).
+//
 //  init.sql lives outside the app tree; runTests.sh mounts
 //  the repo's postgres/ dir at /app/postgres for it.
 // -----------------------------------------------------------
@@ -253,3 +260,86 @@ test("the checker reports phantom columns and tables", () => {
     assert.deepEqual(checkStatement(sql, schema), expected, sql);
   }
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// every point in time carries its zone
+// -----------------------------------------------------------
+//
+// The database runs on the host's clock (Europe/Vilnius) and
+// the backend on UTC. A TIMESTAMP column without a zone
+// stores NOW() as Vilnius wall-clock time, pg reads it back
+// as if it were UTC, and every page then shows the moment
+// two or three hours late. TIMESTAMPTZ stores the instant
+// itself, so both sides agree whatever their clocks — the
+// session table's expiry already relies on that.
+// -----------------------------------------------------------
+
+test(
+  "BUG: every time column in postgres/init.sql is TIMESTAMPTZ",
+  { todo: "known bug: users.created_at/last_login_at, user_roles.assigned_at and activities.created_at/updated_at are TIMESTAMP — every page and XLSX export shows times 2–3 hours late" },
+  () => {
+    const file = INIT_SQL_CANDIDATES.find((p) => fs.existsSync(p));
+    assert.ok(file, "postgres/init.sql not found — runTests.sh mounts it at /app/postgres");
+
+    const zoneless = fs
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("--"))
+      .filter((line) => /\bTIMESTAMP\b(?!\s+WITH\s+TIME\s+ZONE)/i.test(line))
+      .map((line) => line.trim());
+    assert.deepEqual(zoneless, [], "time columns stored without a zone");
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// theme and subtheme codes are unique
+// -----------------------------------------------------------
+//
+// POST and PATCH on themes and subthemes answer a duplicate
+// code with 409 by catching Postgres' unique violation — so
+// the schema has to declare that uniqueness, or the 409 can
+// never happen and a second theme with the same code is
+// simply stored (the themes page has no check of its own).
+// Any of the usual forms counts: UNIQUE on the column, a
+// table constraint, a unique index, and for subthemes also
+// unique per theme. Neither table declares it: a known bug,
+// pinned as an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test(
+  "BUG: theme codes and subtheme codes are declared unique in postgres/init.sql",
+  { todo: "known bug: themes.code and subthemes.code carry no UNIQUE constraint — the 409 the theme routes promise for a duplicate code never happens and duplicates are stored" },
+  () => {
+    const file = INIT_SQL_CANDIDATES.find((p) => fs.existsSync(p));
+    assert.ok(file, "postgres/init.sql not found — runTests.sh mounts it at /app/postgres");
+    const sql = fs.readFileSync(file, "utf8").replace(/--.*$/gm, "");
+
+    const table = (name) => sql.match(new RegExp(`CREATE TABLE IF NOT EXISTS ${name}\\s*\\(([\\s\\S]*?)\\);`, "i"))?.[1] ?? "";
+    const uniqueIn = (name, columnSets) => {
+      const body = table(name);
+      if (/^\s*code\s+[^,\n]*\bUNIQUE\b/im.test(body)) return true;
+      return columnSets.some((cols) => {
+        const list = cols.join("\\s*,\\s*");
+        return (
+          new RegExp(`UNIQUE\\s*\\(\\s*${list}\\s*\\)`, "i").test(body) ||
+          new RegExp(`CREATE\\s+UNIQUE\\s+INDEX[^;]*\\bON\\s+${name}\\s*\\(\\s*${list}\\s*\\)`, "i").test(sql)
+        );
+      });
+    };
+
+    assert.ok(uniqueIn("themes", [["code"]]), "themes.code is unique");
+    assert.ok(uniqueIn("subthemes", [["code"], ["theme_id", "code"], ["code", "theme_id"]]), "subthemes.code is unique, alone or per theme");
+  }
+);

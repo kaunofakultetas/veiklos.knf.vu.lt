@@ -12,13 +12,17 @@
 //  ACS mount, the 404 fallthrough, the access log (a daily
 //  file under LOG_DIR, query strings dropped, stdout quiet),
 //  the absence of CORS headers, that uploads/ is NOT served
-//  as static files, and the JSON error handler for bodies the
-//  parser refuses.
+//  as static files, the JSON error handler for bodies the
+//  parser refuses — and, pinned as expected failures, two
+//  known bugs: a request the error handler answers is logged
+//  with its query string, and the session cookie carries no
+//  __Host- prefix.
 // -----------------------------------------------------------
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import fs from "node:fs";
@@ -405,3 +409,85 @@ test("a malformed JSON body → 400 JSON without a stack trace; too large → 41
   assert.equal(res.status, 401);
   assert.deepEqual(await res.json(), { error: "Neprisijungta" });
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// errors are logged without the query string
+// -----------------------------------------------------------
+//
+// A request the error handler answers with a 500 is logged
+// with its method and path only. The query string carries
+// staff emails on the roles page and whole SAML messages on
+// the logout callback, and a database outage sends every
+// signed-in request down this path, so it must stay out of
+// the container log just as it stays out of the access log.
+// The test server has no database: a request carrying a
+// validly signed session cookie fails in the session store.
+// The handler logs req.url, query and all: a known bug,
+// pinned as an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a 500 from the error handler is logged with its path, never its query string",
+  { todo: "known bug: index.js's error handler logs req.url — a database outage writes staff emails and SAML messages from query strings into the container log" },
+  async () => {
+    const { base, out } = server;
+    const sid = "regression-error-log";
+    const sig = crypto.createHmac("sha256", "test-secret").update(sid).digest("base64").replace(/=+$/, "");
+
+    const res = await fetch(`${base}/api/user-roles?email=slaptas.vadybininkas%40knf.vu.lt`, {
+      headers: { Cookie: `connect.sid=${encodeURIComponent(`s:${sid}.${sig}`)}` },
+    });
+    assert.equal(res.status, 500);
+    assert.deepEqual(await res.json(), { error: "internal error" });
+
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(out.text.includes("GET /api/user-roles"), "expected the error line with the path; got:\n" + out.text);
+    assert.ok(!out.text.includes("slaptas.vadybininkas"), "the query string must not be logged");
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// the session cookie cannot be planted from a sibling host
+// -----------------------------------------------------------
+//
+// A cookie without a name prefix can be set for the whole
+// knf.vu.lt domain by any sibling host — and this server runs
+// dozens of them, students' Node-RED flows and n8n webhooks
+// among them. A connect.sid planted with Domain=knf.vu.lt and
+// Path=/api is sent ahead of the real one, so the user works
+// in the planter's account, or reads as signed out. The
+// __Host- prefix makes the browser refuse any such cookie
+// that carries a Domain. The session middleware and the
+// logout that clears the cookie must agree on that name, and
+// a __Host- cookie can only be cleared with Secure. The
+// cookie is plain connect.sid: a known bug, pinned as an
+// expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test(
+  "BUG: the session cookie carries the __Host- prefix, and logout clears that cookie",
+  { todo: "known bug: the session cookie is the default connect.sid — any *.knf.vu.lt host can plant one for the whole domain" },
+  async () => {
+    const src = fs.readFileSync(path.join(appRoot, "src", "index.js"), "utf8");
+    const sessionOptions = src.match(/session\(\{[\s\S]*?\n\}\)\);/)?.[0] ?? "";
+    const name = sessionOptions.match(/\bname:\s*["']([^"']+)["']/)?.[1] ?? "connect.sid";
+    assert.match(name, /^__Host-/, `the session cookie is named ${name}`);
+
+    const res = await fetch(`${server.base}/auth/saml/logout`, { method: "POST" });
+    const cleared = res.headers.get("set-cookie") ?? "";
+    assert.ok(cleared.startsWith(`${name}=`), `logout clears "${cleared.split("=")[0]}", not ${name}`);
+    assert.match(cleared, /;\s*Secure/i, "a __Host- cookie is only cleared with Secure");
+  }
+);

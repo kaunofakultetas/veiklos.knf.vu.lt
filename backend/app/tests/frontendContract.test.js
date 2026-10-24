@@ -9,6 +9,9 @@
 //  role is called WITH the header, from a page of a role the
 //  route allows; and the routes nothing calls are exactly
 //  the known ones, so a route that goes dead fails here.
+//  (The route table cannot read the guards' roles yet, so
+//  the role half of that check is blind: a known bug, pinned
+//  as an expected failure.)
 //
 //  Nothing of the frontend is read: the two sides each keep
 //  their own copy of the contract — SPA_CALLS here, and the
@@ -324,6 +327,40 @@ test("every call to an active-role route sends X-Active-Role from a page of an a
   // calls: it must stay session-only, or two workspaces break
   assert.equal(table.get("GET /api/themes").activeRoles, null);
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// the route table knows the guards' roles
+// -----------------------------------------------------------
+//
+// The check above is only as good as backendRoutes(): a route
+// whose guard array cannot be read comes back with no roles
+// and is skipped as if it took no header, so a page sending
+// the wrong role would pass unseen. One route of each
+// workspace must therefore resolve to its role. The guard
+// regex reads an array only up to its first "]", which is the
+// one inside requireActiveRoleIn([...]), so every guard reads
+// as null: a known bug in this file, pinned as an expected
+// failure until it is fixed.
+// -----------------------------------------------------------
+
+test(
+  "BUG: backendRoutes() resolves each guard array to its active roles",
+  { todo: "known bug: the guard regex stops at the first ']' — the one inside requireActiveRoleIn([...]) — so every guard reads as null and the X-Active-Role check above can never fail" },
+  () => {
+    const table = new Map(backendRoutes().map((r) => [key(r), r]));
+    assert.deepEqual(table.get("POST /api/activities")?.activeRoles, ["Darbuotojas"]);
+    assert.deepEqual(table.get("GET /api/activities/pending")?.activeRoles, ["Vadybininkas"]);
+    assert.deepEqual(table.get("PATCH /api/activities/:p/committee")?.activeRoles, ["Komisijos narys"]);
+    assert.deepEqual(table.get("POST /api/themes")?.activeRoles, ["Vadybininkas"]);
+    assert.deepEqual(table.get("PATCH /api/themes/:p/total-sum")?.activeRoles, ["Komisijos narys"]);
+  }
+);
 
 
 
