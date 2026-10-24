@@ -11,6 +11,13 @@
 //  titles, a theme that is gone, and numbers that are not
 //  numbers.
 //
+//  Pinned as expected failures until they are fixed, the
+//  known bugs: codes too long for their unique index, NUL
+//  characters in a code, title or description, subtheme
+//  descriptions that are not text, a theme delete whose
+//  dropped connection ends the process, and committee numbers
+//  too large to be finite.
+//
 //  verifySamlSession/attachRoles are mocked
 //  (helpers/authMock.js); requireActiveRoleIn is the real
 //  one.
@@ -18,9 +25,12 @@
 
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { signInAs, signOut } from "./helpers/authMock.js";
 import { resetDb, onQuery, queryLog } from "./helpers/db.js";
 import { startRouter, api } from "./helpers/http.js";
+import { pool } from "../src/db/pool.js";
 
 
 let app;
@@ -754,6 +764,121 @@ test("DELETE /:id: an activity added after the check → 409 and ROLLBACK, not 5
 
 
 // -----------------------------------------------------------
+// droppingClient
+// -----------------------------------------------------------
+//
+// A pool client whose connection dies at the first statement
+// matching failAt, reported the way pg reports it: the
+// statement fails, and before the failure reaches the caller
+// the client emits the same error as an 'error' event — on a
+// client nobody listens to, Node's EventEmitter throws it.
+// From then on every statement fails, as on a pg client that
+// is no longer queryable. Statements before the drop go to
+// the fake database, scripted and logged as usual.
+//
+// Used by:
+//   - the BUG pin on the theme delete losing its connection
+//     (below)
+// -----------------------------------------------------------
+
+function droppingClient(failAt) {
+  const client = new EventEmitter();
+  let dropped = false;
+
+  client.query = (sql, params) => {
+    if (dropped) return Promise.reject(new Error("Client has encountered a connection error and is not queryable"));
+    if (!failAt.test(String(sql).replace(/\s+/g, " ").trim())) return pool.query(sql, params);
+
+    // The rejection reaches the caller only after this
+    // callback returns, so the 'error' event comes first —
+    // the order pg uses
+    dropped = true;
+    const err = new Error("Connection terminated unexpectedly");
+    return new Promise((_resolve, reject) => {
+      setImmediate(() => {
+        reject(err);
+        client.emit("error", err);
+      });
+    });
+  };
+  client.release = () => {};
+  return client;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the connection drops during a theme delete
+// -----------------------------------------------------------
+//
+// The theme delete runs its transaction on a client of its
+// own, taken from the pool. While a client is checked out the
+// pool stops listening for its errors, and the route adds no
+// listener of its own, so when the database goes away
+// mid-transaction pg's 'error' event on that client has
+// nobody to hear it: Node's EventEmitter throws it outside
+// the request, and the whole backend process ends. The delete
+// must fail like any other database error — a 500, and
+// nothing thrown. The fake client drops its connection at the
+// theme DELETE, and a plain query of that statement fails the
+// same way; the test holds the process's uncaughtException
+// listeners while the request runs, so an escaping error is
+// caught and asserted on here instead of reaching the test
+// runner.
+// -----------------------------------------------------------
+
+test(
+  "BUG: DELETE /:id: the connection drops mid-transaction → 500, nothing thrown outside the request",
+  {
+    todo: "known bug: DELETE /api/themes/:id runs its transaction on a pool.connect() client with no 'error' listener — when the connection drops, pg emits 'error' on that client, the EventEmitter throws it as an uncaught exception and the process ends",
+    timeout: 10_000,
+  },
+  async () => {
+    manager();
+    onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
+    onQuery(/SELECT 1 FROM activities WHERE theme_id = \$1 LIMIT 1/, []);
+    onQuery(/DELETE FROM subthemes WHERE theme_id = \$1/, { rowCount: 2 });
+    onQuery(/DELETE FROM themes WHERE id = \$1/, () => {
+      throw new Error("Connection terminated unexpectedly");
+    });
+
+    const realConnect = pool.connect;
+    pool.connect = async () => droppingClient(/^DELETE FROM themes/);
+
+    const runnerListeners = process.listeners("uncaughtException");
+    process.removeAllListeners("uncaughtException");
+    const escaped = [];
+    process.on("uncaughtException", (err) => escaped.push(String(err)));
+
+    let res;
+    try {
+      res = await fetch(`${app.base}/api/themes/1`, {
+        method: "DELETE",
+        headers: asRole("Vadybininkas"),
+        signal: AbortSignal.timeout(3000),
+      }).catch((err) => err);
+    } finally {
+      process.removeAllListeners("uncaughtException");
+      for (const listener of runnerListeners) process.on("uncaughtException", listener);
+      pool.connect = realConnect;
+    }
+
+    assert.deepEqual(escaped, [], "nothing may be thrown outside the request");
+    assert.equal(res.status, 500);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // ids Postgres cannot take
 // -----------------------------------------------------------
 //
@@ -874,6 +999,241 @@ test("POST /:themeId/subthemes for a theme that is gone → 404, not 500", async
 
 
 // -----------------------------------------------------------
+// refusedLikePostgres
+// -----------------------------------------------------------
+//
+// Wraps a fake INSERT handler so the statement fails where
+// Postgres would fail on the text it is given: a NUL
+// character in any text parameter is refused as an invalid
+// byte sequence (SQLSTATE 22021), and a code whose entry in
+// its unique index would pass the btree limit of 2704 bytes
+// fails as a program limit exceeded (54000) — the fake counts
+// the code's bytes, as for text that does not compress.
+// Anything else gets the handler's own answer.
+//
+// Used by:
+//   - the BUG pins on creating themes and subthemes (below)
+// -----------------------------------------------------------
+
+function refusedLikePostgres(codeAt, indexName, answer) {
+  return (sql, params) => {
+    if (params.some((p) => typeof p === "string" && p.includes("\u0000"))) {
+      throw Object.assign(new Error('invalid byte sequence for encoding "UTF8": 0x00'), { code: "22021" });
+    }
+    const size = Buffer.byteLength(String(params[codeAt]));
+    if (size > 2704) {
+      throw Object.assign(
+        new Error(`index row size ${size} exceeds btree version 4 maximum 2704 for index "${indexName}"`),
+        { code: "54000" }
+      );
+    }
+    return answer(sql, params);
+  };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a theme code too long for its unique index
+// -----------------------------------------------------------
+//
+// Theme codes are unique, so every code is also an entry in a
+// btree index, and an entry cannot pass the btree limit of
+// 2704 bytes. A longer code fails the INSERT with Postgres's
+// program-limit error; the route checks only that the code is
+// not blank and maps only the duplicate-code error, so the
+// manager gets a 500. A code that long is bad input — the
+// usual 400 that says so.
+// -----------------------------------------------------------
+
+test(
+  "BUG: POST /: a code too long for the unique index → 400, not 500",
+  { todo: "known bug: POST /api/themes checks the code only for blankness — a code past the btree entry limit fails the INSERT with SQLSTATE 54000 (index row size exceeds btree version 4 maximum 2704), which is not mapped and answers 500" },
+  async () => {
+    manager();
+    onQuery(/^INSERT INTO themes/, refusedLikePostgres(0, "themes_code_key", (sql, params) => [
+      { id: 9, code: params[0], title: params[1] },
+    ]));
+
+    // Random hex characters barely compress, so the index
+    // entry is as long as the code
+    const res = await api(app.base, "POST", "/api/themes", {
+      body: { code: randomBytes(3000).toString("hex"), title: "Tema" },
+      headers: asRole("Vadybininkas"),
+    });
+    assert.equal(res.status, 400);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a subtheme code too long for its unique index
+// -----------------------------------------------------------
+//
+// A subtheme code is unique within its theme, so it is an
+// entry in a btree index too and meets the same limit: a code
+// past it fails the INSERT with the program-limit error, and
+// the route, which maps only a duplicate code and a missing
+// theme, answers 500. It must be the usual 400.
+// -----------------------------------------------------------
+
+test(
+  "BUG: POST /:themeId/subthemes: a code too long for the unique index → 400, not 500",
+  { todo: "known bug: POST /api/themes/:themeId/subthemes checks the code only for blankness — a code past the btree entry limit fails the INSERT with SQLSTATE 54000, which is not mapped (only 23505 and 23503 are) and answers 500" },
+  async () => {
+    manager();
+    onQuery(/^INSERT INTO subthemes/, refusedLikePostgres(1, "subthemes_theme_id_code_key", (sql, params) => [
+      { id: 10, theme_id: 1, code: params[1], title: params[2], description: params[3], cap: null },
+    ]));
+
+    const res = await api(app.base, "POST", "/api/themes/1/subthemes", {
+      body: { code: randomBytes(3000).toString("hex"), title: "Potemė" },
+      headers: asRole("Vadybininkas"),
+    });
+    assert.equal(res.status, 400);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a NUL character in a theme's code or title
+// -----------------------------------------------------------
+//
+// Postgres refuses text that holds a NUL character, and the
+// code and title reach the INSERT as sent once trimmed, so
+// either one with a NUL in it fails the statement and the
+// manager gets a 500. Such text is bad input — the usual
+// 400.
+// -----------------------------------------------------------
+
+test(
+  "BUG: POST /: a NUL character in the code or the title → 400, not 500",
+  { todo: "known bug: POST /api/themes binds code and title as sent — Postgres refuses U+0000 in text with SQLSTATE 22021 (invalid byte sequence for encoding \"UTF8\": 0x00), which is not mapped and answers 500" },
+  async () => {
+    for (const body of [
+      { code: "9.\u0000", title: "Tema" },
+      { code: "9.", title: "Te\u0000ma" },
+    ]) {
+      resetDb();
+      manager();
+      onQuery(/^INSERT INTO themes/, refusedLikePostgres(0, "themes_code_key", (sql, params) => [
+        { id: 9, code: params[0], title: params[1] },
+      ]));
+      const res = await api(app.base, "POST", "/api/themes", { body, headers: asRole("Vadybininkas") });
+      assert.equal(res.status, 400, `${JSON.stringify(body)} answered ${res.status}`);
+    }
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a NUL character in a subtheme's text
+// -----------------------------------------------------------
+//
+// The same refusal on the subtheme create, which sends the
+// code, the title and the description to Postgres as they
+// came: a NUL character in any of the three fails the INSERT
+// and answers 500 instead of the usual 400.
+// -----------------------------------------------------------
+
+test(
+  "BUG: POST /:themeId/subthemes: a NUL character in the code, title or description → 400, not 500",
+  { todo: "known bug: POST /api/themes/:themeId/subthemes binds code, title and description as sent — Postgres refuses U+0000 in text with SQLSTATE 22021, which is not mapped and answers 500" },
+  async () => {
+    for (const body of [
+      { code: "9.1.\u0000", title: "Potemė" },
+      { code: "9.1.", title: "Pote\u0000mė" },
+      { code: "9.1.", title: "Potemė", description: "Apra\u0000šymas" },
+    ]) {
+      resetDb();
+      manager();
+      onQuery(/^INSERT INTO subthemes/, refusedLikePostgres(1, "subthemes_theme_id_code_key", (sql, params) => [
+        { id: 10, theme_id: 1, code: params[1], title: params[2], description: params[3], cap: null },
+      ]));
+      const res = await api(app.base, "POST", "/api/themes/1/subthemes", { body, headers: asRole("Vadybininkas") });
+      assert.equal(res.status, 400, `${JSON.stringify(body)} answered ${res.status}`);
+    }
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a subtheme description that is not text
+// -----------------------------------------------------------
+//
+// The description is optional, and whatever arrives in it is
+// inserted as it is: a number, a boolean, an array or an
+// object is turned into text by the driver and stored with a
+// 201. Like an activity's description it must be text or
+// absent — anything else is the usual 400 with nothing
+// inserted, while a missing or null description and a string
+// keep their 201.
+// -----------------------------------------------------------
+
+test(
+  "BUG: POST /:themeId/subthemes: a description that is not a string → 400, nothing inserted",
+  { todo: "known bug: POST /api/themes/:themeId/subthemes binds description ?? null unchecked — 5, true, [\"a\"] and {lt:\"x\"} are stored as text and answered 201" },
+  async () => {
+    const inserted = (sql, params) => [
+      { id: 10, theme_id: 1, code: params[1], title: params[2], description: params[3], cap: null },
+    ];
+
+    for (const description of [5, true, ["a"], { lt: "x" }]) {
+      resetDb();
+      manager();
+      onQuery(/^INSERT INTO subthemes/, inserted);
+      const res = await api(app.base, "POST", "/api/themes/1/subthemes", {
+        body: { code: "9.1.", title: "Potemė", description },
+        headers: asRole("Vadybininkas"),
+      });
+      assert.equal(res.status, 400, `${JSON.stringify(description)} answered ${res.status}`);
+      assert.equal(queryLog().some((q) => q.sql.startsWith("INSERT")), false, `${JSON.stringify(description)} was inserted`);
+    }
+
+    for (const description of [undefined, null, "Aprašymas"]) {
+      resetDb();
+      manager();
+      onQuery(/^INSERT INTO subthemes/, inserted);
+      const res = await api(app.base, "POST", "/api/themes/1/subthemes", {
+        body: { code: "9.1.", title: "Potemė", description },
+        headers: asRole("Vadybininkas"),
+      });
+      assert.equal(res.status, 201, `${JSON.stringify(description)} answered ${res.status}`);
+    }
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // committee numbers — values that are not numbers
 // -----------------------------------------------------------
 //
@@ -901,3 +1261,40 @@ test("cap, total sum and point value: blank strings, booleans, arrays and hex st
     }
   }
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — committee numbers too large to be finite
+// -----------------------------------------------------------
+//
+// A decimal written out in a string passes numberOf, but a
+// string of hundreds of digits converts to Infinity, which is
+// not negative — so cap, total sum and point value all store
+// it, the NUMERIC columns accepting Infinity, and every sum
+// and point value computed from it is wrecked. It must be the
+// usual 400, with nothing written.
+// -----------------------------------------------------------
+
+test(
+  "BUG: cap, total sum and point value: a decimal string too large to be finite → 400, no UPDATE",
+  { todo: "known bug: numberOf turns a decimal string of 400 nines into Infinity, which passes the routes' only check (num < 0), so the UPDATE stores NUMERIC 'Infinity' and answers 200" },
+  async () => {
+    for (const [url, field] of [
+      ["/api/themes/subthemes/10/cap", "cap"],
+      ["/api/themes/1/total-sum", "total_sum"],
+      ["/api/themes/1/pointvalue", "pointvalue"],
+    ]) {
+      resetDb();
+      committee();
+      onQuery(/^UPDATE (subthemes|themes) SET/, (sql, params) => [{ id: 1, [field]: params[0] }]);
+      const res = await api(app.base, "PATCH", url, { body: { [field]: "9".repeat(400) }, headers: asRole("Komisijos narys") });
+      assert.equal(res.status, 400, `${field} answered ${res.status}`);
+      assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE")), false, `${field} was saved`);
+    }
+  }
+);

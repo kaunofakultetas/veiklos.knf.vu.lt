@@ -29,6 +29,10 @@
 //  role lookup fails they answer 500, never a signed-in user
 //  with no roles, which would make the page forget the
 //  active role.
+//
+//  The listener's request timeout, pinned as a known bug:
+//  index.js keeps Node's five-minute default, shorter than a
+//  100 MB attachment takes on a slow upload link.
 // -----------------------------------------------------------
 
 import { test, before, after, mock } from "node:test";
@@ -320,3 +324,30 @@ test("a failed role lookup answers /api/me and /api/session/check with 500, neve
     rolesFail = false;
   }
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — uploads cut off after five minutes
+// -----------------------------------------------------------
+//
+// Attachments may be 100 MB, the ingress streams request
+// bodies straight through, and the listener index.js opens
+// keeps Node's default request timeout of five minutes: an
+// upload still arriving by then is answered 408 and its
+// connection dropped, which takes no more than a slow home
+// connection.
+// -----------------------------------------------------------
+
+test(
+  "BUG: an attachment upload may take longer than five minutes to arrive",
+  { todo: "known bug: index.js keeps Node's default requestTimeout (300000 ms), so an upload still arriving after five minutes is answered 408 and dropped" },
+  () => {
+    const [server] = servers;
+    assert.ok(server.requestTimeout === 0 || server.requestTimeout >= 30 * 60 * 1000, `requestTimeout is ${server.requestTimeout}`);
+  }
+);

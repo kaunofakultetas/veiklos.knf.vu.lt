@@ -12,6 +12,12 @@
 //  (collapsing it — except the parent of a new subtheme),
 //  backend errors are shown verbatim without a reload, and
 //  every native field is reachable by its label.
+//
+//  A known bug is pinned with test.fails beside the theme
+//  delete: deleting the theme the new-subtheme form points at
+//  leaves the deleted theme as its parent, so the form posts
+//  under a theme that is gone, or with no theme left keeps
+//  Sukurti potemę enabled.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -466,6 +472,92 @@ test("delete theme: confirm text, cancel sends nothing, DELETE /api/themes/:id, 
   expect(requestsTo("GET", "/api/themes")).toHaveLength(2);
   expect(screen.queryByText("Mokslas")).not.toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "Pašalinti temą" })).toHaveLength(1);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the subtheme form keeps a deleted parent
+// -----------------------------------------------------------
+//
+// load() seeds the new subtheme's parent only while it is
+// empty, so deleting the theme the form points at leaves the
+// deleted id in place: the picker falls back to its
+// placeholder, yet a code and a title enable Sukurti potemę,
+// which posts under the deleted theme and gets the backend's
+// "Klaida: tema nerasta" back. After the reload the parent
+// should move to a theme that is left, or the button should
+// wait for a pick; either way nothing is posted under the
+// deleted theme.
+// -----------------------------------------------------------
+
+test.fails("BUG: once its parent theme is deleted, Sukurti potemę posts nothing under it", async () => {
+  const state = scriptTree();
+  onRequest("DELETE", "/api/themes/1", () => {
+    state.tree = [THEMES[1]];
+    return { status: 204 };
+  });
+
+  // The backend's answer for a parent that is gone, and a
+  // create under the theme that is left
+  onRequest("POST", "/api/themes/1/subthemes", { status: 404, body: { error: "Klaida: tema nerasta" } });
+  onRequest("POST", "/api/themes/2/subthemes", (req) => created(21, 2, req.body));
+  const { user } = renderPage(ThemesPage);
+  await loaded();
+
+  await user.click(within(themeItem("Studijų kokybė")).getByRole("button", { name: "Pašalinti temą" }));
+  await screen.findByText("Tema pašalinta.");
+  await user.type(subCode(), "6.2.1.");
+  await user.type(subTitle(), "Projektai");
+
+  // The parent moved to the theme that is left, or the button
+  // waits for one to be picked
+  const moved = screen.queryByRole("button", { name: "Priklauso temai * 6.2. — Mokslas" }) !== null;
+  const create = screen.getByRole("button", { name: "Sukurti potemę" });
+  const form = moved ? "parent moved" : create.disabled ? "waiting for a pick" : "enabled with no parent shown";
+  expect(["parent moved", "waiting for a pick"]).toContain(form);
+
+  await user.click(create);
+  expect(requestsTo("POST", "/api/themes/1/subthemes")).toEqual([]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the subtheme form keeps the last theme deleted
+// -----------------------------------------------------------
+//
+// The same stale parent when the deleted theme was the last
+// one: the tree shows "(temų nėra)" and the picker its
+// placeholder, yet a code and a title enable Sukurti potemę,
+// where an empty tree keeps it disabled for lack of a parent
+// (see "empty tree" above).
+// -----------------------------------------------------------
+
+test.fails("BUG: deleting the last theme keeps Sukurti potemę disabled for lack of a parent", async () => {
+  const state = scriptTree([THEMES[0]]);
+  onRequest("DELETE", "/api/themes/1", () => {
+    state.tree = [];
+    return { status: 204 };
+  });
+  const { user } = renderPage(ThemesPage);
+  await loaded();
+
+  await user.click(screen.getByRole("button", { name: "Pašalinti temą" }));
+  await screen.findByText("Tema pašalinta.");
+  expect(screen.getByText("(temų nėra)")).toBeInTheDocument();
+  await user.type(subCode(), "6.1.1.");
+  await user.type(subTitle(), "Paskaitos");
+
+  expect(screen.getByRole("button", { name: "Sukurti potemę" })).toBeDisabled();
 });
 
 

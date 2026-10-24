@@ -107,6 +107,30 @@ test("apiSend: a body-less answer is fine; apiJson reads a 2xx that is not JSON 
 
 
 // -----------------------------------------------------------
+// BUG — a failed fetch skips the fallback
+// -----------------------------------------------------------
+//
+// Only a refusal gets the caller's fallback: when fetch
+// itself fails — no network, the backend out of reach — the
+// browser's own error goes through untouched, and the page
+// shows its English text instead of the Lithuanian fallback
+// it passed. A call that never got an answer should throw
+// the caller's fallback too.
+// -----------------------------------------------------------
+
+test.fails("BUG: a fetch that fails outright throws the caller's fallback", async () => {
+  onRequest("GET", "/api/themes", () => { throw new TypeError("Failed to fetch"); });
+
+  await expect(apiJson("/api/themes", { fallback: "Klaida: Nepavyko įkelti." })).rejects.toThrowError(/^Klaida: Nepavyko įkelti\.$/);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // several calls at once
 // -----------------------------------------------------------
 //

@@ -10,6 +10,10 @@
 //  bodies, the row updates and the draft resets, the
 //  client-side validation refuses empty and negative input
 //  without a request, and backend errors are shown as sent.
+//
+//  Pinned as expected failures, the known bugs: overlapping
+//  row saves that share one busy state, and the saved
+//  confirmations styled as errors.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -113,6 +117,55 @@ test("saves a theme total: PATCH body, updated cell, reset draft, message", asyn
 
 
 // -----------------------------------------------------------
+// BUG — overlapping row saves share one busy state
+// -----------------------------------------------------------
+//
+// Each table keeps a single busy row id, so starting a save
+// in a second row while the first is still pending moves the
+// busy state there: the first row's button turns back into
+// an enabled save although its request is still in flight,
+// and whichever save finishes first clears the busy state of
+// the other. Every row must keep its own disabled busy label
+// while its own save is pending. A known bug, pinned as an
+// expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: a row keeps its disabled busy label while its own save is pending", async () => {
+  signInAs("Komisijos narys");
+  onRequest("GET", "/api/themes", THEMES);
+  // Each total-sum PATCH waits in `pending` until released;
+  // only the saves actually sent are released, as a page that
+  // saves one row at a time may hold the second one back
+  const pending = [];
+  const answerLater = (answer) => () => new Promise((resolve) => { pending.push(() => resolve(answer)); });
+  onRequest("PATCH", "/api/themes/1/total-sum", answerLater({ id: 1, code: "6.1.", title: "Studijų kokybė", total_sum: "7" }));
+  onRequest("PATCH", "/api/themes/2/total-sum", answerLater({ id: 2, code: "6.2.", title: "Mokslas", total_sum: "12.5" }));
+  const { user } = renderPage(LimitsPage);
+  await screen.findByRole("heading", { name: "Temų bendros sumos" });
+
+  const first = rowNamed("Studijų kokybė");
+  const second = rowNamed("Mokslas");
+  await user.clear(within(first).getByRole("spinbutton"));
+  await user.type(within(first).getByRole("spinbutton"), "7");
+  await user.clear(within(second).getByRole("spinbutton"));
+  await user.type(within(second).getByRole("spinbutton"), "12.5");
+  await user.click(within(first).getByRole("button", { name: "Išsaugoti" }));
+  await user.click(within(second).getByRole("button", { name: "Išsaugoti" }));
+
+  expect(within(first).getByRole("button")).toHaveTextContent("Saugoma…");
+  expect(within(first).getByRole("button")).toBeDisabled();
+
+  pending.forEach((release) => release());
+  expect(await within(first).findByText("7.00")).toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // subtheme cap
 // -----------------------------------------------------------
 //
@@ -137,6 +190,44 @@ test("saves a subtheme cap: PATCH body and updated cell", async () => {
   expect(patch.body).toEqual({ cap: 3 });
   expect(patch.headers["x-active-role"]).toBe("Komisijos narys");
   expect(within(rowNamed("6.1.2. — Seminarai")).getByText("3.00")).toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the saved confirmations show as errors
+// -----------------------------------------------------------
+//
+// The page has one status line and always styles it as an
+// error, so the confirmations after a saved theme sum and a
+// saved subtheme limit sit in the red error box like a
+// refusal. A confirmation must not be styled as an error. A
+// known bug, pinned as an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: the saved-sum and saved-limit confirmations are not styled as errors", async () => {
+  signInAs("Komisijos narys");
+  onRequest("GET", "/api/themes", THEMES);
+  onRequest("PATCH", "/api/themes/2/total-sum", { id: 2, code: "6.2.", title: "Mokslas", total_sum: "12.5" });
+  onRequest("PATCH", "/api/themes/subthemes/12/cap", { id: 12, theme_id: 1, code: "6.1.2.", title: "Seminarai", description: null, cap: "3" });
+  const { user } = renderPage(LimitsPage);
+  await screen.findByRole("heading", { name: "Temų bendros sumos" });
+
+  const themeRow = rowNamed("Mokslas");
+  await user.clear(within(themeRow).getByRole("spinbutton"));
+  await user.type(within(themeRow).getByRole("spinbutton"), "12.5");
+  await user.click(within(themeRow).getByRole("button", { name: "Išsaugoti" }));
+  expect(await screen.findByText("Temos suma atnaujinta.")).not.toHaveClass("form-status--error");
+
+  const subRow = rowNamed("6.1.2. — Seminarai");
+  await user.clear(within(subRow).getByRole("spinbutton"));
+  await user.type(within(subRow).getByRole("spinbutton"), "3");
+  await user.click(within(subRow).getByRole("button", { name: "Išsaugoti" }));
+  expect(await screen.findByText("Ribos sėkmingai atnaujintos.")).not.toHaveClass("form-status--error");
 });
 
 

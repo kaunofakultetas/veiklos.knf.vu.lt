@@ -20,10 +20,15 @@
 //  requireActiveRoleIn is
 //  real; nodemailer is mocked; multer writes real files into
 //  uploads/ (tracked and removed after the run).
+//
+//  Known bugs are pinned as todo tests under BUG banners:
+//  each asserts the behaviour the route should have, and
+//  stays a todo until the route is fixed.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -32,6 +37,7 @@ import { signInAs, signOut } from "./helpers/authMock.js";
 import { outbox, mailControl } from "./helpers/mailMock.js";
 import { resetDb, onQuery, queryLog } from "./helpers/db.js";
 import { startRouter, api } from "./helpers/http.js";
+import { pool } from "../src/db/pool.js";
 
 
 // Where multer really writes during these tests; every file a
@@ -691,6 +697,102 @@ test("create: a file the server cannot write (disk full) → 500 with the cause 
 
 
 // -----------------------------------------------------------
+// BUG — a failed write keeps the partial file
+// -----------------------------------------------------------
+//
+// When the disk fills up or fails while an attachment is
+// being stored, the storage engine hands the write error to
+// multer and leaves the file it has already created: multer
+// removes only the files whose storing finished, and the
+// engine does not unlink on its own error. The answer is the
+// right 500, but the empty or half-written file stays in
+// uploads/ for good. It should go like every other upload no
+// row points at.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a write that fails while the attachment is stored leaves no file behind",
+  { todo: "known bug: the storage engine hands the write stream's error to multer without unlinking the file it has already created, and multer never tracked that file, so it stays in uploads/" },
+  async (t) => {
+    employee();
+    stubFullName();
+    const before = snapshotUploads();
+    // The real stream has created the file by the time its
+    // first write fails
+    t.mock.method(fs, "createWriteStream", (file) => {
+      fs.writeFileSync(file, "");
+      return new Writable({
+        write(_chunk, _encoding, done) {
+          done(Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC", errno: -28, syscall: "write" }));
+        },
+      });
+    });
+
+    const res = await api(app.base, "POST", "/api/activities", {
+      form: activityForm({ ...BASE_CREATE, file: "turinys", fileName: "priedas.txt" }),
+      headers: asRole("Darbuotojas"),
+    });
+
+    // an unlink would be fire-and-forget — give it a beat
+    await new Promise((r) => setTimeout(r, 100));
+    const left = [...snapshotUploads()].filter((f) => !before.has(f));
+    for (const f of left) createdFiles.add(f);
+    assert.equal(res.status, 500);
+    assert.deepEqual(left, [], "the partial file must not stay on disk");
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a long code breaks the stored name
+// -----------------------------------------------------------
+//
+// The stored file name is built from the theme and subtheme
+// codes the form sends, cleaned but never shortened. A code a
+// few hundred letters long makes the name longer than the
+// filesystem allows, the file cannot even be opened, and the
+// create is answered 500 as if the server had failed. A long
+// code should still store the attachment under a name cut to
+// fit, or be refused as bad input.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a theme or subtheme code hundreds of letters long is never answered 500",
+  { todo: "known bug: cleanSegment has no length cap, so a 300-letter theme_code or subtheme_code makes the stored name longer than NAME_MAX; open() fails with ENAMETOOLONG and the upload error is answered 500" },
+  async () => {
+    employee();
+    const before = snapshotUploads();
+    const failed = [];
+
+    for (const field of ["theme_code", "subtheme_code"]) {
+      resetDb();
+      stubFullName();
+      stubPair();
+      onQuery(/INSERT INTO activities/, (sql, params) => [{ id: 5, title: params[3] }]);
+      const res = await api(app.base, "POST", "/api/activities", {
+        form: activityForm({ ...BASE_CREATE, [field]: "a".repeat(300), file: "turinys", fileName: "priedas.txt" }),
+        headers: asRole("Darbuotojas"),
+      });
+      for (const f of snapshotUploads()) if (!before.has(f)) createdFiles.add(f);
+      if (res.status >= 500) failed.push(`${field} of 300 letters: ${res.status}`);
+    }
+
+    assert.deepEqual(failed, []);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // create — a description that is not text
 // -----------------------------------------------------------
 //
@@ -733,6 +835,113 @@ test("create: a description that is not text → 400 before any query; null coun
   assert.equal(res.status, 201);
   assert.equal(queryLog().find((q) => q.sql.includes("INSERT INTO activities")).params[4], "");
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// refusesNul
+// -----------------------------------------------------------
+//
+// A query handler that answers the way Postgres answers a
+// statement carrying the NUL character in a text value: text
+// cannot hold it, so the whole statement is refused with an
+// invalid byte sequence error. A statement without one gets
+// the result given, served as onQuery would serve it.
+//
+// Used by:
+//   - the NUL character pins on create, edit, the verdicts
+//     and the calculate feed (below)
+// -----------------------------------------------------------
+
+function refusesNul(result) {
+  return (sql, params = []) => {
+    if (params.some((p) => typeof p === "string" && p.includes("\u0000"))) {
+      throw Object.assign(new Error('invalid byte sequence for encoding "UTF8": 0x00'), { code: "22021" });
+    }
+    return typeof result === "function" ? result(sql, params) : result;
+  };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// nulFileNameRequest
+// -----------------------------------------------------------
+//
+// A hand-made multipart request from the employee, the given
+// text fields first and then an attachment whose original
+// name carries the NUL character. FormData writes a name into
+// the part header as it is, and busboy refuses a raw NUL
+// there as a malformed header; the extended filename
+// parameter spells it percent-encoded, and busboy decodes it
+// into the name multer hands the route.
+//
+// Used by:
+//   - the NUL character pins on create and edit (below)
+// -----------------------------------------------------------
+
+function nulFileNameRequest(method, fields) {
+  const boundary = "veiklos-nul";
+  const parts = Object.entries(fields).map(([name, value]) => `Content-Disposition: form-data; name="${name}"\r\n\r\n${value}`);
+  parts.push("Content-Disposition: form-data; name=\"attachment\"; filename*=UTF-8''priedas%00.txt\r\nContent-Type: text/plain\r\n\r\nturinys");
+  return {
+    method,
+    headers: { ...asRole("Darbuotojas"), "Content-Type": `multipart/form-data; boundary=${boundary}` },
+    body: parts.map((part) => `--${boundary}\r\n${part}\r\n`).join("") + `--${boundary}--\r\n`,
+  };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a NUL character in a create
+// -----------------------------------------------------------
+//
+// The NUL character passes every check on the title, the
+// description and the attachment's original name, but
+// Postgres cannot store it in text and refuses the INSERT, so
+// the employee gets a 500 for input that is simply bad. Such
+// a create should be refused with a 400 before the INSERT.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a NUL character in the title, description or file name of a create → 400",
+  { todo: "known bug: nothing refuses U+0000 in the title, the description or the original file name; Postgres rejects it in text (SQLSTATE 22021) and the failed INSERT is answered 500" },
+  async () => {
+    employee();
+    const before = snapshotUploads();
+    const create = (body) => api(app.base, "POST", "/api/activities", { body, headers: asRole("Darbuotojas") });
+    const answers = [];
+
+    for (const [what, send] of [
+      ["title", () => create({ theme_id: 1, subtheme_id: 2, title: "Konferencija\u0000" })],
+      ["description", () => create({ theme_id: 1, subtheme_id: 2, title: "Konferencija", description: "Aprašymas\u0000" })],
+      ["file name", () => fetch(`${app.base}/api/activities`, nulFileNameRequest("POST", BASE_CREATE))],
+    ]) {
+      resetDb();
+      stubFullName();
+      stubPair();
+      onQuery(/INSERT INTO activities/, refusesNul((sql, params) => [{ id: 6, title: params[3] }]));
+      const res = await send();
+      for (const f of snapshotUploads()) if (!before.has(f)) createdFiles.add(f);
+      answers.push(`${what}: ${res.status}`);
+    }
+
+    assert.deepEqual(answers, ["title: 400", "description: 400", "file name: 400"]);
+  }
+);
 
 
 
@@ -871,6 +1080,36 @@ test("GET /evaluated/employees + /evaluated/employee/:eid/subthemes", async () =
   assert.equal(res.status, 200);
   assert.deepEqual(queryLog()[0].params, ["emp-1"]);
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a NUL character in the employee id
+// -----------------------------------------------------------
+//
+// The employee id in the calculate feed's URL is bound into
+// its query as it arrives, so an encoded NUL character makes
+// Postgres refuse the query and the feed answers 500. An id
+// that cannot name an employee should be a 400 or a 404.
+// -----------------------------------------------------------
+
+test(
+  "BUG: an employee id with a NUL character in the calculate feed → 400 or 404",
+  { todo: "known bug: the :eid is bound into the query unchecked, so a %00 in it reaches Postgres, which rejects it (SQLSTATE 22021), and the feed answers 500" },
+  async () => {
+    committee();
+    onQuery(/COALESCE\(SUM\(a\.score\), 0\) AS total_score/, refusesNul([]));
+
+    const res = await api(app.base, "GET", "/api/activities/evaluated/employee/emp%001/subthemes", {
+      headers: asRole("Komisijos narys"),
+    });
+    assert.ok(res.status === 400 || res.status === 404, `answered ${res.status}`);
+  }
+);
 
 
 
@@ -1187,6 +1426,86 @@ test("manager verdict: a comment that is not a string → 400 or a clean save, n
 
 
 // -----------------------------------------------------------
+// BUG — a manager field that cannot become text
+// -----------------------------------------------------------
+//
+// A JSON object whose toString is not a function cannot be
+// turned into text or a number at all: the manager comment's
+// conversion and the theme id's parse throw on it, and the
+// verdict is answered 500. Like the null, the number and the
+// array above, such a field should be refused or ignored,
+// never a 500.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a manager comment or theme id that cannot become text → 400 or a clean save, never 500",
+  { todo: "known bug: String(manager_comments) and parseId(theme_id) throw 'Cannot convert object to primitive value' on an object whose toString is not a function, and the route's catch answers 500" },
+  async () => {
+    manager();
+    const failed = [];
+    for (const body of [
+      { manager_comments: { toString: "x" } },
+      { theme_id: { toString: "x" } },
+    ]) {
+      resetDb();
+      stubManagerPatch();
+      stubPair();
+      const res = await api(app.base, "PATCH", "/api/activities/10/manager", {
+        body,
+        headers: asRole("Vadybininkas"),
+      });
+      if (res.status !== 200 && res.status !== 400) failed.push(`${JSON.stringify(body)}: ${res.status}`);
+    }
+    assert.deepEqual(failed, []);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a NUL character in a verdict comment
+// -----------------------------------------------------------
+//
+// The rejection reason, the manager's comment and the
+// committee's comment are stored as sent, only trimmed. A NUL
+// character in any of them makes Postgres refuse the UPDATE,
+// and the verdict is answered 500. It should be refused with
+// a 400 before anything is written.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a NUL character in a manager or committee comment → 400",
+  { todo: "known bug: rejection_comment, manager_comments and committee_comments are not checked for U+0000; Postgres rejects the UPDATE (SQLSTATE 22021) and the verdict is answered 500" },
+  async () => {
+    const answers = [];
+    for (const [field, who, stub, role, url, body] of [
+      ["rejection_comment", manager, stubManagerPatch, "Vadybininkas", "/api/activities/10/manager", { action: "deny", rejection_comment: "Blogai\u0000" }],
+      ["manager_comments", manager, stubManagerPatch, "Vadybininkas", "/api/activities/10/manager", { manager_comments: "Pastaba\u0000" }],
+      ["committee_comments", committee, stubCommitteePatch, "Komisijos narys", "/api/activities/10/committee", { action: "return", committee_comments: "Patikslinkite\u0000" }],
+    ]) {
+      resetDb();
+      who();
+      // registered first — the first matching handler wins
+      onQuery(/UPDATE activities SET/, refusesNul({ rowCount: 1 }));
+      stub();
+      const res = await api(app.base, "PATCH", url, { body, headers: asRole(role) });
+      answers.push(`${field}: ${res.status}`);
+    }
+    assert.deepEqual(answers, ["rejection_comment: 400", "manager_comments: 400", "committee_comments: 400"]);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // stubCommitteePatch
 // -----------------------------------------------------------
 //
@@ -1479,6 +1798,53 @@ test("return: a dead mail relay does not fail the return", async () => {
 
 
 // -----------------------------------------------------------
+// BUG — a stale return wipes a score
+// -----------------------------------------------------------
+//
+// The committee route lets ĮVERTINTA rows through its gate
+// and its conditional UPDATE so that a score can be corrected
+// from the results page, and a return passes the same gate.
+// A return is only offered in the PATVIRTINTA queue, so a
+// member whose queue is stale can return an activity another
+// member has just scored: the score is wiped, the activity
+// drops back to PATEIKTA and every manager is mailed. A
+// return on a scored row should get the lost-race 409, with
+// no write that could touch the scored row and no mail. The
+// fake database holds the row as ĮVERTINTA: only an UPDATE
+// whose condition admits that status finds it.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a return on a row another member has just scored → 409, nothing written, no mail",
+  { todo: "known bug: score and return share the gate and the conditional UPDATE that admit ĮVERTINTA, so a return on a scored row is saved — score wiped, status PATEIKTA, every manager mailed — and answered 200" },
+  async () => {
+    committee();
+    onQuery(/SELECT status FROM activities WHERE id = \$1/, [{ status: "ĮVERTINTA" }]);
+    onQuery(/^UPDATE activities SET/, (sql) => ({ rowCount: sql.slice(sql.indexOf(" WHERE ")).includes("ĮVERTINTA") ? 1 : 0 }));
+    onQuery(/SELECT employee_eid, status FROM activities WHERE id = \$1/, [{ employee_eid: "emp-1", status: "ĮVERTINTA" }]);
+    onQuery(/SELECT a\.id, a\.employee_eid/, [{ id: 10, status: "PATEIKTA" }]);
+    stubReturnNotice([{ email: "vadybininke@vu.lt", full_name: "Rūta Vadybininkė" }]);
+
+    const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
+      body: { action: "return", committee_comments: "Patikslinkite temą" },
+      headers: asRole("Komisijos narys"),
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.equal(res.status, 409);
+    const admitsScored = (q) => q.sql.startsWith("UPDATE activities") && q.sql.slice(q.sql.indexOf(" WHERE ")).includes("ĮVERTINTA");
+    assert.equal(queryLog().some(admitsScored), false, "no UPDATE that admits the scored row");
+    assert.deepEqual(outbox.map((m) => m.to), [], "no manager is mailed");
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // committee — empty body
 // -----------------------------------------------------------
 //
@@ -1529,6 +1895,46 @@ test("score: blank strings, booleans, arrays and hex strings → 400, no UPDATE"
     assert.equal(queryLog().some((q) => q.sql.startsWith("UPDATE activities")), false, JSON.stringify(score));
   }
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a committee field that cannot become text
+// -----------------------------------------------------------
+//
+// The committee route converts its comment and parses its
+// subtheme id the same way the manager route does, so a JSON
+// object whose toString is not a function throws there too
+// and the verdict is answered 500. Such a field should be
+// refused or ignored, never a 500.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a committee comment or subtheme id that cannot become text → 400 or a clean save, never 500",
+  { todo: "known bug: String(committee_comments) and parseId(subtheme_id) throw 'Cannot convert object to primitive value' on an object whose toString is not a function, and the route's catch answers 500" },
+  async () => {
+    committee();
+    const failed = [];
+    for (const body of [
+      { committee_comments: { toString: "x" } },
+      { action: "score", score: 0.5, subtheme_id: { toString: "x" } },
+    ]) {
+      resetDb();
+      stubCommitteePatch();
+      stubPair();
+      const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
+        body,
+        headers: asRole("Komisijos narys"),
+      });
+      if (res.status !== 200 && res.status !== 400) failed.push(`${JSON.stringify(body)}: ${res.status}`);
+    }
+    assert.deepEqual(failed, []);
+  }
+);
 
 
 
@@ -1873,6 +2279,51 @@ test("employee edit: a title or description that is not text → 400; null clear
 
 
 // -----------------------------------------------------------
+// BUG — a NUL character in an edit
+// -----------------------------------------------------------
+//
+// The same character in an edited title or description, or
+// in the name of a replacement file, reaches the UPDATE
+// unchecked; Postgres refuses it and the edit is answered
+// 500. It should be a 400, like the other text the edit
+// refuses.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a NUL character in an edited title, description or file name → 400",
+  { todo: "known bug: the edit does not refuse U+0000 either; Postgres rejects the UPDATE (SQLSTATE 22021) and the edit is answered 500" },
+  async () => {
+    employee();
+    const before = snapshotUploads();
+    const edit = (body) => api(app.base, "PATCH", "/api/activities/10", { body, headers: asRole("Darbuotojas") });
+    const answers = [];
+
+    for (const [what, send] of [
+      ["title", () => edit({ title: "Naujas\u0000" })],
+      ["description", () => edit({ description: "Aprašas\u0000" })],
+      ["file name", () => fetch(`${app.base}/api/activities/10`, nulFileNameRequest("PATCH", { theme_code: "T1", subtheme_code: "T1.1" }))],
+    ]) {
+      resetDb();
+      stubFullName();
+      // registered first — the first matching handler wins
+      onQuery(/UPDATE activities SET/, refusesNul({ rowCount: 1 }));
+      stubEmployeePatch();
+      const res = await send();
+      for (const f of snapshotUploads()) if (!before.has(f)) createdFiles.add(f);
+      answers.push(`${what}: ${res.status}`);
+    }
+
+    assert.deepEqual(answers, ["title: 400", "description: 400", "file name: 400"]);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // edit — one edit at a time
 // -----------------------------------------------------------
 //
@@ -1920,6 +2371,187 @@ test("employee edit: locked read, UPDATE and COMMIT in one transaction; the repl
   assert.ok(queryLog().some((q) => q.sql === "ROLLBACK"), "a refused edit rolls back");
   assert.equal(queryLog().some((q) => q.sql === "COMMIT"), false);
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — an edit waits for a second connection
+// -----------------------------------------------------------
+//
+// The edit holds its transaction's connection until its
+// finally, yet reads its answer, and the lost race's re-read,
+// through the pool, which needs a second connection. pg's
+// pool hands out ten and waits for a free one without a time
+// limit, so ten edits at once each hold one connection and
+// wait for another forever: the backend stops answering
+// everything, the session store included. With room for a
+// single connection one edit shows it. Every query of the
+// edit should run on the client it holds, or the client be
+// released before the pool is asked again.
+// -----------------------------------------------------------
+
+test(
+  "BUG: an edit and a lost-race edit are answered when the pool has room for one connection",
+  { todo: "known bug: the edit runs its answer's SELECT, and answerLostRace its re-read, through pool.query while it still holds the client from pool.connect, released only in the finally; with every connection held that way the requests wait forever, since pg's pool has no acquire timeout", timeout: 15_000 },
+  async () => {
+    // pg's pool with room for one connection, over the fake
+    // database: pool.query holds it for one statement,
+    // pool.connect until the client is released. The
+    // function it returns lifts the limit and lets every
+    // waiter through.
+    const oneConnection = () => {
+      const { query, connect } = pool;
+      let free = 1;
+      const waiting = [];
+      const take = () => (free > 0 ? (free--, Promise.resolve()) : new Promise((r) => waiting.push(r)));
+      const give = () => (waiting.length ? waiting.shift()() : free++);
+      pool.query = async (...args) => {
+        await take();
+        try {
+          return await query(...args);
+        } finally {
+          give();
+        }
+      };
+      pool.connect = async () => {
+        await take();
+        const client = await connect();
+        const { release } = client;
+        let held = true;
+        client.release = (...args) => {
+          if (held) give();
+          held = false;
+          return release.apply(client, args);
+        };
+        return client;
+      };
+      return () => {
+        pool.query = query;
+        pool.connect = connect;
+        free = Infinity;
+        while (waiting.length) waiting.shift()();
+      };
+    };
+
+    employee();
+    const answers = [];
+    for (const [name, updated] of [["edit", 1], ["lost race", 0]]) {
+      resetDb();
+      stubFullName();
+      onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
+      onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
+        { employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null },
+      ]);
+      onQuery(/UPDATE activities SET/, { rowCount: updated });
+      onQuery(/SELECT employee_eid, status FROM activities WHERE id = \$1/, [
+        { employee_eid: "emp-1", status: "PATVIRTINTA" },
+      ]);
+      onQuery(/SELECT a\.id, a\.theme_id/, [{ id: 10, status: "PATEIKTA" }]);
+
+      const lift = oneConnection();
+      let res;
+      try {
+        res = await fetch(`${app.base}/api/activities/10`, {
+          method: "PATCH",
+          headers: { ...asRole("Darbuotojas"), "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "Naujas" }),
+          signal: AbortSignal.timeout(2000),
+        }).catch((err) => err);
+      } finally {
+        lift();
+        // a stranded handler finishes on this case's stubs
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      answers.push(`${name}: ${res.status ?? res.name}`);
+    }
+
+    assert.deepEqual(answers, ["edit: 200", "lost race: 409"]);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the connection dies in the middle of an edit
+// -----------------------------------------------------------
+//
+// A client taken with pool.connect has no error listener:
+// pg-pool removes its own idle listener at checkout. When the
+// connection dies under a query, pg fails the query and also
+// emits the error on the client, and an error event nobody
+// listens to is thrown — it ends the whole process. The fake
+// client is handed out the way pg-pool hands one out, with
+// the pool's connect and acquire events, and dies that way
+// under the locked read. The edit should answer 500 with
+// nothing escaping it. The test holds the process's
+// uncaughtException listeners while the request runs.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a connection that dies in the middle of an edit is answered 500 and ends nothing",
+  { todo: "known bug: the client from pool.connect gets no 'error' listener (pg-pool removes its idle one at checkout), so the 'error' pg emits on a dropped connection is thrown as an uncaught exception that ends the process", timeout: 10_000 },
+  async () => {
+    employee();
+    stubFullName();
+    stubEmployeePatch();
+    const { connect } = pool;
+    const dispatch = pool.query;
+    // Every statement but the locked read goes to the fake
+    // database; a client pg-pool hands out is announced with
+    // the pool's connect and acquire events
+    pool.connect = async () => {
+      const client = new EventEmitter();
+      let dead = false;
+      client.query = (sql, params) => {
+        if (dead) return Promise.reject(new Error("Client has encountered a connection error and is not queryable"));
+        if (!/FOR UPDATE/.test(sql)) return dispatch(sql, params);
+        dead = true;
+        // pg fails the running query on the next tick and
+        // emits the error on the client at once
+        return new Promise((_, reject) => setImmediate(() => {
+          const err = new Error("Connection terminated unexpectedly");
+          process.nextTick(reject, err);
+          client.emit("error", err);
+        }));
+      };
+      client.release = () => {};
+      pool.emit("connect", client);
+      pool.emit("acquire", client);
+      return client;
+    };
+
+    const runnerListeners = process.listeners("uncaughtException");
+    process.removeAllListeners("uncaughtException");
+    const escaped = [];
+    process.on("uncaughtException", (err) => escaped.push(String(err)));
+
+    let res;
+    try {
+      res = await fetch(`${app.base}/api/activities/10`, {
+        method: "PATCH",
+        headers: { ...asRole("Darbuotojas"), "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Naujas" }),
+        signal: AbortSignal.timeout(3000),
+      }).catch((err) => err);
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      process.removeAllListeners("uncaughtException");
+      for (const listener of runnerListeners) process.on("uncaughtException", listener);
+      pool.connect = connect;
+    }
+
+    assert.deepEqual(escaped, [], "nothing may throw outside the request");
+    assert.equal(res.status, 500, `no answer — ${res}`);
+  }
+);
 
 
 
@@ -2616,6 +3248,191 @@ test("manager and committee: a mismatched reassignment → 400, no UPDATE; a mat
   assert.equal(res.status, 200);
   assert.deepEqual(queryLog().find((q) => q.sql.startsWith("SELECT 1 FROM subthemes")).params, ["10", null, 1]);
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// subthemeDeleted
+// -----------------------------------------------------------
+//
+// A write handler that fails the way Postgres fails a write
+// naming a subtheme that is gone: the foreign key refuses the
+// row. It stands for a manager deleting the subtheme, or the
+// theme above it, after a route's pair check has passed and
+// before its INSERT or UPDATE runs — the check and the write
+// are two statements, with nothing holding the subtheme in
+// between.
+//
+// Used by:
+//   - the deleted-subtheme pins on create, edit and both
+//     verdicts (below)
+// -----------------------------------------------------------
+
+function subthemeDeleted() {
+  throw Object.assign(
+    new Error('insert or update on table "activities" violates foreign key constraint "activities_subtheme_id_fkey"'),
+    { code: "23503", constraint: "activities_subtheme_id_fkey" }
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// pairGone
+// -----------------------------------------------------------
+//
+// true for the answers a route has for a pair that no longer
+// holds: the pair message the check itself gives, or the 409
+// that tells the page to refresh.
+//
+// Used by:
+//   - the deleted-subtheme pins (below)
+// -----------------------------------------------------------
+
+function pairGone(res) {
+  return (res.status === 400 && res.body?.error === "Klaida: potemė nepriklauso pasirinktai temai") || res.status === 409;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a subtheme deleted after the create's pair check
+// -----------------------------------------------------------
+//
+// The create checks the pair and then inserts; a subtheme
+// deleted in between makes the foreign key refuse the INSERT,
+// and the employee gets a 500 where the route has a friendly
+// answer for exactly this case.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a create whose subtheme is deleted after the pair check → the pair 400 or a 409",
+  { todo: "known bug: a subtheme deleted between the pair check and the INSERT makes the foreign key refuse the INSERT (SQLSTATE 23503), and the route answers 500" },
+  async () => {
+    employee();
+    stubFullName();
+    stubPair(true);
+    onQuery(/INSERT INTO activities/, subthemeDeleted);
+
+    const res = await api(app.base, "POST", "/api/activities", {
+      body: { theme_id: 1, subtheme_id: 2, title: "Konferencija" },
+      headers: asRole("Darbuotojas"),
+    });
+    assert.ok(pairGone(res), `answered ${res.status} ${res.text}`);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a subtheme deleted after the edit's pair check
+// -----------------------------------------------------------
+//
+// The edit's pair check runs inside its transaction, but it
+// locks only the activity's row, not the subtheme: the same
+// deletion in between makes the foreign key refuse the
+// UPDATE, answered 500.
+// -----------------------------------------------------------
+
+test(
+  "BUG: an edit whose new subtheme is deleted after the pair check → the pair 400 or a 409",
+  { todo: "known bug: a subtheme deleted between the pair check and the UPDATE makes the foreign key refuse the UPDATE (SQLSTATE 23503), and the edit answers 500" },
+  async () => {
+    employee();
+    stubFullName();
+    // registered first — the first matching handler wins
+    onQuery(/UPDATE activities SET/, subthemeDeleted);
+    stubEmployeePatch();
+    stubPair(true);
+
+    const res = await api(app.base, "PATCH", "/api/activities/10", {
+      body: { subtheme_id: 9 },
+      headers: asRole("Darbuotojas"),
+    });
+    assert.ok(pairGone(res), `answered ${res.status} ${res.text}`);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a subtheme deleted after the manager's pair check
+// -----------------------------------------------------------
+//
+// A manager moving an activity to another theme and subtheme
+// meets the same gap: a subtheme deleted between the check
+// and the UPDATE is refused by the foreign key, answered 500.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a manager reassignment whose subtheme is deleted after the pair check → the pair 400 or a 409",
+  { todo: "known bug: a subtheme deleted between the manager route's pair check and its UPDATE makes the foreign key refuse the UPDATE (SQLSTATE 23503), and the verdict answers 500" },
+  async () => {
+    manager();
+    // registered first — the first matching handler wins
+    onQuery(/UPDATE activities SET/, subthemeDeleted);
+    stubManagerPatch();
+    stubPair(true);
+
+    const res = await api(app.base, "PATCH", "/api/activities/10/manager", {
+      body: { theme_id: 2, subtheme_id: 1, manager_comments: "Kita tema" },
+      headers: asRole("Vadybininkas"),
+    });
+    assert.ok(pairGone(res), `answered ${res.status} ${res.text}`);
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a subtheme deleted after the committee's pair check
+// -----------------------------------------------------------
+//
+// The committee's reassignment while scoring has the same
+// gap between its pair check and its UPDATE, answered 500.
+// -----------------------------------------------------------
+
+test(
+  "BUG: a committee reassignment whose subtheme is deleted after the pair check → the pair 400 or a 409",
+  { todo: "known bug: a subtheme deleted between the committee route's pair check and its UPDATE makes the foreign key refuse the UPDATE (SQLSTATE 23503), and the verdict answers 500" },
+  async () => {
+    committee();
+    // registered first — the first matching handler wins
+    onQuery(/UPDATE activities SET/, subthemeDeleted);
+    stubCommitteePatch();
+    stubPair(true);
+
+    const res = await api(app.base, "PATCH", "/api/activities/10/committee", {
+      body: { action: "score", score: 1, theme_id: 2, subtheme_id: 1 },
+      headers: asRole("Komisijos narys"),
+    });
+    assert.ok(pairGone(res), `answered ${res.status} ${res.text}`);
+  }
+);
 
 
 

@@ -15,6 +15,18 @@
 //  an incomplete edit and an oversized pick without a
 //  request, and backend errors are shown behind the page's
 //  own prefixes.
+//
+//  Pinned as expected failures, the known bugs: the dialog is
+//  not tied to the activity it was opened for (the backdrop
+//  closes it mid-save, a late save answer lands in another
+//  activity's dialog, a row opened from the keyboard behind
+//  it takes over the draft), a drag out onto the backdrop
+//  closes it, its messages land behind the overlay, a saved
+//  file pick is sent again, re-picking the theme resets the
+//  subtheme, assistive tech is never told it is a dialog,
+//  one busy delete at a time, a file the size of the limit
+//  passes, and a resubmit answer misses a dialog opened
+//  meanwhile.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -115,6 +127,17 @@ const PDF_REPLY = { status: 200, body: "%PDF-1.4", headers: { "Content-Type": "a
 const openModalFor = async (user, title) => {
   await user.click(within(rowNamed(title)).getByRole("button", { name: "Peržiūrėti" }));
   return modal();
+};
+
+// A reply held back until the test lets it go: the scripted
+// fetch waits on the promise the reply hands it, and release
+// answers that request with the reply it is given
+const deferred = () => {
+  let answer;
+  return {
+    reply: () => new Promise((resolve) => { answer = resolve; }),
+    release: (reply) => answer(reply),
+  };
 };
 
 
@@ -350,6 +373,39 @@ test("a refused DELETE shows the prefixed reason and keeps the row", async () =>
 
 
 // -----------------------------------------------------------
+// BUG — one busy delete at a time
+// -----------------------------------------------------------
+//
+// The page keeps a single deleting id for the whole table,
+// so a delete started on a second row while the first is
+// still in flight takes the busy state over: the first row's
+// button turns back into an enabled "Ištrinti" although its
+// request has not answered. Every row whose delete is in
+// flight should stay busy until its own answer arrives.
+// -----------------------------------------------------------
+
+test.fails("BUG: a row whose delete is in flight stays busy while another row's delete starts", async () => {
+  onRequest("DELETE", "/api/activities/101", () => new Promise(() => {}));
+  onRequest("DELETE", "/api/activities/102", () => new Promise(() => {}));
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  await user.click(within(rowNamed("Kursas A")).getByRole("button", { name: "Ištrinti" }));
+  expect(within(rowNamed("Kursas A")).getByRole("button", { name: "Šalinama…" })).toBeDisabled();
+
+  await user.click(within(rowNamed("Seminaras B")).getByRole("button", { name: "Ištrinti" }));
+  expect(within(rowNamed("Seminaras B")).getByRole("button", { name: "Šalinama…" })).toBeDisabled();
+  expect(buttonsIn(rowNamed("Kursas A"))).toEqual(["ataskaita.pdf", "Peržiūrėti", "Šalinama…"]);
+  expect(within(rowNamed("Kursas A")).getByRole("button", { name: "Šalinama…" })).toBeDisabled();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // resubmit
 // -----------------------------------------------------------
 //
@@ -418,6 +474,40 @@ test("a refused resubmit shows the prefixed reason and keeps the row as it was",
 
 
 // -----------------------------------------------------------
+// BUG — a resubmit answer misses the dialog opened meanwhile
+// -----------------------------------------------------------
+//
+// A resubmit refreshes the open dialog only when that dialog
+// was open at the moment of the click: the handler compares
+// the answer with the selection it saw then. A dialog opened
+// for the same activity while the request is in flight keeps
+// showing TIKSLINTI after the row has turned PATEIKTA. The
+// dialog should follow the answer the way the row does.
+// -----------------------------------------------------------
+
+test.fails("BUG: a resubmit answered while the activity's dialog is open shows the new status in the dialog", async () => {
+  const resubmit = deferred();
+  onRequest("POST", "/api/activities/102/resubmit", resubmit.reply);
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  await user.click(within(rowNamed("Seminaras B")).getByRole("button", { name: "Pateikti" }));
+  const m = await openModalFor(user, "Seminaras B");
+  expect(within(m).getByText("TIKSLINTI")).toHaveClass("status-pill--returned");
+
+  resubmit.release(ownRowReply(ACTIVITIES[1], { status: "PATEIKTA", rejection_comment: null }));
+  expect(await screen.findByText("Veikla sėkmingai pateikta iš naujo.")).toBeInTheDocument();
+  expect(within(rowNamed("Seminaras B")).getByText("PATEIKTA")).toHaveClass("status-pill--submitted");
+  expect(within(modal()).getByText("PATEIKTA")).toHaveClass("status-pill--submitted");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // review modal
 // -----------------------------------------------------------
 //
@@ -462,6 +552,67 @@ test("Peržiūrėti opens the modal with the row's values; Uždaryti and the bac
   await user.click(within(c).getByRole("button", { name: "Uždaryti" }));
   expect(modal()).toBeNull();
   expect(requestLog()).toHaveLength(2);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a drag out onto the backdrop closes the dialog
+// -----------------------------------------------------------
+//
+// The backdrop closes the dialog on any click that reaches
+// it, and the browser sends the click of a press and release
+// to the closest element that holds both ends. A text
+// selection started inside the dialog — in the description
+// while editing — and let go over the backdrop therefore
+// closes the dialog and throws the draft away. Only a click
+// that starts and ends on the backdrop should close it.
+// -----------------------------------------------------------
+
+test.fails("BUG: a selection dragged from the description out onto the backdrop keeps the dialog and the draft", async () => {
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const m = await openModalFor(user, "Kursas A");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  const description = m.querySelector("textarea");
+  await user.type(description, " ir daugiau");
+
+  await user.pointer([{ keys: "[MouseLeft>]", target: description }, { target: backdrop() }, { keys: "[/MouseLeft]" }]);
+  expect(m).toBeInTheDocument();
+  expect(m.querySelector("textarea")).toHaveValue("Aprašas A ir daugiau");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the review dialog is not a dialog
+// -----------------------------------------------------------
+//
+// The review/edit modal is a plain div laid over the page,
+// with no dialog role, no modal flag and no accessible name,
+// and the focus stays on the row's Peržiūrėti button behind
+// the overlay: a screen reader is never told that a dialog
+// opened, and the keyboard keeps working the page beneath.
+// It should be a modal dialog named by its heading that
+// takes the focus when it opens.
+// -----------------------------------------------------------
+
+test.fails("BUG: Peržiūrėti opens a dialog named by its heading that holds the focus", async () => {
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  await openModalFor(user, "Kursas A");
+  const dialog = screen.getByRole("dialog", { name: /Veiklos peržiūra/ });
+  expect(dialog).toContainElement(document.activeElement);
 });
 
 
@@ -592,6 +743,199 @@ test("an edit without a file keeps the current attachment: no attachment field, 
 
 
 // -----------------------------------------------------------
+// BUG — the backdrop closes the dialog mid-save
+// -----------------------------------------------------------
+//
+// While a save is in flight the dialog disables its own
+// Uždaryti and Išsaugoti, yet a click on the backdrop still
+// closes it, and the late answer then pops a fresh dialog
+// open on the saved activity. The backdrop should stay as
+// shut as Uždaryti until the save has answered.
+// -----------------------------------------------------------
+
+test.fails("BUG: a click on the backdrop while a save is in flight leaves the dialog open", async () => {
+  const save = deferred();
+  onRequest("PATCH", "/api/activities/101", save.reply);
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const m = await openModalFor(user, "Kursas A");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  await user.type(m.querySelector("input.field-input"), "1");
+  await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
+  expect(within(m).getByRole("button", { name: "Saugoma…" })).toBeDisabled();
+  expect(within(m).getByRole("button", { name: "Uždaryti" })).toBeDisabled();
+
+  await user.click(backdrop());
+  expect(m).toBeInTheDocument();
+
+  save.release(ownRowReply(ACTIVITIES[0], { title: "Kursas A1" }));
+  expect(await within(m).findByRole("button", { name: "Redaguoti" })).toBeEnabled();
+  expect(within(m).getByText("Kursas A1")).toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a late save answer takes over another dialog
+// -----------------------------------------------------------
+//
+// The page hands every save answer to whatever dialog is
+// open, and the dialog carries no key, so it is not tied to
+// the activity it was opened for. Closed mid-save and
+// followed by another row's dialog, the late answer swaps the
+// saved activity into that dialog, which still holds the
+// other activity's state. A save answer should only refresh a
+// dialog opened for its own activity.
+// -----------------------------------------------------------
+
+test.fails("BUG: a save answered after another activity's dialog was opened leaves that dialog on its own activity", async () => {
+  const save = deferred();
+  onRequest("PATCH", "/api/activities/101", save.reply);
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const a = await openModalFor(user, "Kursas A");
+  await user.click(within(a).getByRole("button", { name: "Redaguoti" }));
+  await user.type(a.querySelector("input.field-input"), "1");
+  await user.click(within(a).getByRole("button", { name: "Išsaugoti" }));
+  await user.click(backdrop());
+  await openModalFor(user, "Seminaras B");
+  expect(within(modal()).getByText("Seminaras B")).toBeInTheDocument();
+
+  save.release(ownRowReply(ACTIVITIES[0], { title: "Kursas A1" }));
+  await waitFor(() => expect(rowNamed("Kursas A1")).toBeDefined());
+  expect(within(modal()).getByText("Seminaras B")).toBeInTheDocument();
+  expect(within(modal()).getByText("TIKSLINTI")).toHaveClass("status-pill--returned");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the keyboard swaps the activity under an open draft
+// -----------------------------------------------------------
+//
+// Nothing keeps the keyboard inside the dialog, so the focus
+// can reach the rows behind it. Opening another row from
+// there points the open dialog at that activity while it
+// keeps the draft typed for the first one, still in edit
+// mode, and Išsaugoti then writes that draft over the second
+// activity. A draft must only ever be saved to the activity
+// it was typed for.
+// -----------------------------------------------------------
+
+test.fails("BUG: a draft is never saved to another activity opened from the keyboard behind the dialog", async () => {
+  onRequest("PATCH", /^\/api\/activities\/\d+$/, (req) =>
+    ownRowReply(ACTIVITIES.find((act) => req.path === `/api/activities/${act.id}`), { title: req.body.get("title") }));
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const m = await openModalFor(user, "Kursas A");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  await user.type(m.querySelector("input.field-input"), "1");
+
+  within(rowNamed("Seminaras B")).getByRole("button", { name: "Peržiūrėti" }).focus();
+  await user.keyboard("{Enter}");
+
+  // Whatever the dialog offers now is used to save: Išsaugoti
+  // on a draft still open, or Redaguoti first on a fresh view
+  const primary = () => modal().querySelector(".employee-modal-footer .btn-primary");
+  if (primary().textContent === "Redaguoti") await user.click(primary());
+  await user.click(primary());
+
+  expect(await screen.findByText("Veikla sėkmingai atnaujinta.")).toBeInTheDocument();
+  expect(requestsTo("PATCH", "/api/activities/102").map((r) => r.body.get("title"))).not.toContain("Kursas A1");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a saved attachment pick is sent again
+// -----------------------------------------------------------
+//
+// The dialog outlives a save and its picked file is reset
+// only by a new pick, so after a save that replaced the
+// attachment the next Redaguoti still names that file as
+// newly picked, and the next save uploads it once more.
+// Every edit should start with no file picked.
+// -----------------------------------------------------------
+
+test.fails("BUG: after a save that replaced the attachment, the next edit starts with no file picked and sends none", async () => {
+  onRequest("PATCH", "/api/activities/101", (req) => ownRowReply(ACTIVITIES[0], {
+    title: req.body.get("title"), attachment_path: "uploads/1_1.1_naujas.pdf", attachment_original_name: "naujas.pdf",
+  }));
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const m = await openModalFor(user, "Kursas A");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  await user.upload(fileInput(), new File(["%PDF-1.4"], "naujas.pdf", { type: "application/pdf" }));
+  await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
+  expect(await screen.findByText("Veikla sėkmingai atnaujinta.")).toBeInTheDocument();
+  expect(requestsTo("PATCH", "/api/activities/101")[0].body.has("attachment")).toBe(true);
+
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  expect(within(m).queryByText(/Pasirinktas naujas failas:/)).not.toBeInTheDocument();
+  expect(within(m).getByText("Dabartinis failas: naujas.pdf")).toBeInTheDocument();
+
+  await user.type(m.querySelector("input.field-input"), "1");
+  await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
+  await waitFor(() => expect(requestsTo("PATCH", "/api/activities/101")).toHaveLength(2));
+  expect(requestsTo("PATCH", "/api/activities/101")[1].body.has("attachment")).toBe(false);
+  expect(await within(m).findByRole("button", { name: "Redaguoti" })).toBeEnabled();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — re-picking the shown theme resets the subtheme
+// -----------------------------------------------------------
+//
+// The picker reports a click on the option already selected
+// like any other pick, and the dialog answers every theme
+// pick by preselecting that theme's first subtheme. Opening
+// the theme list and clicking the theme already shown thus
+// silently swaps the activity's subtheme for the first one.
+// Picking the same theme again should change nothing.
+// -----------------------------------------------------------
+
+test.fails("BUG: picking the theme already shown keeps the activity's subtheme", async () => {
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const m = await openModalFor(user, "Seminaras B");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  expect(selects()[1]).toHaveTextContent("1.2. — Seminarai");
+
+  await user.click(selects()[0]);
+  await user.click(within(dropdown()).getByRole("button", { name: "1. — Studijos" }));
+  expect(selects()[0]).toHaveTextContent("1. — Studijos");
+  expect(selects()[1]).toHaveTextContent("1.2. — Seminarai");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // edit labels
 // -----------------------------------------------------------
 //
@@ -706,6 +1050,44 @@ test("an oversized pick in edit mode is refused and cleared; a valid pick replac
 
 
 // -----------------------------------------------------------
+// BUG — a file the size of the limit passes the edit dialog
+// -----------------------------------------------------------
+//
+// The dialog refuses a pick only when it is larger than the
+// 100 MB limit, while the backend refuses a file that
+// reaches the limit, so a file of exactly that size is taken
+// here, uploaded in full and only then turned away. The
+// dialog should refuse it at the pick, like any larger file.
+// -----------------------------------------------------------
+
+test.fails("BUG: a file the size of the 100 MB limit is refused at the pick in edit mode and never sent", async () => {
+  onRequest("PATCH", "/api/activities/101", ownRowReply(ACTIVITIES[0], { title: "Kursas A1" }));
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const m = await openModalFor(user, "Kursas A");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  const atLimit = new File(["x"], "riba.pdf", { type: "application/pdf" });
+  Object.defineProperty(atLimit, "size", { value: 100 * 1024 * 1024 });
+  await user.upload(fileInput(), atLimit);
+
+  expect(within(m).queryByText(/Pasirinktas naujas failas:/)).not.toBeInTheDocument();
+  expect(screen.getAllByText("Klaida: priedas per didelis (iki 100 MB)").length).toBeGreaterThan(0);
+  expect(fileInput().files).toHaveLength(0);
+
+  await user.type(m.querySelector("input.field-input"), "1");
+  await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
+  expect(await screen.findByText("Veikla sėkmingai atnaujinta.")).toBeInTheDocument();
+  expect(requestsTo("PATCH", "/api/activities/101")[0].body.has("attachment")).toBe(false);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // edit errors
 // -----------------------------------------------------------
 //
@@ -733,6 +1115,72 @@ test("a refused PATCH shows the prefixed reason and keeps the draft in edit mode
   expect(m.querySelector("input.field-input")).toHaveValue("Seminaras B2");
   expect(rowNamed("Seminaras B")).toBeDefined();
   expect(screen.queryByText("Seminaras B2", { selector: "td" })).not.toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a refused save is reported behind the dialog
+// -----------------------------------------------------------
+//
+// The dialog has no message area of its own: everything it
+// reports goes to the page's status line under the table,
+// which sits behind the overlay, so a refused save looks as
+// if nothing happened. The dialog should show the refusal
+// inside itself.
+// -----------------------------------------------------------
+
+test.fails("BUG: a refused save is reported inside the dialog", async () => {
+  // The backend's wording, "Klaida:" included — shown once
+  onRequest("PATCH", "/api/activities/102", { status: 400, body: { error: "Klaida: Neteisinga potemė" } });
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const m = await openModalFor(user, "Seminaras B");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
+  await waitFor(() => expect(within(m).getByRole("button", { name: "Išsaugoti" })).toBeEnabled());
+  expect(requestsTo("PATCH", "/api/activities/102")).toHaveLength(1);
+
+  expect(within(m).getByText("Klaida: Nepavyko atnaujinti: Neteisinga potemė")).toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the dialog's own refusals land behind it
+// -----------------------------------------------------------
+//
+// The same goes for what the dialog refuses before sending
+// anything — an incomplete draft and a file over the limit:
+// the message goes to the page's status line behind the
+// overlay while the dialog shows nothing. Both should appear
+// inside the dialog.
+// -----------------------------------------------------------
+
+test.fails("BUG: an incomplete draft and an oversized pick are refused inside the dialog", async () => {
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+
+  const m = await openModalFor(user, "Kursas A");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  await user.clear(m.querySelector("input.field-input"));
+  await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
+  expect(within(m).getByText("Prašome užpildyti temą, potemę ir pavadinimą.")).toBeInTheDocument();
+
+  const big = new File(["x"], "didelis.pdf", { type: "application/pdf" });
+  Object.defineProperty(big, "size", { value: 100 * 1024 * 1024 + 1 });
+  await user.upload(fileInput(), big);
+  expect(within(m).getByText("Klaida: priedas per didelis (iki 100 MB)")).toBeInTheDocument();
+  expect(requestLog()).toHaveLength(2);
 });
 
 

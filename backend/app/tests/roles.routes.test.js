@@ -7,6 +7,9 @@
 //  signed-in non-manager gets a 403 on every route. Nothing
 //  in the frontend calls these routes; the pins keep the
 //  dormant behavior from drifting.
+//
+//  Pinned as an expected failure until it is fixed, the known
+//  bug: an eid holding a NUL character answers 500.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -136,6 +139,49 @@ test("assign: missing fields → 400", async () => {
   assert.equal(res.status, 400);
   assert.deepEqual(res.body, { error: "Klaida: Vartotojo OID ir rolė yra privalomi" });
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a NUL character in the eid
+// -----------------------------------------------------------
+//
+// Postgres refuses text that holds a NUL character, and the
+// eid goes into the INSERT as sent, so a grant for such an
+// eid fails the statement and answers 500 — only the
+// foreign-key refusal is mapped. An eid with a NUL in it is
+// bad input: the usual 400. The fake database refuses a NUL
+// in any parameter the way Postgres does and answers every
+// other query as usual.
+// -----------------------------------------------------------
+
+test(
+  "BUG: assign: a user_eid with a NUL character → 400, not 500",
+  { todo: "known bug: POST /api/roles/assign binds user_eid as sent — Postgres refuses U+0000 in text with SQLSTATE 22021 (invalid byte sequence for encoding \"UTF8\": 0x00), which is not mapped (only 23503 is) and answers 500" },
+  async () => {
+    // Postgres refuses NUL in text as an invalid byte
+    // sequence, SQLSTATE 22021
+    const refusingNul = (answer) => (sql, params = []) => {
+      if (params.some((p) => typeof p === "string" && p.includes("\u0000"))) {
+        throw Object.assign(new Error('invalid byte sequence for encoding "UTF8": 0x00'), { code: "22021" });
+      }
+      return answer;
+    };
+
+    manager();
+    onQuery(/SELECT id FROM roles WHERE name = \$1/, refusingNul([{ id: 7 }]));
+    onQuery(/INSERT INTO user_roles/, refusingNul({ rowCount: 1 }));
+
+    const res = await api(app.base, "POST", "/api/roles/assign", {
+      body: { user_eid: "u\u00001", role_name: "Vadybininkas" },
+    });
+    assert.equal(res.status, 400);
+  }
+);
 
 
 

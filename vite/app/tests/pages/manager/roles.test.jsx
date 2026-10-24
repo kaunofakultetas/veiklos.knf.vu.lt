@@ -12,7 +12,11 @@
 //  for a manager's own Vadybininkas role, backend errors
 //  shown verbatim with the page's own fallbacks, and the
 //  email field and the role dropdown reachable by their
-//  labels.
+//  labels. Pinned as expected failures, the known bugs: a
+//  double click on Priskirti rolę grants twice, and two
+//  removals in flight together compute the pills from the
+//  same stale list, so the later answer undoes the earlier
+//  one.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -249,6 +253,44 @@ test("assigning the last role sorts the pill into place and shows the all-roles 
 
 
 // -----------------------------------------------------------
+// BUG — a double click grants twice
+// -----------------------------------------------------------
+//
+// Priskirti rolę stays enabled while its POST is in flight,
+// so a double click sends the grant twice and, once both
+// answer, fires "app:roles-updated" twice. The backend takes
+// the repeat as a no-op, so the cost is the doubled request
+// and header refresh. The button should wait for its answer,
+// so that a double click sends one POST. A known bug, pinned
+// as an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: a double click on Priskirti rolę sends one POST", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/me", ME);
+  onRequest("GET", "/api/user-roles", lookup(["Darbuotojas"]));
+  // Each grant waits until the test answers it
+  const answers = [];
+  onRequest("POST", "/api/user-roles/assign", () => new Promise((resolve) => answers.push(resolve)));
+  const { user } = renderPage(RolesPage);
+  await lookUp(user, "jonas.jonaitis@knf.vu.lt");
+  await screen.findByText("Turimos rolės:");
+
+  await user.dblClick(screen.getByRole("button", { name: "Priskirti rolę" }));
+  expect(requestsTo("POST", "/api/user-roles/assign")).toHaveLength(1);
+
+  answers[0](DONE);
+  await screen.findByText("Priskirta rolė: Komisijos narys");
+  expect(pillNames()).toEqual(["Darbuotojas", "Komisijos narys"]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // remove
 // -----------------------------------------------------------
 //
@@ -284,6 +326,48 @@ test("remove: ✕ POSTs { email, role } without a confirm, the pill goes, the ro
   expect(onUpdated).toHaveBeenCalledTimes(1);
   expect(requestsTo("GET", "/api/user-roles")).toHaveLength(1);
   window.removeEventListener("app:roles-updated", onUpdated);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — overlapping removals undo each other
+// -----------------------------------------------------------
+//
+// Each answer computes the new pill list from the roles the
+// page held when that ✕ was pressed, not from the list as it
+// stands when the answer lands. Two removals in flight
+// together therefore race: the second answer starts again
+// from the list as it was before either removal and puts the
+// first removed role back on screen, though the backend no
+// longer grants it. Both removals should stick. A known bug,
+// pinned as an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: two removals in flight together both stick — the pills end as Darbuotojas alone", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/me", ME);
+  onRequest("GET", "/api/user-roles", lookup(ALL));
+  // Each removal waits until the test answers it
+  const answers = [];
+  onRequest("POST", "/api/user-roles/remove", () => new Promise((resolve) => answers.push(resolve)));
+  const { user } = renderPage(RolesPage);
+  await lookUp(user, "jonas.jonaitis@knf.vu.lt");
+  await screen.findByText("Turimos rolės:");
+
+  await user.click(within(pill("Komisijos narys")).getByTitle("Pašalinti"));
+  await user.click(within(pill("Vadybininkas")).getByTitle("Pašalinti"));
+  expect(requestsTo("POST", "/api/user-roles/remove").map((r) => r.body.role)).toEqual(["Komisijos narys", "Vadybininkas"]);
+
+  answers[0](DONE);
+  await screen.findByText("Pašalinta rolė: Komisijos narys");
+  answers[1](DONE);
+  await screen.findByText("Pašalinta rolė: Vadybininkas");
+  expect(pillNames()).toEqual(["Darbuotojas"]);
 });
 
 

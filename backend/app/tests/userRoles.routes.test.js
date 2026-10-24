@@ -8,6 +8,10 @@
 //  no X-Active-Role header involved. The tests mount it
 //  exactly like index.js does (mocked session middlewares as
 //  `pre`), with the real authorize in the router.
+//
+//  Pinned as expected failures until they are fixed, the
+//  known bugs: an email holding a NUL character answers 500,
+//  and the Vadybininkas role can lose its last holder.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -266,6 +270,55 @@ test("assign: missing or blank fields → 400, no lookup", async () => {
 
 
 // -----------------------------------------------------------
+// BUG — a NUL character in the email
+// -----------------------------------------------------------
+//
+// Postgres refuses text that holds a NUL character, and
+// emailOf only trims and lowercases what was typed, so an
+// address with a NUL in it reaches the user lookup and fails
+// there: the search, a grant and a revoke all answer 500.
+// Such an address names nobody — the usual 400, before any
+// query fails. The fake database refuses a NUL in any
+// parameter the way Postgres does and answers every other
+// query as usual.
+// -----------------------------------------------------------
+
+test(
+  "BUG: GET /, assign and remove: an email with a NUL character → 400, not 500",
+  { todo: "known bug: emailOf only trims and lowercases, so an email holding U+0000 reaches the user lookup and Postgres refuses it with SQLSTATE 22021 — GET /, POST /assign and POST /remove answer 500" },
+  async () => {
+    // Postgres refuses NUL in text as an invalid byte
+    // sequence, SQLSTATE 22021
+    const refusingNul = (answer) => (sql, params = []) => {
+      if (params.some((p) => typeof p === "string" && p.includes("\u0000"))) {
+        throw Object.assign(new Error('invalid byte sequence for encoding "UTF8": 0x00'), { code: "22021" });
+      }
+      return answer;
+    };
+
+    manager();
+    onQuery(/SELECT eid AS id.* FROM users WHERE email = \$1/, refusingNul([{ id: "eid-1", email: "a@x", full_name: "A" }]));
+    onQuery(/SELECT r\.name, ur\.user_eid IS NOT NULL AS owned FROM roles r LEFT JOIN user_roles ur/, refusingNul([{ name: "Darbuotojas", owned: true }]));
+    onQuery(/SELECT id FROM roles WHERE name = \$1/, refusingNul([{ id: 2 }]));
+    onQuery(/^(INSERT INTO|DELETE FROM) user_roles/, refusingNul({ rowCount: 1 }));
+
+    let res = await api(app.base, "GET", "/api/user-roles?email=a%00%40x");
+    assert.equal(res.status, 400, `GET answered ${res.status}`);
+
+    for (const path of ["/api/user-roles/assign", "/api/user-roles/remove"]) {
+      res = await api(app.base, "POST", path, { body: { email: "a\u0000@x", role: "Vadybininkas" } });
+      assert.equal(res.status, 400, `${path} answered ${res.status}`);
+    }
+  }
+);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // assign — unknown user / role
 // -----------------------------------------------------------
 //
@@ -452,3 +505,58 @@ test("remove: a manager may revoke their own Vadybininkas role → 204", async (
   assert.equal(res.status, 204);
   assert.deepEqual(queryLog().at(-1).params, ["mgr-1", 2]);
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the last manager's role can be revoked
+// -----------------------------------------------------------
+//
+// Only a Vadybininkas administers roles, themes and reviews,
+// yet nothing keeps the role from losing its last holder:
+// the last manager revokes their own, or the only two
+// managers revoke each other at the same moment — each
+// request checked its caller's roles before either DELETE
+// ran — and from then on nobody can grant it back short of
+// editing the database by hand. Revoking the role from its
+// only holder must be refused with a 409 and the row kept,
+// and the check must hold in that race too: two revokes made
+// at the same moment must not both still count the other
+// manager. The fake user_roles table keeps its rows, and the
+// target is the role's only holder. Once this is fixed, the
+// self-revoke test above needs a second holder.
+// -----------------------------------------------------------
+
+test(
+  "BUG: remove: revoking Vadybininkas from its only holder → 409, the role row kept",
+  { todo: "known bug: POST /remove deletes the role with no check for other holders, so the last Vadybininkas (or the only two, revoking each other at once) is removed with 204 and only a hand edit of the database (psql) restores it; once fixed, the self-revoke test needs a second holder" },
+  async () => {
+    manager();
+
+    // Darbuotojas is role 1 and Vadybininkas role 2; mgr-1
+    // is the only holder of role 2
+    const userRoles = [
+      { user_eid: "mgr-1", role_id: 1 },
+      { user_eid: "mgr-1", role_id: 2 },
+      { user_eid: "emp-1", role_id: 1 },
+    ];
+    stubUserLookup({ id: "mgr-1", email: "mgr@x", full_name: "M" });
+    onQuery(/SELECT id FROM roles WHERE name = \$1/, (sql, [name]) => (name === "Vadybininkas" ? [{ id: 2 }] : []));
+    onQuery(/^DELETE FROM user_roles WHERE user_eid = \$1 AND role_id = \$2$/, (sql, [eid, roleId]) => {
+      const kept = userRoles.filter((r) => !(r.user_eid === eid && r.role_id === roleId));
+      const rowCount = userRoles.length - kept.length;
+      userRoles.splice(0, userRoles.length, ...kept);
+      return { rowCount };
+    });
+
+    const res = await api(app.base, "POST", "/api/user-roles/remove", {
+      body: { email: "mgr@x", role: "Vadybininkas" },
+    });
+    assert.equal(res.status, 409);
+    assert.ok(userRoles.some((r) => r.user_eid === "mgr-1" && r.role_id === 2), "the only Vadybininkas row was deleted");
+  }
+);

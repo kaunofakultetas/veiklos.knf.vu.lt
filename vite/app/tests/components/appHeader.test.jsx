@@ -395,6 +395,45 @@ test("a failed logout request lands on /", async () => {
 
 
 // -----------------------------------------------------------
+// BUG — a second Atsijungti click undoes VU's logout
+// -----------------------------------------------------------
+//
+// Nothing stops a second click while the browser is still on
+// its way to VU's logout: it POSTs the logout again, and as
+// the first POST has already ended the session, the second
+// answer sends the browser home, replacing the navigation to
+// VU that was still pending. The VU SSO session survives,
+// and on a shared computer the next person who signs in is
+// let in as the previous one without a password. Sign-out
+// should run once: one POST, and the navigation its answer
+// asks for.
+// -----------------------------------------------------------
+
+test.fails("BUG: a second Atsijungti click sends no second POST and keeps the navigation to VU's logout", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/me", ME);
+  let posts = 0;
+  onRequest("POST", "/auth/saml/logout", () => ({ redirect: ++posts === 1 ? "https://sso.vu.lt/logout?id=abc" : "/" }));
+  const { user } = renderHeader();
+  await screen.findByText("Jonas Jonaitis");
+
+  const location = fakeLocation();
+  const button = screen.getByRole("button", { name: "Atsijungti" });
+  await user.click(button);
+  await user.click(button);
+  await settle();
+
+  expect(location.href).toBe("https://sso.vu.lt/logout?id=abc");
+  expect(requestsTo("POST", "/auth/saml/logout")).toHaveLength(1);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // accessible names
 // -----------------------------------------------------------
 //

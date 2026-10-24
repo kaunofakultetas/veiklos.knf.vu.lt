@@ -12,10 +12,16 @@
 //  caps, "—" rows, "Iš viso"), the empty states and error
 //  messages verbatim, and the status box: plain form-status
 //  for the saved confirmation, form-status--error for errors.
+//
+//  Pinned as expected failures, the known bugs: a refused
+//  employee load that leaves the previous employee's table, a
+//  late answer for an earlier pick that overwrites the one
+//  picked since, and a theme switched during a save that then
+//  shows a value never saved.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
-import { screen, within, waitFor } from "@testing-library/react";
+import { screen, within, waitFor, act } from "@testing-library/react";
 import CalculatePage from "@/pages/committee/calculate.jsx";
 import { onRequest, requestsTo, requestLog } from "../../helpers/fakeFetch.js";
 import { renderPage, signInAs } from "../../helpers/render.js";
@@ -27,6 +33,13 @@ const THEMES = [
   { theme_id: 1, theme_code: "6.1.", theme_title: "Studijų kokybė", theme_total_sum: "1000", theme_pointvalue: null, total_score: "30" },
   { theme_id: 2, theme_code: "6.2.", theme_title: "Mokslas", theme_total_sum: "500", theme_pointvalue: "12.5", total_score: null },
   { theme_id: 3, theme_code: "6.3.", theme_title: "Sklaida", theme_total_sum: null, theme_pointvalue: null, total_score: "8" },
+];
+
+// The same three plus a second computable pair (400 / 16),
+// for a theme switch while a save is pending
+const THEMES_TWO_COMPUTABLE = [
+  ...THEMES,
+  { theme_id: 4, theme_code: "6.4.", theme_title: "Vadyba", theme_total_sum: "400", theme_pointvalue: null, total_score: "16" },
 ];
 
 // Three employees: full name, email only, eid only
@@ -74,6 +87,9 @@ const resultBox = (container) => container.querySelector(".calc-result-box");
 // then by whoever it shows
 const pickerTrigger = () => screen.getByRole("button", { name: /^Pasirinkite darbuotoją / });
 const pickerOptions = (container) => Array.from(container.querySelectorAll(".app-select-option")).map((b) => b.textContent);
+
+// Lets a pending fetch chain settle and React flush it
+const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
 
 
@@ -253,6 +269,44 @@ test("a refused PATCH shows the backend's reason in the error box and leaves the
   expect(await screen.findByText("500")).toHaveClass("form-status", "form-status--error");
   expect(resultBox(container)).toHaveTextContent("—");
   expect(requestsTo("PATCH", "/api/themes/1/pointvalue")).toHaveLength(2);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — theme switched while Skaičiuoti saves
+// -----------------------------------------------------------
+//
+// Picking another theme blanks the result box, but a save
+// still in flight marks the box as calculated only when its
+// answer arrives — after that reset — so the box then shows
+// the newly picked theme's value as if it had been saved,
+// though nothing was stored for that theme. The box must
+// stay blank for a theme that was never saved, and no save
+// may go to it; a fix that locks the theme picker until the
+// save ends passes too, as no other theme can then be
+// picked. A known bug, pinned as an expected failure until
+// it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: a theme picked while Skaičiuoti saves keeps a blank result box and gets no save", async () => {
+  let release;
+  onRequest("PATCH", "/api/themes/1/pointvalue", () => new Promise((resolve) => { release = () => resolve(THEME1_SAVED); }));
+  const { user, container } = await renderLoaded(THEMES_TWO_COMPUTABLE);
+  await user.selectOptions(themeSelect(), "1");
+  await user.click(calcButton());
+  expect(await screen.findByRole("button", { name: "Saugoma…" })).toBeDisabled();
+
+  if (!themeSelect().disabled) await user.selectOptions(themeSelect(), "4");
+  release();
+  await screen.findByText("1 balo vertė išsaugota.");
+
+  if (themeSelect().value === "4") expect(resultBox(container)).toHaveTextContent("—");
+  expect(requestsTo("PATCH", "/api/themes/4/pointvalue")).toHaveLength(0);
 });
 
 
@@ -454,6 +508,82 @@ test("a refused subthemes load shows the backend's reason", async () => {
   expect(screen.queryByText("Kraunama…")).not.toBeInTheDocument();
   expect(screen.getByText("Šis darbuotojas neturi įvertintų veiklų.")).toBeInTheDocument();
   expect(screen.queryByText(/Iš viso:/)).not.toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a refused employee keeps the previous table
+// -----------------------------------------------------------
+//
+// When the subthemes of the next employee picked are refused,
+// the refusal shows but the loaded list is never cleared:
+// the previous employee's rows and "Iš viso" stay on screen
+// under the picker that now names the refused employee, where
+// they read as that employee's results. Next to the refusal
+// there must be no rows and no total. A known bug, pinned as
+// an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: a refused load for the next employee shows no rows or total of the previous one", async () => {
+  onRequest("GET", "/api/activities/evaluated/employee/e1/subthemes", SUBTHEMES);
+  onRequest("GET", "/api/activities/evaluated/employee/e2/subthemes", { status: 404, body: { error: "Darbuotojas nerastas" } });
+  const { user } = await renderLoaded();
+  await user.click(pickerTrigger());
+  await user.click(screen.getByRole("button", { name: "Ona Onaitė" }));
+  await screen.findByText("Iš viso: 163.00");
+
+  await user.click(pickerTrigger());
+  await user.click(screen.getByRole("button", { name: "petras@vu.lt" }));
+  expect(await screen.findByText("Darbuotojas nerastas")).toHaveClass("form-status--error");
+  expect(pickerTrigger()).toHaveTextContent("petras@vu.lt");
+
+  expect(screen.queryByText(/Iš viso:/)).not.toBeInTheDocument();
+  expect(tableWith("Rezultatas")).toBeUndefined();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a late answer overwrites the later pick
+// -----------------------------------------------------------
+//
+// Every pick starts its own subthemes load and nothing
+// cancels or orders them, so when the answer for an earlier
+// pick arrives after the one for the employee picked since,
+// it overwrites that employee's state: the earlier
+// employee's rows and total appear under the picker that
+// names the later one. A superseded answer must be dropped
+// and the later pick's state kept. A known bug, pinned as an
+// expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: a late answer for an earlier pick leaves the employee picked since untouched", async () => {
+  let releaseFirst;
+  onRequest("GET", "/api/activities/evaluated/employee/e1/subthemes", () => new Promise((resolve) => { releaseFirst = () => resolve(SUBTHEMES); }));
+  onRequest("GET", "/api/activities/evaluated/employee/e2/subthemes", []);
+  const { user } = await renderLoaded();
+  await user.click(pickerTrigger());
+  await user.click(screen.getByRole("button", { name: "Ona Onaitė" }));
+  expect(await screen.findByText("Kraunama…")).toBeInTheDocument();
+
+  await user.click(pickerTrigger());
+  await user.click(screen.getByRole("button", { name: "petras@vu.lt" }));
+  await screen.findByText("Šis darbuotojas neturi įvertintų veiklų.");
+
+  releaseFirst();
+  await settle();
+  expect(screen.queryByText(/Iš viso:/)).not.toBeInTheDocument();
+  expect(screen.getByText("Šis darbuotojas neturi įvertintų veiklų.")).toBeInTheDocument();
+  expect(pickerTrigger()).toHaveTextContent("petras@vu.lt");
 });
 
 

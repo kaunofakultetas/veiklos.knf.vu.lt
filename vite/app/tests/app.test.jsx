@@ -14,7 +14,7 @@
 // -----------------------------------------------------------
 
 import { test, expect, vi, afterEach } from "vitest";
-import { render, screen, within, act } from "@testing-library/react";
+import { render, screen, within, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "@/App.jsx";
 import { onRequest, requestsTo, requestLog } from "./helpers/fakeFetch.js";
@@ -114,6 +114,35 @@ test("a probe that fails is treated as signed out", async () => {
 
 
 // -----------------------------------------------------------
+// BUG — a refused probe offers the sign-in
+// -----------------------------------------------------------
+//
+// Every answer to the probe that is not a 2xx counts as
+// signed out, so the 500 the backend answers when the role
+// lookup fails, or the ingress's 502 while the backend
+// restarts, shows the sign-in card to a user who is signed
+// in — and signing in again lands on the same card. Only a
+// 401 means signed out; any other refusal should say that
+// something went wrong instead of offering the sign-in
+// button. A probe that fails outright stays signed out on
+// purpose, as pinned above.
+// -----------------------------------------------------------
+
+test.fails("BUG: a 5xx session probe shows an error instead of the sign-in button", async () => {
+  onRequest("GET", "/api/session/check", { status: 500, body: { error: "internal error" } });
+  renderApp("/");
+  await settle();
+
+  expect(screen.queryByRole("button", { name: "Prisijungti per VU bendro prisijungimo sistemą" })).not.toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // role flow
 // -----------------------------------------------------------
 //
@@ -193,6 +222,65 @@ test("a session with no roles is told so instead of waiting on the Kraunama… c
 
 
 // -----------------------------------------------------------
+// BUG — the role picker's list has no name
+// -----------------------------------------------------------
+//
+// The picker's dropdown has no label and nothing ties it to
+// the dialog's caption, so a screen reader announces a bare
+// drop-down with no hint of what it chooses. It should be
+// named by the "Pasirinkite rolę" caption above it, as the
+// header's role switcher is named by its own caption.
+// -----------------------------------------------------------
+
+test.fails("BUG: the role picker's dropdown is named by its Pasirinkite rolę caption", async () => {
+  onRequest("GET", "/api/session/check", session(["Darbuotojas", "Komisijos narys"]));
+  renderApp("/");
+  await screen.findByRole("heading", { name: "Pasirinkite rolę" });
+
+  expect(screen.getByRole("combobox", { name: "Pasirinkite rolę" })).toBe(screen.getByRole("combobox"));
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a stored role the session does not own
+// -----------------------------------------------------------
+//
+// HomeGate trusts the role the tab remembers without checking
+// it against the session's roles, and RoleRoute compares only
+// that same stored role with the workspace's. A role revoked
+// since it was stored, or one an earlier user of the same
+// browser left behind, therefore still opens its workspace:
+// the header then repairs the stored role to an owned one,
+// but nothing navigates, so the user stays in a workspace
+// whose actions the backend refuses. A stored role the
+// session does not own should be passed over, and the user
+// sent to the workspace of a role they do own.
+// -----------------------------------------------------------
+
+test.fails("BUG: a stored role the session does not own opens the workspace of an owned role instead", async () => {
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/session/check", session(["Darbuotojas"]));
+  onRequest("GET", "/api/me", { ...ME, roles: ["Darbuotojas"] });
+  renderApp("/");
+
+  await waitFor(() => expect(window.location.pathname).toBe("/employee"));
+  expect(screen.getByRole("heading", { name: "Darbuotojo langas" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Vadybininko langas" })).not.toBeInTheDocument();
+  expect(localStorage.getItem("activeRole")).toBe("Darbuotojas");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // RoleRoute
 // -----------------------------------------------------------
 //
@@ -230,6 +318,79 @@ test("a workspace path while signed out redirects to / and the SignIn card", asy
 
   expect(await screen.findByRole("heading", { name: "Vilniaus universiteto veiklos" })).toBeInTheDocument();
   expect(window.location.pathname).toBe("/");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the Netinkama rolė card is a dead end
+// -----------------------------------------------------------
+//
+// The card stands alone: no header, no role switcher, no
+// Atsijungti, not a single link. It is reached by the
+// browser's Back after a role switch (the switch replaces
+// only the current history entry, so the workspace pages
+// before it stay) or by a link into another workspace the
+// session owns, and nothing on it leads anywhere. The card
+// should offer a way out — a link or a button to the
+// workspace of the tab's role, or home.
+// -----------------------------------------------------------
+
+test.fails("BUG: the Netinkama rolė card offers a way out, a link or a button", async () => {
+  signInAs("Darbuotojas");
+  onRequest("GET", "/api/session/check", session(["Darbuotojas"]));
+  renderApp("/manager/roles");
+  await screen.findByRole("heading", { name: "Netinkama rolė" });
+
+  expect([...screen.queryAllByRole("link"), ...screen.queryAllByRole("button")]).not.toHaveLength(0);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a revoked role keeps its workspace open
+// -----------------------------------------------------------
+//
+// A manager who removes their own Vadybininkas role on the
+// roles page confirms it, and the page fires
+// "app:roles-updated", counting on the header's refresh to
+// take them off the page. The header reloads the roles and
+// moves the tab's role to one still owned, but it navigates
+// nowhere and RoleRoute is not asked again: the manager
+// pages stay open under a role that may not use them, and
+// the backend refuses their actions. When the header's
+// repair changes the tab's role, the app should move to that
+// role's workspace, as a switch by hand does.
+// -----------------------------------------------------------
+
+test.fails("BUG: removing your own manager role moves the tab to the workspace of the role left", async () => {
+  signInAs("Vadybininkas");
+  let owned = ["Darbuotojas", "Vadybininkas"];
+  onRequest("GET", "/api/session/check", session(owned));
+  onRequest("GET", "/api/me", () => ({ ...ME, roles: owned }));
+  onRequest("GET", "/api/user-roles", () => ({ user: { id: 1, email: ME.email, full_name: ME.name }, roles: owned, allRoles: ["Darbuotojas", "Komisijos narys", "Vadybininkas"] }));
+  onRequest("POST", "/api/user-roles/remove", () => {
+    owned = ["Darbuotojas"];
+    return { status: 204 };
+  });
+  const { user } = renderApp("/manager/roles");
+
+  await user.type(await screen.findByLabelText("Darbuotojo el.paštas"), ME.email);
+  await user.click(screen.getByRole("button", { name: "Įkelti" }));
+  await user.click(await screen.findByTitle("Pašalinti"));
+  expect(await screen.findByText("Pašalinta rolė: Vadybininkas")).toBeInTheDocument();
+
+  await waitFor(() => expect(localStorage.getItem("activeRole")).toBe("Darbuotojas"));
+  await waitFor(() => expect(window.location.pathname).toBe("/employee"));
+  expect(screen.getByRole("heading", { name: "Darbuotojo langas" })).toBeInTheDocument();
 });
 
 

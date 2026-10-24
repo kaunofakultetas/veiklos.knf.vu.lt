@@ -13,9 +13,17 @@
 //  and rows to aoa_to_sheet, appends "Veiklos" and writes a
 //  timestamped file, and an empty selection refuses with
 //  "Nėra veiklų eksportui.".
+//
+//  Known bugs are pinned with test.fails beside the tests of
+//  their feature: a text longer than an XLSX cell holds makes
+//  the export fail without a word, the file name is stamped
+//  in UTC while the cells are local, the empty-selection
+//  refusal outlives a later successful export, and the filter
+//  triggers are not named by their captions.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
+import process from "node:process";
 import { screen, within } from "@testing-library/react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
 import ManagerExportPage from "@/pages/manager/export.jsx";
@@ -540,6 +548,112 @@ test("a filtered preview exports only its rows", async () => {
 
 
 // -----------------------------------------------------------
+// BUG — a text longer than a cell holds
+// -----------------------------------------------------------
+//
+// An XLSX cell holds at most 32,767 characters and SheetJS
+// refuses to write a workbook with a longer text, while the
+// backend accepts descriptions and comments far longer than
+// that. The page hands such a text to the sheet uncut and
+// catches nothing, so "Eksportuoti" ends in an uncaught
+// error: no file and no word to the manager. The export
+// should still yield a file with the long text cut to the
+// limit, or say why it cannot. The mocked writeFile refuses
+// the way the real one does, and the test takes the escaping
+// error so it does not fail the run.
+// -----------------------------------------------------------
+
+test.fails("BUG: a text longer than a cell holds still exports, cut to fit, or the page says why it cannot", async () => {
+  resetXlsx();
+  const limit = 32767;
+
+  // The real SheetJS's refusal, raised when the rows the
+  // sheet was built from hold a longer text
+  XLSX.writeFile.mockImplementation(() => {
+    const cells = XLSX.utils.aoa_to_sheet.mock.lastCall[0].flat();
+    if (cells.some((c) => typeof c === "string" && c.length > limit)) throw new Error("Text length must not exceed 32767 characters");
+  });
+
+  // An error escaping the click handler reaches the window;
+  // kept here instead of surfacing as an unhandled one
+  const uncaught = [];
+  const takeError = (e) => {
+    e.preventDefault();
+    uncaught.push(e.error?.message);
+  };
+  window.addEventListener("error", takeError);
+
+  try {
+    signInAs("Vadybininkas");
+    onRequest("GET", "/api/activities/all", [{ ...ACTIVITIES[0], description: "a".repeat(40000) }]);
+    onRequest("GET", "/api/themes", THEMES);
+    const { user } = renderPage(ManagerExportPage);
+    await screen.findByText("Paskaitų ciklas");
+
+    await user.click(screen.getByRole("button", { name: "Eksportuoti" }));
+
+    // What the manager got: a file whose text cells fit, a
+    // message, or nothing but the error
+    const cells = XLSX.utils.aoa_to_sheet.mock.lastCall?.[0].flat() ?? [];
+    const wrote = XLSX.writeFile.mock.results.some((r) => r.type === "return") && cells.every((c) => typeof c !== "string" || c.length <= limit);
+    const told = Boolean(document.querySelector(".form-status")?.textContent) || window.alert.mock.calls.length > 0;
+    const outcome = wrote ? "a file" : told ? "a message" : `nothing (${uncaught.join("; ") || "no error"})`;
+    expect(["a file", "a message"]).toContain(outcome);
+  } finally {
+    window.removeEventListener("error", takeError);
+    XLSX.writeFile.mockReset();
+  }
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the file name stamped in UTC
+// -----------------------------------------------------------
+//
+// The cells carry the manager's local time, but the file name
+// is stamped from toISOString, which is UTC: in Vilnius the
+// stamp runs two or three hours behind, and an export made
+// soon after midnight is named after the day before. The
+// stamp should be the same local date and time the cells
+// use. The test container runs in UTC, so the pin moves the
+// runner's zone to Vilnius and fixes the clock just after
+// midnight, then puts both back.
+// -----------------------------------------------------------
+
+test.fails("BUG: the file name is stamped with the local date and time, as the cells are", async () => {
+  resetXlsx();
+  const user = await loadPage();
+  const runnerZone = process.env.TZ;
+
+  // Half past midnight in Vilnius, the day before in UTC
+  process.env.TZ = "Europe/Vilnius";
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-24T21:30:00Z"));
+
+  try {
+    await user.click(screen.getByRole("button", { name: "Eksportuoti" }));
+
+    expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
+    expect(XLSX.writeFile.mock.calls[0][1]).toBe("veiklos-eksportas-vadybininkas-2026-10-25-00-30-00.xlsx");
+  } finally {
+    vi.useRealTimers();
+    if (runnerZone === undefined) delete process.env.TZ;
+    else process.env.TZ = runnerZone;
+  }
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // nothing to export
 // -----------------------------------------------------------
 //
@@ -562,6 +676,39 @@ test("an empty selection is refused with a message and no workbook", async () =>
   expect(XLSX.utils.book_new).not.toHaveBeenCalled();
   expect(XLSX.utils.book_append_sheet).not.toHaveBeenCalled();
   expect(XLSX.writeFile).not.toHaveBeenCalled();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the refusal outlives a successful export
+// -----------------------------------------------------------
+//
+// "Nėra veiklų eksportui." is set when the selection is empty
+// and nothing ever clears it: once the filters change and the
+// next export writes its file, the old refusal still stands
+// in the status line, as if that export had been refused
+// too. A successful export should clear it.
+// -----------------------------------------------------------
+
+test.fails("BUG: a successful export clears an earlier \"Nėra veiklų eksportui.\"", async () => {
+  resetXlsx();
+  const user = await loadPage();
+
+  await tick(user, "Darbuotojas", "u10004");
+  await tick(user, "Būsena", "ATMESTA");
+  await user.click(screen.getByRole("button", { name: "Eksportuoti" }));
+  expect(screen.getByText("Nėra veiklų eksportui.")).toBeInTheDocument();
+
+  await tick(user, "Būsena", "ATMESTA");
+  await user.click(screen.getByRole("button", { name: "Eksportuoti" }));
+
+  expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("Nėra veiklų eksportui.")).not.toBeInTheDocument();
 });
 
 
@@ -626,4 +773,30 @@ test("the employee filter's search box is named", async () => {
   await user.click(within(filterNamed("Darbuotojas")).getByRole("button"));
 
   expect(within(filterNamed("Darbuotojas")).getByRole("textbox", { name: "Paieška: Darbuotojas" })).toHaveAttribute("placeholder", "Ieškoti…");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — filter triggers named by their summary alone
+// -----------------------------------------------------------
+//
+// A filter's caption is a bare label tied to nothing, so its
+// trigger is named by its contents only: the summary and the
+// arrow, which is not hidden from assistive tech. A screen
+// reader hears a placeholder or a count with no filter named,
+// and two filters with two picks each sound the same. Each
+// trigger's name should start with its filter's caption.
+// -----------------------------------------------------------
+
+test.fails("BUG: each filter's trigger is named by its caption first", async () => {
+  await loadPage();
+
+  for (const caption of ["Darbuotojas", "Tema", "Potemė", "Būsena"]) {
+    expect(within(filterNamed(caption)).getByRole("button")).toHaveAccessibleName(new RegExp(`^${caption}`));
+  }
 });

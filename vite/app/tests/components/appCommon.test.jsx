@@ -9,13 +9,17 @@
 //  trigger's aria-haspopup / aria-expanded and forwarded id,
 //  the list as a labelled group with the selected option
 //  pressed, arrow keys entering and walking the list, Escape
-//  and an outside mousedown shutting it.
+//  and an outside mousedown shutting it. Pinned as expected
+//  failures, the known bugs: the list stays open when Tab
+//  takes the focus out of it, and CommentModal's backdrop
+//  closes the prompt while its confirm is in flight and when
+//  a drag that began inside the dialog ends on it.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { render, screen, within, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { AppSelect, ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, ATTACHMENT_TOO_BIG } from "@/components/appCommon.jsx";
+import { AppSelect, ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, ATTACHMENT_TOO_BIG, CommentModal } from "@/components/appCommon.jsx";
 
 
 const OPTIONS = [
@@ -23,6 +27,35 @@ const OPTIONS = [
   { id: 2, code: "6.2.", title: "Mokslas" },
 ];
 const label = (o) => `${o.code} — ${o.title}`;
+
+// The activity a CommentModal names, and the prompt mounted
+// with the manager's deny wording around the callbacks a test
+// passes; it hands back the user-event session, the textarea
+// and the backdrop
+const ACTIVITY = { full_name: "Ona Onaitė", title: "Konferencijos pranešimas" };
+function renderPrompt({ onConfirm = vi.fn(), onClose = vi.fn() } = {}) {
+  const user = userEvent.setup();
+  render(
+    <CommentModal
+      activity={ACTIVITY}
+      title="Atmesti veiklą"
+      label="Atmetimo komentaras"
+      placeholder="Paaiškinkite, kodėl veikla atmetama"
+      initialComment=""
+      confirmLabel="Patvirtinti atmetimą"
+      busyLabel="Atmetama…"
+      emptyMessage="Klaida: Atmetimui būtinas komentaras."
+      onConfirm={onConfirm}
+      onClose={onClose}
+      onMessage={() => {}}
+    />
+  );
+  return {
+    user,
+    comment: screen.getByLabelText("Atmetimo komentaras"),
+    backdrop: document.querySelector(".employee-modal-backdrop"),
+  };
+}
 
 
 
@@ -217,6 +250,47 @@ test("AppSelect: a mousedown outside shuts the list; the document listener exist
 
 
 // -----------------------------------------------------------
+// BUG — AppSelect stays open after Tab
+// -----------------------------------------------------------
+//
+// The list shuts on a pick, on Escape, on the trigger and on
+// a mousedown outside, but not when the focus leaves it: a
+// keyboard user who tabs on past the options leaves it open
+// over the form, the trigger still announcing itself
+// expanded. Focus leaving the component should shut the list
+// the way an outside mousedown does. A known bug, pinned as
+// an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: AppSelect: tabbing out of the open list shuts it", async () => {
+  const user = userEvent.setup();
+  render(
+    <>
+      <AppSelect value="" onChange={() => {}} options={OPTIONS} getLabel={label} placeholder="Pasirinkite temą" />
+      <button type="button">Toliau</button>
+    </>
+  );
+  const trigger = screen.getByRole("button", { name: /Pasirinkite temą/ });
+  const next = screen.getByRole("button", { name: "Toliau" });
+
+  await user.tab();
+  await user.keyboard("{ArrowDown}");
+  expect(screen.getByRole("group")).toBeInTheDocument();
+
+  // Through the options and on to the next control
+  for (let i = 0; i <= OPTIONS.length && document.activeElement !== next; i++) await user.tab();
+  expect(next).toHaveFocus();
+  expect(screen.queryByRole("group")).not.toBeInTheDocument();
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // AppSelect — named by a caption
 // -----------------------------------------------------------
 //
@@ -237,4 +311,73 @@ test("AppSelect: labelledBy names the trigger by the caption, then the value", (
   const trigger = screen.getByLabelText("Tema");
   expect(trigger).toHaveClass("app-select-trigger");
   expect(trigger).toHaveAccessibleName("Tema 6.2. — Mokslas");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — CommentModal closes mid-confirm
+// -----------------------------------------------------------
+//
+// While the confirm is in flight only the two buttons are
+// disabled: a click on the backdrop still closes the prompt,
+// and when the page then refuses the verdict, the comment the
+// user typed has gone with it. The prompt should stay open
+// until its confirm ends, closing on success as it does now.
+// A known bug, pinned as an expected failure until it is
+// fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: CommentModal: a backdrop click while the confirm is in flight leaves the prompt open", async () => {
+  let answer;
+  const onConfirm = vi.fn(() => new Promise((resolve) => { answer = resolve; }));
+  const onClose = vi.fn().mockName("onClose");
+  const { user, comment, backdrop } = renderPrompt({ onConfirm, onClose });
+
+  await user.type(comment, "Trūksta dokumentų");
+  await user.click(screen.getByRole("button", { name: "Patvirtinti atmetimą" }));
+  expect(onConfirm).toHaveBeenCalledWith("Trūksta dokumentų");
+  expect(screen.getByRole("button", { name: "Atmetama…" })).toBeDisabled();
+
+  await user.click(backdrop);
+  expect(onClose).not.toHaveBeenCalled();
+
+  answer();
+  await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — CommentModal closes on a drag out of the dialog
+// -----------------------------------------------------------
+//
+// A text selection that starts in the textarea and is let go
+// over the backdrop ends in a click on their common ancestor,
+// the backdrop, which closes the prompt without checking that
+// the press began on it — the typed comment is lost to a
+// sloppy selection. Only a press and release on the backdrop
+// itself should close the prompt. A known bug, pinned as an
+// expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: CommentModal: a drag from the textarea onto the backdrop keeps the prompt open; a click on the backdrop closes it", async () => {
+  const onClose = vi.fn().mockName("onClose");
+  const { user, comment, backdrop } = renderPrompt({ onClose });
+
+  await user.type(comment, "Trūksta dokumentų");
+  await user.pointer([{ keys: "[MouseLeft>]", target: comment }, { target: backdrop }, { keys: "[/MouseLeft]" }]);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(comment).toHaveValue("Trūksta dokumentų");
+
+  await user.click(backdrop);
+  expect(onClose).toHaveBeenCalledTimes(1);
 });

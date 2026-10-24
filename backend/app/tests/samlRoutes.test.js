@@ -15,6 +15,10 @@
 //  without its cookie. A fake express-session (with a fake
 //  store) stands in for the cookie store; the pool is the
 //  usual fake.
+//
+//  Pinned as an expected failure until it is fixed, the known
+//  bug: a database that cannot be reached after a valid
+//  assertion is answered as the IdP's fault.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -556,6 +560,45 @@ test("assert: a DB error after a valid assertion → 500, not 'parsing failed'",
   assert.equal(res.status, 500);
   assert.equal(await res.text(), "Login failed on our side; the assertion was fine");
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the database unreachable after a valid assertion
+// -----------------------------------------------------------
+//
+// Only an error carrying a five-character SQLSTATE counts as
+// ours once the assertion is accepted. A database that cannot
+// be reached fails with a socket error code instead, so the
+// catch takes it for the IdP's fault: the browser gets a 401
+// that blames the assertion and shows the database's internal
+// address and port. It must be the same 500 as any other
+// database failure after a valid assertion, with nothing of
+// the connection error in the page.
+// -----------------------------------------------------------
+
+test(
+  "BUG: assert: the database unreachable after a valid assertion → 500 on our side, no connection details in the page",
+  { todo: "known bug: /assert's catch counts only 5-character SQLSTATE codes as database errors — a connection failure (code ECONNREFUSED) is answered 401 \"SAML assertion parsing failed: connect ECONNREFUSED 172.18.110.30:5432\", blaming the IdP and showing the database's host and port" },
+  async () => {
+    nextExtract = { audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" } };
+    onQuery(/INSERT INTO users/, () => {
+      throw Object.assign(new Error("connect ECONNREFUSED 172.18.110.30:5432"), { code: "ECONNREFUSED" });
+    });
+
+    const res = await post("/auth/saml/assert");
+    const text = await res.text();
+    assert.equal(res.status, 500, `answered ${res.status}: ${text}`);
+    assert.equal(text, "Login failed on our side; the assertion was fine");
+    for (const leak of ["ECONNREFUSED", "172.18.", "5432"]) {
+      assert.equal(text.includes(leak), false, `the page shows ${leak}`);
+    }
+  }
+);
 
 
 

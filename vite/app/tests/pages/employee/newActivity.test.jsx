@@ -12,6 +12,11 @@
 //  the file but keeps the selection, the client refuses empty
 //  required fields and oversized picks without a request, and
 //  backend errors are shown with the page's own prefix.
+//
+//  Pinned as expected failures, the known bugs: re-picking
+//  the selected theme resets the subtheme, the form stays
+//  editable while it is being sent, and a file the size of
+//  the limit passes.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -61,6 +66,17 @@ const submitButton = () => screen.getByRole("button", { name: "Pateikti veiklą"
 
 // The theme load has finished once the loading line is gone
 const themesLoaded = () => waitFor(() => expect(screen.queryByText("Kraunamos temos…")).not.toBeInTheDocument());
+
+// A reply held back until the test lets it go: the scripted
+// fetch waits on the promise the reply hands it, and release
+// answers that request with the reply it is given
+const deferred = () => {
+  let answer;
+  return {
+    reply: () => new Promise((resolve) => { answer = resolve; }),
+    release: (reply) => answer(reply),
+  };
+};
 
 
 
@@ -191,6 +207,40 @@ test("a theme switch re-sorts the subthemes and preselects the first; none → d
 
 
 // -----------------------------------------------------------
+// BUG — re-picking the selected theme resets the subtheme
+// -----------------------------------------------------------
+//
+// The picker reports a click on the option already selected
+// like any other pick, and the form answers every theme pick
+// by preselecting that theme's first subtheme in code order.
+// Opening the theme list and clicking the theme already
+// selected thus silently drops the subtheme the employee
+// chose. Picking the same theme again should change nothing.
+// -----------------------------------------------------------
+
+test.fails("BUG: picking the theme already selected keeps the chosen subtheme", async () => {
+  signInAs("Darbuotojas");
+  onRequest("GET", "/api/themes", THEMES);
+  const { user } = renderPage(NewActivityPage);
+  await themesLoaded();
+
+  await user.click(triggers()[1]);
+  await user.click(within(dropdown()).getByRole("button", { name: "1.10. — Dešimta potemė" }));
+  expect(triggers()[1]).toHaveTextContent("1.10. — Dešimta potemė");
+
+  await user.click(triggers()[0]);
+  await user.click(within(dropdown()).getByRole("button", { name: "1. — Studijos" }));
+  expect(triggers()[0]).toHaveTextContent("1. — Studijos");
+  expect(triggers()[1]).toHaveTextContent("1.10. — Dešimta potemė");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // submit
 // -----------------------------------------------------------
 //
@@ -231,6 +281,44 @@ test("submits multipart with the fields in order and only the role header; reset
   expect(triggers()[1]).toHaveTextContent("1.2. — Antra potemė");
   expect(submitButton()).toBeEnabled();
   expect(requestLog()).toHaveLength(2);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the form stays editable while it is being sent
+// -----------------------------------------------------------
+//
+// Only the submit button is disabled while the POST is in
+// flight: the title, the description and the file input
+// still take input, and the reset after a success wipes
+// whatever was typed or picked in the meantime. They should
+// be locked until the answer arrives.
+// -----------------------------------------------------------
+
+test.fails("BUG: the title, description and file inputs are locked while the submit is in flight", async () => {
+  signInAs("Darbuotojas");
+  onRequest("GET", "/api/themes", THEMES);
+  const post = deferred();
+  onRequest("POST", "/api/activities", post.reply);
+  const { user } = renderPage(NewActivityPage);
+  await themesLoaded();
+
+  await user.type(titleInput(), "Konferencija");
+  await user.type(descriptionInput(), "Pranešimas konferencijoje");
+  await user.click(submitButton());
+  expect(screen.getByRole("button", { name: "Pateikiama…" })).toBeDisabled();
+
+  const editable = (el) => !el.disabled && !el.readOnly;
+  expect({ title: editable(titleInput()), description: editable(descriptionInput()), file: !fileInput().disabled })
+    .toEqual({ title: false, description: false, file: false });
+
+  post.release(createdReply({ id: 7 }));
+  expect(await screen.findByText("Veikla sėkmingai pateikta.")).toBeInTheDocument();
 });
 
 
@@ -386,6 +474,45 @@ test("an oversized pick is refused on the spot and never sent", async () => {
   const [post] = requestsTo("POST", "/api/activities");
   expect(post.body.has("attachment")).toBe(false);
   expect([...post.body.keys()]).toEqual(["theme_id", "subtheme_id", "title", "description", "theme_code", "subtheme_code"]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a file the size of the limit passes the form
+// -----------------------------------------------------------
+//
+// The form refuses a pick only when it is larger than the
+// 100 MB limit, while the backend refuses a file that
+// reaches the limit, so a file of exactly that size is taken
+// here, uploaded in full and only then turned away. The form
+// should refuse it at the pick, like any larger file.
+// -----------------------------------------------------------
+
+test.fails("BUG: a file the size of the 100 MB limit is refused at the pick and never sent", async () => {
+  signInAs("Darbuotojas");
+  onRequest("GET", "/api/themes", THEMES);
+  onRequest("POST", "/api/activities", createdReply({ id: 9, description: "Aprašymas" }));
+  const { user } = renderPage(NewActivityPage);
+  await themesLoaded();
+
+  const atLimit = new File(["x"], "riba.pdf", { type: "application/pdf" });
+  Object.defineProperty(atLimit, "size", { value: 100 * 1024 * 1024 });
+  await user.upload(fileInput(), atLimit);
+
+  expect(screen.queryByText(/Pasirinktas failas:/)).not.toBeInTheDocument();
+  expect(screen.getByText("Klaida: priedas per didelis (iki 100 MB)")).toBeInTheDocument();
+  expect(fileInput().files).toHaveLength(0);
+
+  await user.type(titleInput(), "Konferencija");
+  await user.type(descriptionInput(), "Aprašymas");
+  await user.click(submitButton());
+  expect(await screen.findByText("Veikla sėkmingai pateikta.")).toBeInTheDocument();
+  expect(requestsTo("POST", "/api/activities")[0].body.has("attachment")).toBe(false);
 });
 
 

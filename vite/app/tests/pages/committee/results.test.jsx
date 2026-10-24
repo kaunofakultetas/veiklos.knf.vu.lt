@@ -12,6 +12,14 @@
 //  refuses empty and negative counts without a request,
 //  backend errors are shown as "Klaida: …", and the modal's
 //  comments box and people count answer to their labels.
+//
+//  Pinned as expected failures, the known bugs: a cleared
+//  people count that previews a score, a fractional count
+//  that is saved, the modal's refusals shown behind its
+//  overlay, a theme without subthemes saved with no
+//  subtheme, the updated confirmation styled as an error, the
+//  backdrop closing the modal mid-save, and a success answer
+//  that is not JSON taken as saved.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -291,6 +299,35 @@ test("Pervertinti arms re-scoring: seeded selects, writable comments, score = 1/
 
 
 // -----------------------------------------------------------
+// BUG — a cleared people count previews a score of 0
+// -----------------------------------------------------------
+//
+// The live preview turns the people count into a number, and
+// an emptied field counts as zero people, so clearing it
+// previews a score of 0 although no count is given — the
+// same empty field is refused on save. A cleared count must
+// leave the preview empty; the row used here has no score of
+// its own to fall back to. A known bug, pinned as an
+// expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: clearing the people count leaves the score preview empty, not 0", async () => {
+  const user = await openRescoring(ACT6);
+  const [people, score] = within(modal()).getAllByRole("spinbutton");
+  await user.type(people, "3");
+  expect(score).toHaveValue(0.33);
+
+  await user.clear(people);
+  expect(score).toHaveValue(null);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // theme change
 // -----------------------------------------------------------
 //
@@ -351,6 +388,66 @@ test("empty and negative people counts are refused without a request", async () 
 
   expect(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" })).toBeEnabled();
   expect(requestLog().filter((r) => r.method === "PATCH")).toEqual([]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a fractional people count is saved
+// -----------------------------------------------------------
+//
+// The save checks only that the count is given and not
+// negative; the input's whole-number step is never enforced,
+// so a fractional count of people is turned into a score and
+// sent — a count below one gives a score above one, which
+// the backend refuses, and any other is stored silently. A
+// count that is not a whole number must be refused on the
+// page, with a message, before any request. A known bug,
+// pinned as an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: a people count that is not a whole number is refused before any request", async () => {
+  onRequest("PATCH", "/api/activities/5/committee", ok(patched({ score: 0.4 })));
+  const user = await openRescoring(ACT5);
+
+  await user.type(within(modal()).getAllByRole("spinbutton")[0], "2.5");
+  await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
+
+  expect(requestLog().filter((r) => r.method === "PATCH").map((r) => r.body)).toEqual([]);
+  expect(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" })).toBeEnabled();
+  expect(screen.queryByText("Įvertinimas atnaujintas.")).not.toBeInTheDocument();
+  expect(document.querySelector(".form-status--error")).toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the modal's refusals show behind the overlay
+// -----------------------------------------------------------
+//
+// The re-scoring modal reports its refusals through the
+// page's one status line, which sits under the table, dimmed
+// behind the modal's overlay or hidden by the modal itself —
+// not where the member just clicked save. A refusal raised
+// in the modal, a missing people count or a refused save
+// among them, must show inside the modal. A known bug,
+// pinned as an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: the missing-count refusal shows inside the re-scoring modal", async () => {
+  const user = await openRescoring(ACT5);
+
+  await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
+  await screen.findAllByText("Klaida: Įveskite veiklos vykdytojų kiekį.");
+  expect(modal()).toHaveTextContent("Klaida: Įveskite veiklos vykdytojų kiekį.");
 });
 
 
@@ -433,6 +530,105 @@ test("a theme without subthemes saves subtheme_id null", async () => {
 
 
 // -----------------------------------------------------------
+// BUG — a theme without subthemes cannot be saved
+// -----------------------------------------------------------
+//
+// Picking a theme that has no subthemes leaves the subtheme
+// empty, and the save sends it as null. The backend skips a
+// null subtheme, checks the new theme against the activity's
+// old subtheme and refuses the pair, so such a save can
+// never succeed: the page must refuse it itself, with a
+// disabled save or by sending nothing. The test "a theme
+// without subthemes saves subtheme_id null" above pins
+// today's request and must change with the fix. A known bug,
+// pinned as an expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: a theme without subthemes is refused in the page, no PATCH sent", async () => {
+  // What the backend answers such a save
+  onRequest("PATCH", "/api/activities/5/committee", { status: 400, body: { error: "Klaida: potemė nepriklauso pasirinktai temai" } });
+  const user = await openRescoring(ACT5);
+
+  await pick(user, "Tema", "6.3. — Kita");
+  await user.type(within(modal()).getAllByRole("spinbutton")[0], "1");
+  await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
+  expect(requestsTo("PATCH", "/api/activities/5/committee").map((r) => r.body)).toEqual([]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the updated confirmation shows as an error
+// -----------------------------------------------------------
+//
+// The page has one status line and always styles it as an
+// error, so the confirmation after a successful re-score sits
+// in the red error box like a refusal. A confirmation must
+// not be styled as an error. A known bug, pinned as an
+// expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: the updated confirmation is not styled as an error", async () => {
+  onRequest("PATCH", "/api/activities/5/committee", ok(patched({ score: 0.5 })));
+  const user = await openRescoring(ACT5);
+
+  await user.type(within(modal()).getAllByRole("spinbutton")[0], "2");
+  await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
+  expect(await screen.findByText("Įvertinimas atnaujintas.")).not.toHaveClass("form-status--error");
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — the backdrop closes the modal mid-save
+// -----------------------------------------------------------
+//
+// While a re-score is being saved the modal's Uždaryti button
+// is disabled, but a click on the backdrop still closes the
+// modal: only the buttons honour the saving state. The answer
+// then selects the re-scored activity again, so the modal
+// reappears by itself — or, when another row was opened in
+// the meantime, that modal switches to the re-scored
+// activity while keeping the other row's comment and theme
+// picks. While a save is pending the backdrop must leave the
+// modal open. A known bug, pinned as an expected failure
+// until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: the backdrop leaves the re-scoring modal open while the save is pending", async () => {
+  let release;
+  onRequest("PATCH", "/api/activities/5/committee", () => new Promise((resolve) => {
+    release = () => resolve(ok(patched({ score: 0.5 })));
+  }));
+  const user = await openRescoring(ACT5);
+  await user.type(within(modal()).getAllByRole("spinbutton")[0], "2");
+  await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
+  expect(await within(modal()).findByRole("button", { name: "Saugoma…" })).toBeDisabled();
+  expect(within(modal()).getByRole("button", { name: "Uždaryti" })).toBeDisabled();
+
+  await user.click(document.querySelector(".employee-modal-backdrop"));
+  expect(screen.queryAllByRole("heading", { level: 3, name: "Įvertintos veiklos rezultatas" })).toHaveLength(1);
+
+  release();
+  expect(await screen.findByText("Įvertinimas atnaujintas.")).toBeInTheDocument();
+  expect(within(modal()).getByRole("button", { name: "Pervertinti" })).toBeEnabled();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // errors
 // -----------------------------------------------------------
 //
@@ -454,6 +650,41 @@ test("a refused re-score shows Klaida: and keeps the modal in re-scoring mode", 
   expect(within(fieldNamed("Tema")).getByRole("button")).toHaveTextContent("6.1. — Studijų kokybė");
   expect(within(rowNamed("Seminaras apie X")).getByText("0.5")).toBeInTheDocument();
   expect(screen.queryByText("Įvertinimas atnaujintas.")).not.toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BUG — a non-JSON success answer counts as saved
+// -----------------------------------------------------------
+//
+// The API client turns a 2xx answer whose body is not JSON
+// into an empty object, and the save takes that for the
+// updated activity without checking its shape: the modal is
+// re-rendered from the empty object, its activity blanked,
+// and the confirmation shows, though nothing says the score
+// was stored. Such an answer must be refused with an error,
+// the modal kept on its activity. A known bug, pinned as an
+// expected failure until it is fixed.
+// -----------------------------------------------------------
+
+test.fails("BUG: a 2xx save answer that is not JSON is refused, keeping the modal's activity", async () => {
+  // The answer is deliberately not JSON, so the entry opts
+  // out of the contract guard
+  onRequest("PATCH", "/api/activities/5/committee", { status: 200, body: "<html>login</html>" }, { offContract: true });
+  const user = await openRescoring(ACT5);
+  await user.type(within(modal()).getAllByRole("spinbutton")[0], "2");
+  await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Saugoma…" })).not.toBeInTheDocument());
+
+  expect(screen.queryByText("Įvertinimas atnaujintas.")).not.toBeInTheDocument();
+  expect(within(modal()).getByText("Seminaras apie X")).toBeInTheDocument();
+  expect(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" })).toBeEnabled();
+  expect(screen.getAllByText(/^Klaida:/).length).toBeGreaterThan(0);
 });
 
 
