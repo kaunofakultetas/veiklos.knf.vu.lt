@@ -7,20 +7,16 @@
 //  rows with status pills and "(nėra)" for a missing score,
 //  the three multi-select filters narrow the rows (and the
 //  theme filter narrows the subtheme options and resets the
-//  subtheme picks), a filter's trigger reports aria-expanded,
+//  subtheme picks), a filter's trigger reports aria-expanded
+//  and is named by its caption and then by what it shows,
 //  its open menu is a group named after the filter and Escape
 //  closes it, "Eksportuoti" hands the exact header row +
 //  filtered rows to aoa_to_sheet, appends the sheet as
-//  "Veiklos" and writes a timestamped file, an empty result
-//  is refused with a message, and backend errors are shown
-//  verbatim.
-//
-//  Known bugs are pinned with test.fails beside the tests of
-//  their feature: a text longer than an XLSX cell holds makes
-//  the export fail without a word, the file name is stamped
-//  in UTC while the cells are local, the empty-result refusal
-//  outlives a later successful export, and the filter
-//  triggers are not named by their captions.
+//  "Veiklos" and writes a file stamped with the local date
+//  and time, a text longer than an XLSX cell holds is cut to
+//  fit, an empty result is refused with a message that a
+//  later successful export clears, and backend errors are
+//  shown verbatim.
 // -----------------------------------------------------------
 
 import { test, expect, vi, beforeEach } from "vitest";
@@ -81,13 +77,13 @@ const FAMILIES = [
 // Scores arrive as strings, as pg returns NUMERIC
 const ACTIVITIES = [
   { id: 101, theme_id: 1, subtheme_id: 11, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.10.", subtheme_title: "Dešimta",
-    title: "Kursas A", description: "Aprašas A", status: "PATEIKTA", rejection_comment: null, manager_comments: null, score: null,
+    title: "Kursas A", description: "Aprašas A", status: "PATEIKTA", rejection_comment: null, score: null,
     attachment_path: "uploads/1_1.10_ataskaita.pdf", attachment_original_name: "ataskaita.pdf", created_at: "2026-03-05T10:20:00Z" },
   { id: 102, theme_id: 2, subtheme_id: 21, theme_code: "2.", theme_title: "Mokslas", subtheme_code: "2.1.", subtheme_title: "Straipsniai",
-    title: "Straipsnis B", description: null, status: "ĮVERTINTA", rejection_comment: null, manager_comments: "Tinka", score: "4.5",
+    title: "Straipsnis B", description: null, status: "ĮVERTINTA", rejection_comment: null, score: "4.5",
     attachment_path: null, attachment_original_name: null, created_at: "2026-04-01T08:00:00Z" },
   { id: 103, theme_id: 1, subtheme_id: 12, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.2.", subtheme_title: "Antra",
-    title: "Seminaras C", description: "Aprašas C", status: "ATMESTA", rejection_comment: "Netinka temai", manager_comments: null, score: "0",
+    title: "Seminaras C", description: "Aprašas C", status: "ATMESTA", rejection_comment: "Netinka temai", score: "0",
     attachment_path: null, attachment_original_name: null, created_at: null },
 ];
 
@@ -358,24 +354,37 @@ test("the trigger reports aria-expanded and Escape closes the menu, keeping the 
 
 
 // -----------------------------------------------------------
-// BUG — filter triggers named by their summary alone
+// filter triggers named by their captions
 // -----------------------------------------------------------
 //
-// A filter's caption is a bare label tied to nothing, so its
-// trigger is named by its contents only: the summary and the
-// arrow, which is not hidden from assistive tech. A screen
-// reader hears a placeholder or a count with no filter named,
-// and two filters with two picks each sound the same. Each
-// trigger's name should start with its filter's caption.
+// Each trigger is named by its filter's caption and then by
+// the summary it shows, the arrow hidden from assistive
+// tech, so a screen reader names the filter before a
+// placeholder or a count, and two filters with two picks
+// each do not sound the same.
 // -----------------------------------------------------------
 
-test.fails("BUG: each filter's trigger is named by its caption first", async () => {
+test("each filter's trigger is named by its caption first", async () => {
   mountPage();
   await screen.findByText("Kursas A");
 
   for (const caption of ["Tema", "Potemė", "Būsena"]) {
     expect(filterTrigger(caption)).toHaveAccessibleName(new RegExp(`^${caption}`));
   }
+});
+
+test("a trigger's name goes on with the summary it shows, without the arrow", async () => {
+  const { user } = mountPage();
+  await screen.findByText("Kursas A");
+  expect(filterTrigger("Tema")).toHaveAccessibleName("Tema (visos temos)");
+
+  await user.click(filterTrigger("Tema"));
+  await user.click(within(filter("Tema")).getByRole("checkbox", { name: "1. — Studijos" }));
+  expect(filterTrigger("Tema")).toHaveAccessibleName("Tema 1. — Studijos");
+
+  await user.click(within(filter("Tema")).getByRole("checkbox", { name: "2. — Mokslas" }));
+  expect(filterTrigger("Tema")).toHaveAccessibleName("Tema 2 pasirinkta");
+  expect(filterTrigger("Būsena")).toHaveAccessibleName("Būsena (visos būsenos)");
 });
 
 
@@ -450,22 +459,21 @@ test("the export honours the filters: only the filtered rows are written", async
 
 
 // -----------------------------------------------------------
-// BUG — a text longer than a cell holds
+// a text longer than a cell holds
 // -----------------------------------------------------------
 //
 // An XLSX cell holds at most 32,767 characters and SheetJS
 // refuses to write a workbook with a longer text, while the
-// backend accepts descriptions far longer than that. The page
-// hands such a text to the sheet uncut and catches nothing,
-// so "Eksportuoti" ends in an uncaught error: no file and no
-// word to the employee. The export should still yield a file
-// with the long text cut to the limit, or say why it cannot.
-// The mocked writeFile refuses the way the real one does, and
-// the test takes the escaping error so it does not fail the
-// run.
+// backend accepts descriptions far longer than that. The
+// page cuts such a text to fit, ending it in "…", so
+// "Eksportuoti" still yields a file instead of an uncaught
+// error and no word to the employee. The mocked writeFile
+// refuses the way the real one does, and the first test
+// takes any escaping error so it cannot fail the run on its
+// own.
 // -----------------------------------------------------------
 
-test.fails("BUG: a text longer than a cell holds still exports, cut to fit, or the page says why it cannot", async () => {
+test("a text longer than a cell holds still exports, cut to fit, or the page says why it cannot", async () => {
   const limit = 32767;
 
   // The real SheetJS's refusal, raised when the rows the
@@ -506,6 +514,23 @@ test.fails("BUG: a text longer than a cell holds still exports, cut to fit, or t
   }
 });
 
+test("the long description reaches the sheet cut to the 32,767 characters a cell holds, ending in …", async () => {
+  signInAs("Darbuotojas");
+  onRequest("GET", "/api/themes", THEMES);
+  onRequest("GET", "/api/activities/my", [{ ...ACTIVITIES[0], description: "a".repeat(40000) }]);
+  const { user } = renderPage(ExportPage);
+  await screen.findByText("Kursas A");
+
+  await user.click(screen.getByRole("button", { name: "Eksportuoti" }));
+
+  const [header, row] = XLSX.utils.aoa_to_sheet.mock.calls[0][0];
+  expect(header).toEqual(HEADER);
+  expect(row[6]).toBe(`${"a".repeat(32766)}…`);
+  expect(row.slice(0, 6)).toEqual([fmt("2026-03-05T10:20:00Z"), "1.", "Studijos", "1.10.", "Dešimta", "Kursas A"]);
+  expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("Nėra veiklų eksportui.")).not.toBeInTheDocument();
+});
+
 
 
 
@@ -513,20 +538,18 @@ test.fails("BUG: a text longer than a cell holds still exports, cut to fit, or t
 
 
 // -----------------------------------------------------------
-// BUG — the file name stamped in UTC
+// the file name in local time
 // -----------------------------------------------------------
 //
-// The cells carry the employee's local time, but the file
-// name is stamped from toISOString, which is UTC: in Vilnius
-// the stamp runs two or three hours behind, and an export
-// made soon after midnight is named after the day before. The
-// stamp should be the same local date and time the cells use.
-// The test container runs in UTC, so the pin moves the
-// runner's zone to Vilnius and fixes the clock just after
-// midnight, then puts both back.
+// The cells carry the employee's local time, and so does the
+// file name's stamp: UTC would run two or three hours behind
+// in Vilnius and name an export made soon after midnight
+// after the day before. The test container runs in UTC, so
+// the test moves the runner's zone to Vilnius and fixes the
+// clock just after midnight, then puts both back.
 // -----------------------------------------------------------
 
-test.fails("BUG: the file name is stamped with the local date and time, as the cells are", async () => {
+test("the file name is stamped with the local date and time, as the cells are", async () => {
   const { user } = mountPage();
   await screen.findByText("Kursas A");
   const runnerZone = process.env.TZ;
@@ -586,17 +609,16 @@ test("an empty filter result refuses the export with a message and no workbook",
 
 
 // -----------------------------------------------------------
-// BUG — the refusal outlives a successful export
+// a successful export clears the refusal
 // -----------------------------------------------------------
 //
 // "Nėra veiklų eksportui." is set when the filters leave no
-// rows and nothing ever clears it: once the filters change
-// and the next export writes its file, the old refusal still
-// stands in the error status line, as if that export had
-// failed too. A successful export should clear it.
+// rows. Once the filters change and the next export writes
+// its file, the refusal leaves the error status line, so it
+// does not read as if that export had failed too.
 // -----------------------------------------------------------
 
-test.fails("BUG: a successful export clears an earlier \"Nėra veiklų eksportui.\"", async () => {
+test("a successful export clears an earlier \"Nėra veiklų eksportui.\"", async () => {
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 

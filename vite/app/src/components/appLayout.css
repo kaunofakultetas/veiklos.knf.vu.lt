@@ -68,6 +68,11 @@
 
 /* modal */
 
+/* Above the pages' dialogs (.employee-modal-backdrop, 60): the
+   session-expired notice must stay reachable while one of them
+   is open, or the only way to it would close the dialog and
+   lose what was typed. The role picker shares the class but
+   shows only on "/", where no page dialog can be open. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -75,7 +80,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: 70;
 }
 
 .modal {

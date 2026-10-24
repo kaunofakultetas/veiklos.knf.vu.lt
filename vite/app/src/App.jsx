@@ -9,14 +9,19 @@
 //  GET /api/session/check once and publishes the result
 //  through AuthContext ({ user, session, loading }); signing
 //  in is a full-page redirect to /auth/saml/login, so the SPA
-//  never handles tokens itself.
+//  never handles tokens itself. Only a 401 means signed out:
+//  any other refusal of the probe (the backend's 500, the
+//  ingress's 502 while the backend restarts) shows an error
+//  instead of a sign-in that would only lead back to it.
 //
 //  The active role is the app's central switch. It belongs to
 //  the browser tab (components/activeRole.js — a role
 //  switched in one tab leaves the others alone), gates every
 //  /manager, /committee and /employee route (RoleRoute), and
 //  the pages send it to the backend as the X-Active-Role
-//  header.
+//  header. "/" never enters a workspace the session does not
+//  own: a stored role the session lacks gives way to the
+//  first role it has, as the header's repair does.
 //
 //  While signed in, SessionExpired watches the API answers: a
 //  session that ends mid-work (a 401) gets a notice offering
@@ -27,6 +32,7 @@
 //
 //    AuthContext     — the session state for the whole tree
 //    roleToPath      — role name → workspace path
+//    roleNamesOf     — the session's roles as plain names
 //    SignIn          — the "Prisijungti" card
 //    RolePickerModal — role choice for multi-role users
 //    HomeGate        — "/" — sign-in / redirect / profile
@@ -38,10 +44,10 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState, createContext, useContext } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Link, useNavigate } from "react-router-dom";
 import AppErrorBoundary from "./components/appErrorBoundary.jsx";
 import SessionExpired from "./components/sessionExpired.jsx";
-import { getActiveRole, setActiveRole as storeActiveRole } from "./components/activeRole.js";
+import { clearActiveRole, getActiveRole, setActiveRole as storeActiveRole } from "./components/activeRole.js";
 import "./components/appLayout.css";
 import vuLogo from "./assets/VU logo.png";
 
@@ -121,6 +127,27 @@ const roleToPath = (role) => {
 
 
 // -----------------------------------------------------------
+// roleNamesOf
+// -----------------------------------------------------------
+//
+// The roles of the probe's session as plain names. The probe
+// sends { name } objects, plain strings are tolerated too;
+// no session, or one without a roles list, owns none.
+//
+// Used by:
+//   - HomeGate, Profile (below)
+// -----------------------------------------------------------
+
+const roleNamesOf = (session) =>
+  (session?.roles || []).map((r) => typeof r === "string" ? r : r.name);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // SignIn
 // -----------------------------------------------------------
 //
@@ -173,7 +200,8 @@ function SignIn() {
 //
 // Blocking modal for users with several roles: pick one, hit
 // "Patvirtinti". No cancel — a role must be chosen to enter
-// the app.
+// the app. The dropdown is named by the "Pasirinkite rolę"
+// caption above it, so a screen reader says what it chooses.
 //
 // Used by:
 //   - Profile (below)
@@ -185,7 +213,7 @@ function RolePickerModal({ roles, initial, onConfirm }) {
   return (
     <div className="modal-backdrop">
       <div className="modal">
-        <h2 className="modal-title">Pasirinkite rolę</h2>
+        <h2 className="modal-title" id="role-picker-title">Pasirinkite rolę</h2>
         <p className="modal-text">
           Pasirinkite rolę, su kuria tęsite veiklą sistemoje.
         </p>
@@ -193,6 +221,7 @@ function RolePickerModal({ roles, initial, onConfirm }) {
           value={sel}
           onChange={(e) => setSel(e.target.value)}
           className="field-select modal-select"
+          aria-labelledby="role-picker-title"
         >
           {roles.map((r) => (
             <option key={r} value={r}>{r}</option>
@@ -220,17 +249,36 @@ function RolePickerModal({ roles, initial, onConfirm }) {
 //
 // The "/" route: SignIn when logged out, a redirect to the
 // stored active role's workspace when one is set, otherwise
-// Profile to pick a role.
+// Profile to pick a role. The stored role is checked against
+// the session's roles first, as the header's repair checks it
+// against /api/me: one the session does not own — revoked
+// since it was stored, or left behind by an earlier user of
+// the same browser — would open a workspace whose every
+// action the backend refuses. The first owned role takes its
+// place, and with no role owned at all it is dropped, which
+// leaves Profile to say so.
 //
 // Used by:
 //   - RoutesRoot (below) — route "/"
 // -----------------------------------------------------------
 
 function HomeGate() {
-  const { user } = useContext(AuthContext);
-  const activeRole = getActiveRole();
+  const { user, session } = useContext(AuthContext);
 
   if (!user) return <SignIn />;
+
+
+  // Repaired before the redirect below reads it; storing the
+  // same role again on a second render changes nothing
+  const owned = roleNamesOf(session);
+  const stored = getActiveRole();
+  if (stored && !owned.includes(stored)) {
+    if (owned.length) storeActiveRole(owned[0]);
+    else clearActiveRole();
+  }
+
+
+  const activeRole = getActiveRole();
   if (activeRole) return <Navigate to={roleToPath(activeRole)} replace />;
   return <Profile />;
 }
@@ -264,13 +312,12 @@ function Profile() {
   const [needsRoleSelection, setNeedsRoleSelection] = useState(false);
 
 
-  // One role picks itself; several open the picker. Roles
-  // may come as strings or { name } objects — tolerate both.
+  // One role picks itself; several open the picker.
   // activeRole is a dependency on purpose: once a role is
   // set, neither branch fires again
   useEffect(() => {
     if (!session) return;
-    const roleNames = (session.roles || []).map((r) => typeof r === "string" ? r : r.name);
+    const roleNames = roleNamesOf(session);
 
     if (roleNames.length === 1 && !activeRole) {
       const r = roleNames[0];
@@ -289,7 +336,7 @@ function Profile() {
   }, [activeRole]);
 
 
-  const roles = (session?.roles || []).map((r) => typeof r === "string" ? r : r.name);
+  const roles = roleNamesOf(session);
 
   const confirmRole = (role) => {
     setActiveRole(role);
@@ -344,8 +391,11 @@ function Profile() {
 //
 // Guard around a workspace subtree: logged out → back to "/",
 // wrong ACTIVE role (this tab's) → the "Netinkama rolė" card.
-// This is UI-level protection only — the backend enforces
-// roles again via the session and X-Active-Role.
+// The card stands alone, without the header, so it carries
+// its own way out: a link to "/", which sends the tab on to
+// its own role's workspace, or to the role choice. This is
+// UI-level protection only — the backend enforces roles
+// again via the session and X-Active-Role.
 //
 // Used by:
 //   - RoutesRoot (below) — around each workspace layout
@@ -364,6 +414,9 @@ function RoleRoute({ required, children }) {
           <div className="card-body">
             Dabartinė aktyvi rolė:{" "}
             <b>{activeRole || "(rolė nepasirinkta)"}</b>
+          </div>
+          <div className="card-body">
+            <Link to="/">Grįžti į pradžią</Link>
           </div>
         </div>
       </div>
@@ -387,6 +440,9 @@ function RoleRoute({ required, children }) {
 // AuthContext and renders the route table: "/" (HomeGate),
 // one guarded subtree per workspace, and a catch-all
 // redirect — with SessionExpired watching while signed in.
+// A probe refused for any reason but a 401 leaves the
+// session's state unknown, so the page says the check failed
+// instead of offering the sign-in or a workspace.
 //
 // Used by:
 //   - App (below)
@@ -394,13 +450,18 @@ function RoleRoute({ required, children }) {
 
 function RoutesRoot() {
   const [authState, setAuthState] = useState({ user: null, session: null, loading: true });
+  const [probeRefused, setProbeRefused] = useState(false);
 
 
-  // The one session probe — a 401 just means "not signed in"
+  // The one session probe. A 401 just means "not signed in",
+  // and so does a fetch that fails outright; any other
+  // refusal is an outage, and a sign-in then would only land
+  // back on the same refusal
   useEffect(() => {
     fetch("/api/session/check")
       .then((res) => {
         if (!res.ok) {
+          setProbeRefused(res.status !== 401);
           setAuthState({ user: null, session: null, loading: false });
           return null;
         }
@@ -418,6 +479,16 @@ function RoutesRoot() {
       <div className="page page-centered">
         <div className="card">
           <div className="card-body">Kraunama…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (probeRefused) {
+    return (
+      <div className="page page-centered">
+        <div className="card">
+          <div className="card-body">Klaida: nepavyko patikrinti prisijungimo. Pabandykite vėliau.</div>
         </div>
       </div>
     );

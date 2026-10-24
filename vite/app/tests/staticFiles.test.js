@@ -54,7 +54,7 @@ const RULES = fs.readdirSync(SRC, { recursive: true })
 // such rule sets one.
 //
 // Used by:
-//   - the layering pin (below)
+//   - the layering test (below)
 // -----------------------------------------------------------
 
 function zIndexOf(classes) {
@@ -74,18 +74,17 @@ function zIndexOf(classes) {
 
 
 // -----------------------------------------------------------
-// BUG — the page declares itself English
+// the page's language
 // -----------------------------------------------------------
 //
-// index.html declares the page English while every text in
-// it is Lithuanian: screen readers read the whole interface
-// with English pronunciation, and Firefox, which reads a
-// number field by the page's language, does not take a
-// decimal comma typed into the committee's sums and caps as
-// a number. The page should declare itself Lithuanian.
+// Every text of the interface is Lithuanian, and index.html
+// declares the page so: screen readers read it with
+// Lithuanian pronunciation, and Firefox, which reads a
+// number field by the page's language, takes a decimal comma
+// typed into the committee's sums and caps as a number.
 // -----------------------------------------------------------
 
-test.fails("BUG: index.html declares the page Lithuanian", () => {
+test("index.html declares the page Lithuanian", () => {
   const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 
   expect(/<html\b[^>]*\slang="([^"]*)"/i.exec(html)?.[1]).toBe("lt");
@@ -98,20 +97,20 @@ test.fails("BUG: index.html declares the page Lithuanian", () => {
 
 
 // -----------------------------------------------------------
-// BUG — the session-expired notice under a page dialog
+// the session-expired notice above the page dialogs
 // -----------------------------------------------------------
 //
-// The notice that the session has ended is layered below the
+// The notice that the session has ended is layered above the
 // dialogs the pages open to view, review, evaluate or comment
 // on an activity. When the eight-hour limit passes while one
-// of them is open, the notice stays hidden behind it, and the
-// only way to reach it — a click outside the dialog — closes
-// the dialog and throws away what was typed in it: the very
-// loss the notice exists to prevent. The notice should be
-// layered above every page dialog.
+// of them is open, the notice shows over it: hidden behind
+// it, the notice could only be reached by a click outside
+// the dialog, which closes the dialog and throws away what
+// was typed in it — the very loss the notice exists to
+// prevent.
 // -----------------------------------------------------------
 
-test.fails("BUG: the session-expired notice is layered above the page dialogs", async () => {
+test("the session-expired notice is layered above the page dialogs", async () => {
   onRequest("GET", "/api/me", { status: 401, body: { error: "Neprisijungta" } });
   render(createElement(SessionExpired));
   await act(() => window.fetch("/api/me"));

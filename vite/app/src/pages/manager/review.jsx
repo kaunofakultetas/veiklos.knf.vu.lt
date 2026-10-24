@@ -31,7 +31,8 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
-import { AppSelect, CommentModal } from "@/components/appCommon.jsx";
+import { AppSelect, CommentModal, ModalStatus } from "@/components/appCommon.jsx";
+import { useBackdropClose, useBusyIds, useModalDialog } from "@/components/sharedHooks.js";
 import { apiJson, apiJsonAll, downloadAttachment, reasonOf } from "@/components/api.js";
 import "@/components/employee.css";
 
@@ -187,16 +188,18 @@ function formatDate(iso) {
 //
 // The PATEIKTA queue: one row per activity with Patvirtinti /
 // Atmesti / Grąžinti (all three disabled and showing "..."
-// while that row's PATCH is in flight) and Peržiūrėti. An
-// activity the committee sent back carries the committee's
-// reason under its title, so the manager sees why it came
-// back. Loading and empty states are early returns.
+// while that row's own PATCH is in flight — isBusy asks
+// about one row, so a verdict on another row never brings
+// them back early) and Peržiūrėti. An activity the committee
+// sent back carries the committee's reason under its title,
+// so the manager sees why it came back. Loading and empty
+// states are early returns.
 //
 // Used by:
 //   - ManagerReviewPage (below)
 // -----------------------------------------------------------
 
-function QueueTable({ items, loading, actingId, onApprove, onDeny, onReturn, onOpen }) {
+function QueueTable({ items, loading, isBusy, onApprove, onDeny, onReturn, onOpen }) {
   if (loading) {
     return <div className="employee-muted">Kraunama…</div>;
   }
@@ -247,27 +250,27 @@ function QueueTable({ items, loading, actingId, onApprove, onDeny, onReturn, onO
                     type="button"
                     onClick={() => onApprove(act)}
                     className="btn btn-primary btn-sm"
-                    disabled={actingId === act.id}
+                    disabled={isBusy(act.id)}
                   >
-                    {actingId === act.id ? "..." : "Patvirtinti"}
+                    {isBusy(act.id) ? "..." : "Patvirtinti"}
                   </button>
 
                   <button
                     type="button"
                     onClick={() => onDeny(act)}
                     className="btn btn-ghost btn-sm btn-danger"
-                    disabled={actingId === act.id}
+                    disabled={isBusy(act.id)}
                   >
-                    {actingId === act.id ? "..." : "Atmesti"}
+                    {isBusy(act.id) ? "..." : "Atmesti"}
                   </button>
 
                   <button
                     type="button"
                     onClick={() => onReturn(act)}
                     className="btn btn-secondary btn-sm btn-danger"
-                    disabled={actingId === act.id}
+                    disabled={isBusy(act.id)}
                   >
-                    {actingId === act.id ? "..." : "Grąžinti"}
+                    {isBusy(act.id) ? "..." : "Grąžinti"}
                   </button>
 
                   <button
@@ -384,22 +387,34 @@ function ThemeSubthemeFields({
 // -----------------------------------------------------------
 //
 // The review/edit modal for one PATEIKTA activity. It owns
-// the edit state — mounted fresh per opened row, so the
-// theme/subtheme ids and the manager's comments seed from
-// the row in view mode. "Redaguoti" toggles the pickers and
-// the comment textarea writable; "Išsaugoti" (enabled only
-// in edit mode) hands { manager_comments, theme_id,
-// subtheme_id } to onSave, which resolves with the updated
-// activity or throws (the page has already shown the error).
+// the edit state — keyed by the activity, so it mounts fresh
+// per opened row and the theme/subtheme ids and the
+// manager's comments seed from the row in view mode.
+// "Redaguoti" toggles the pickers and the comment textarea
+// writable; "Išsaugoti" (enabled only in edit mode, and only
+// while a subtheme is picked — an activity needs one, so a
+// theme without subthemes cannot be saved) hands
+// { manager_comments, theme_id, subtheme_id } to onSave,
+// which resolves with the updated activity or rejects with
+// the text to show. "Atšaukti redagavimą" puts the stored
+// theme, subtheme and comments back, so view mode never
+// shows a draft as if it were saved. What happens in the
+// modal — the save's confirmation or refusal, a refused
+// download — shows on its own status line, inside the box.
 // The employee's title and description are read-only even
-// while editing.
+// while editing. The box
+// is a modal dialog named by its title that takes the focus
+// and gives it back; the backdrop closes it only on a press
+// and release of its own, and never while a save is in
+// flight, so the answer always finds the modal it belongs
+// to.
 //
 // Used by:
 //   - ManagerReviewPage (below) — while an activity is
 //     selected for review
 // -----------------------------------------------------------
 
-function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClose, onMessage }) {
+function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClose }) {
 
   const act = activity;
 
@@ -408,6 +423,9 @@ function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClos
   const [editManagerComments, setEditManagerComments] = useState(act.manager_comments || "");
   const [editThemeId, setEditThemeId] = useState(String(act.theme_id));
   const [editSubthemeId, setEditSubthemeId] = useState(String(act.subtheme_id));
+  const [status, setStatus] = useState(null);
+  const backdrop = useBackdropClose(onClose, savingEdit);
+  const dialogRef = useModalDialog();
 
 
   // Save without an action keyword = plain edit; theme/
@@ -415,6 +433,7 @@ function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClos
   const handleSaveEdit = async () => {
     try {
       setSavingEdit(true);
+      setStatus(null);
 
       const body = {
         manager_comments: editManagerComments,
@@ -430,22 +449,53 @@ function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClos
       setEditThemeId(String(updated.theme_id));
       setEditSubthemeId(String(updated.subtheme_id));
       setModalEditing(false);
-      onMessage("Veikla atnaujinta.");
-    } catch {
-      // ignore — the page already surfaced the error
+      setStatus({ text: "Veikla atnaujinta.", error: false });
+    } catch (e) {
+      setStatus({ text: e.message, error: true });
     } finally {
       setSavingEdit(false);
     }
   };
 
 
+  // Leaving edit mode by "Atšaukti redagavimą" puts the
+  // stored values back: the next "Redaguoti" starts from the
+  // row again, and a later save cannot send the cancelled
+  // theme, subtheme or comments
+  const toggleEditing = () => {
+    if (modalEditing) {
+      setEditThemeId(String(act.theme_id));
+      setEditSubthemeId(String(act.subtheme_id));
+      setEditManagerComments(act.manager_comments || "");
+    }
+    setStatus(null);
+    setModalEditing((v) => !v);
+  };
+
+
+  // A refused download is told here, not behind the overlay
+  const download = async () => {
+    setStatus(null);
+    try {
+      await onDownload(act);
+    } catch (e) {
+      setStatus({ text: e.message, error: true });
+    }
+  };
+
+
   return (
-    <div className="employee-modal-backdrop" onClick={onClose}>
+    <div className="employee-modal-backdrop" {...backdrop}>
       <div
+        ref={dialogRef}
         className="employee-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="review-modal-title"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="employee-modal-title">Pateiktos veiklos peržiūra</h3>
+        <h3 className="employee-modal-title" id="review-modal-title">Pateiktos veiklos peržiūra</h3>
         <div className="employee-modal-meta">
           Darbuotojas: <strong>{act.full_name}</strong>
           <br />
@@ -495,7 +545,7 @@ function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClos
             {act.attachment_path ? (
               <button
                 type="button"
-                onClick={() => onDownload(act)}
+                onClick={download}
                 className="btn btn-secondary btn-sm"
                 disabled={downloading}
               >
@@ -530,6 +580,8 @@ function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClos
           </div>
         </div>
 
+        <ModalStatus status={status} />
+
         <div className="employee-modal-footer">
           <button
             type="button"
@@ -542,18 +594,21 @@ function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClos
 
           <button
             type="button"
-            onClick={() => setModalEditing((v) => !v)}
+            onClick={toggleEditing}
             className="btn btn-ghost btn-sm"
             disabled={savingEdit}
           >
             {modalEditing ? "Atšaukti redagavimą" : "Redaguoti"}
           </button>
 
+          {/* No save without a subtheme — an activity needs
+              one, and the backend would refuse the pair with
+              a misleading reason */}
           <button
             type="button"
             onClick={handleSaveEdit}
             className="btn btn-primary btn-sm"
-            disabled={savingEdit || !modalEditing}
+            disabled={savingEdit || !modalEditing || !editSubthemeId}
           >
             {savingEdit ? "Saugoma…" : "Išsaugoti"}
           </button>
@@ -574,12 +629,17 @@ function ReviewModal({ activity, themes, downloading, onDownload, onSave, onClos
 // -----------------------------------------------------------
 //
 // Owns the queue, the theme tree, which activity each of the
-// three modals is open for, and every API call; all verdicts
-// funnel through callManagerAction, which PATCHes
-// /api/activities/:id/manager and reconciles the local list
-// from the response — a status that left PATEIKTA drops out
-// of the queue, a plain edit is patched in place. One status
-// line (msg) serves everything.
+// three modals is open for, the rows' busy flags and every
+// API call; all verdicts funnel through callManagerAction,
+// which PATCHes /api/activities/:id/manager, keeps that row
+// busy until its own answer lands and reconciles the local
+// list from the response — a status that left PATEIKTA drops
+// out of the queue, a plain edit is patched in place. A
+// review save's answer replaces the selected activity only
+// while the review modal still shows it. callManagerAction
+// and handleDownload reject with the text to show: a dialog
+// shows it on its own status line, and the page's line
+// serves the queue — the load and the approvals.
 //
 // Used by:
 //   - App.jsx — route /manager/review
@@ -591,8 +651,11 @@ export default function ManagerReviewPage() {
   const [themes, setThemes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
-  const [actingId, setActingId] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
+
+  // One busy flag per row, so two verdicts in flight together
+  // never re-enable each other's buttons
+  const busyRows = useBusyIds();
 
   // Which activity each modal is open for (null = closed)
   const [selectedActivity, setSelectedActivity] = useState(null);
@@ -635,20 +698,20 @@ export default function ManagerReviewPage() {
     if (!act.attachment_path) return;
     try {
       setDownloadingId(act.id);
-      setMsg("");
       await downloadAttachment(act);
     } catch (e) {
-      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
+      throw new Error(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
     } finally {
       setDownloadingId(null);
     }
   };
 
 
-  // The one PATCH funnel: a response that left PATEIKTA drops
-  // out of the queue, a plain edit is patched in place
+  // The one PATCH funnel: the row stays busy until its own
+  // answer lands; a response that left PATEIKTA drops out of
+  // the queue, a plain edit is patched in place
   const callManagerAction = async (id, body) => {
-    setActingId(id);
+    busyRows.start(id);
     setMsg("");
     try {
       const data = await apiJson(`/api/activities/${id}/manager`, { method: "PATCH", json: body });
@@ -661,10 +724,9 @@ export default function ManagerReviewPage() {
 
       return data;
     } catch (e) {
-      setMsg(`Klaida: ${reasonOf(e)}`);
-      throw e;
+      throw new Error(`Klaida: ${reasonOf(e)}`);
     } finally {
-      setActingId(null);
+      busyRows.stop(id);
     }
   };
 
@@ -673,8 +735,8 @@ export default function ManagerReviewPage() {
     if (!window.confirm("Patvirtinti šią veiklą?")) return;
     try {
       await callManagerAction(act.id, { action: "approve" });
-    } catch {
-      // ignore — callManagerAction already surfaced the error
+    } catch (e) {
+      setMsg(e.message);
     }
   };
 
@@ -693,11 +755,14 @@ export default function ManagerReviewPage() {
 
 
   // The review modal's save: the PATCH result also replaces
-  // the selected activity, so the modal shows the saved row
+  // the selected activity, so the modal shows the saved row —
+  // but only while the modal still shows that activity: one
+  // closed or moved on to another row in the meantime stays
+  // as it is
   const handleSave = async (body) => {
     const updated = await callManagerAction(selectedActivity.id, body);
     setItems((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
-    setSelectedActivity(updated);
+    setSelectedActivity((prev) => (prev?.id === updated.id ? updated : prev));
     return updated;
   };
 
@@ -715,7 +780,7 @@ export default function ManagerReviewPage() {
           <QueueTable
             items={items}
             loading={loading}
-            actingId={actingId}
+            isBusy={busyRows.isBusy}
             onApprove={handleApprove}
             onDeny={handleDeny}
             onReturn={handleReturn}
@@ -727,16 +792,18 @@ export default function ManagerReviewPage() {
       </main>
 
       {/* Each modal mounts fresh for its activity, seeding its
-          own fields from it */}
+          own fields from it; the review modal is keyed by the
+          activity, so moving to another row never carries the
+          edit fields over */}
       {selectedActivity && (
         <ReviewModal
+          key={selectedActivity.id}
           activity={selectedActivity}
           themes={themes}
           downloading={downloadingId === selectedActivity.id}
           onDownload={handleDownload}
           onSave={handleSave}
           onClose={() => setSelectedActivity(null)}
-          onMessage={setMsg}
         />
       )}
 
@@ -757,7 +824,6 @@ export default function ManagerReviewPage() {
             })
           }
           onClose={() => setRejectingActivity(null)}
-          onMessage={setMsg}
         />
       )}
 
@@ -778,7 +844,6 @@ export default function ManagerReviewPage() {
             })
           }
           onClose={() => setReturningActivity(null)}
-          onMessage={setMsg}
         />
       )}
     </div>

@@ -12,11 +12,10 @@
 //  for a manager's own Vadybininkas role, backend errors
 //  shown verbatim with the page's own fallbacks, and the
 //  email field and the role dropdown reachable by their
-//  labels. Pinned as expected failures, the known bugs: a
-//  double click on Priskirti rolę grants twice, and two
-//  removals in flight together compute the pills from the
-//  same stale list, so the later answer undoes the earlier
-//  one.
+//  labels. Changes in flight are pinned too: a double click
+//  on Priskirti rolę grants once, two removals in flight
+//  together both stick, and answers that land after a lookup
+//  of someone else leave the new card alone.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -253,19 +252,15 @@ test("assigning the last role sorts the pill into place and shows the all-roles 
 
 
 // -----------------------------------------------------------
-// BUG — a double click grants twice
+// assign — a double click grants once
 // -----------------------------------------------------------
 //
-// Priskirti rolę stays enabled while its POST is in flight,
-// so a double click sends the grant twice and, once both
-// answer, fires "app:roles-updated" twice. The backend takes
-// the repeat as a no-op, so the cost is the doubled request
-// and header refresh. The button should wait for its answer,
-// so that a double click sends one POST. A known bug, pinned
-// as an expected failure until it is fixed.
+// Priskirti rolę waits for its answer, so a double click
+// sends one POST — no doubled request, no second header
+// refresh — and the answer adds the pill as for one click.
 // -----------------------------------------------------------
 
-test.fails("BUG: a double click on Priskirti rolę sends one POST", async () => {
+test("a double click on Priskirti rolę sends one POST", async () => {
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
   onRequest("GET", "/api/user-roles", lookup(["Darbuotojas"]));
@@ -335,20 +330,17 @@ test("remove: ✕ POSTs { email, role } without a confirm, the pill goes, the ro
 
 
 // -----------------------------------------------------------
-// BUG — overlapping removals undo each other
+// overlapping removals
 // -----------------------------------------------------------
 //
-// Each answer computes the new pill list from the roles the
-// page held when that ✕ was pressed, not from the list as it
-// stands when the answer lands. Two removals in flight
-// together therefore race: the second answer starts again
-// from the list as it was before either removal and puts the
-// first removed role back on screen, though the backend no
-// longer grants it. Both removals should stick. A known bug,
-// pinned as an expected failure until it is fixed.
+// Each answer computes the pills from the list as it stands
+// when the answer lands, not as it stood when its ✕ was
+// pressed, so two removals in flight together both stick:
+// the second answer does not put back the role the first
+// one removed.
 // -----------------------------------------------------------
 
-test.fails("BUG: two removals in flight together both stick — the pills end as Darbuotojas alone", async () => {
+test("two removals in flight together both stick — the pills end as Darbuotojas alone", async () => {
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
   onRequest("GET", "/api/user-roles", lookup(ALL));
@@ -368,6 +360,61 @@ test.fails("BUG: two removals in flight together both stick — the pills end as
   answers[1](DONE);
   await screen.findByText("Pašalinta rolė: Vadybininkas");
   expect(pillNames()).toEqual(["Darbuotojas"]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// answers after a lookup of someone else
+// -----------------------------------------------------------
+//
+// A grant and a removal pressed for one user and answered
+// only once a lookup has put another user on the card change
+// nothing there: the new user's pills, dropdown and status
+// line stay as the lookup left them. Each answer still fires
+// "app:roles-updated", as the backend did change.
+// -----------------------------------------------------------
+
+test("changes answered after a lookup of someone else leave the new card alone", async () => {
+  const PETRAS = { id: 8, email: "petras.petraitis@knf.vu.lt", full_name: "Petras Petraitis" };
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/me", ME);
+  onRequest("GET", "/api/user-roles", (req) =>
+    req.url.includes("petras")
+      ? { user: PETRAS, roles: ["Darbuotojas", "Vadybininkas"], allRoles: ALL }
+      : lookup(["Darbuotojas", "Vadybininkas"])
+  );
+  // Both changes wait until the test answers them
+  const answers = [];
+  onRequest("POST", "/api/user-roles/assign", () => new Promise((resolve) => answers.push(resolve)));
+  onRequest("POST", "/api/user-roles/remove", () => new Promise((resolve) => answers.push(resolve)));
+  const onUpdated = vi.fn();
+  window.addEventListener("app:roles-updated", onUpdated);
+  const { user } = renderPage(RolesPage);
+  await lookUp(user, "jonas.jonaitis@knf.vu.lt");
+  await screen.findByText("Jonas Jonaitis");
+
+  await user.click(screen.getByRole("button", { name: "Priskirti rolę" }));
+  await user.click(within(pill("Vadybininkas")).getByTitle("Pašalinti"));
+  await lookUp(user, "petras.petraitis@knf.vu.lt");
+  await screen.findByText("Petras Petraitis");
+
+  for (const answer of answers) answer(DONE);
+  await waitFor(() => expect(onUpdated).toHaveBeenCalledTimes(2));
+  expect(requestsTo("POST", /^\/api\/user-roles\/(assign|remove)$/).map((r) => r.body)).toEqual([
+    { email: "jonas.jonaitis@knf.vu.lt", role: "Komisijos narys" },
+    { email: "jonas.jonaitis@knf.vu.lt", role: "Vadybininkas" },
+  ]);
+  expect(screen.queryByText("Jonas Jonaitis")).not.toBeInTheDocument();
+  expect(pillNames()).toEqual(["Darbuotojas", "Vadybininkas"]);
+  expect(optionValues()).toEqual(["Komisijos narys"]);
+  expect(screen.getByRole("combobox").value).toBe("Komisijos narys");
+  expect(screen.queryByText(/^(Priskirta|Pašalinta) rolė:/)).not.toBeInTheDocument();
+  window.removeEventListener("app:roles-updated", onUpdated);
 });
 
 

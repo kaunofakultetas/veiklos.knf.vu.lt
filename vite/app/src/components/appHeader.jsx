@@ -8,19 +8,25 @@
 //  Loads the caller's roles from /api/me on mount and repairs
 //  this tab's active role (components/activeRole.js) when it
 //  is missing or no longer owned (falls back to the first
-//  role). The user is named by email when VU SSO released no
-//  name. Until the answer the role block shows the stored
-//  role or "Kraunama…"; an answer without roles shows
-//  "(nėra)". Listens for the window event
-//  "app:roles-updated" — manager/roles.jsx fires it after
-//  editing roles so the switcher refreshes without a reload.
+//  role); a repair that changes the role moves the tab to
+//  that role's workspace, as a switch by hand does, since the
+//  old role's pages would only be refused by the backend. The
+//  user is named by email when VU SSO released no name. Until
+//  the answer the role block shows the stored role or
+//  "Kraunama…"; an answer without roles shows "(nėra)".
+//  Listens for the window event "app:roles-updated" —
+//  manager/roles.jsx fires it after editing roles so the
+//  switcher refreshes without a reload, and a manager who
+//  removes their own Vadybininkas role is moved off the
+//  manager pages.
 //
 //  Switching roles navigates straight to the chosen role's
 //  workspace. Signing out POSTs to /auth/saml/logout and then
 //  navigates to the URL a 2xx answer carries (VU SSO's logout,
 //  or "/"); a refused or failed request lands on "/". A POST
 //  so that no other site can trigger it: a cross-site request
-//  carries no SameSite=Lax cookie.
+//  carries no SameSite=Lax cookie. Sign-out runs once: a
+//  second click while it runs does nothing.
 //
 //  Split into (root component last):
 //
@@ -28,7 +34,7 @@
 //    AppHeader  — the bar itself (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { clearActiveRole, getActiveRole, setActiveRole as storeActiveRole } from "./activeRole.js";
 import { apiJson } from "./api.js";
@@ -49,7 +55,8 @@ import "./appHeader.css";
 // App.jsx.
 //
 // Used by:
-//   - AppHeader (below) — role switch and logo click
+//   - AppHeader (below) — role switch, role repair and logo
+//     click
 // -----------------------------------------------------------
 
 const roleToPath = (role) => {
@@ -72,7 +79,8 @@ const roleToPath = (role) => {
 // -----------------------------------------------------------
 //
 // Takes nav links as children and renders them between the
-// brand and the role/user block.
+// brand and the role/user block; owns the /api/me load with
+// its role repair, the role switch and the sign-out.
 //
 // Used by:
 //   - pages/manager/layout.jsx, pages/employee/layout.jsx,
@@ -81,6 +89,23 @@ const roleToPath = (role) => {
 
 export default function AppHeader({ children }) {
   const navigate = useNavigate();
+
+  // The /api/me effect below is set up once, so it reaches
+  // the router through this ref, which always holds the
+  // navigate of the latest render
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  });
+
+  // Set by the first "Atsijungti" click and never cleared, as
+  // the page is left either way. A second click would POST
+  // again, and the answer for the session the first POST had
+  // ended would send the browser home, replacing the pending
+  // navigation to VU's logout: the VU SSO session would
+  // survive, and on a shared computer let the next person in
+  // as this one
+  const signingOut = useRef(false);
 
   const [roles, setRoles] = useState([]);
 
@@ -115,7 +140,9 @@ export default function AppHeader({ children }) {
         setFullName(data.name || data.email || "");
         setRolesLoaded(true);
 
-        // Repair a stale/foreign active role
+        // Repair a stale/foreign active role; a role that
+        // changes takes the tab to its own workspace, a role
+        // still owned leaves the page where it is
         const storedActive = getActiveRole();
 
         if (names.length === 0) {
@@ -125,6 +152,7 @@ export default function AppHeader({ children }) {
           const fallback = names[0];
           setActiveRole(fallback);
           storeActiveRole(fallback);
+          navigateRef.current(roleToPath(fallback), { replace: true });
         } else {
           setActiveRole(storedActive);
         }
@@ -156,6 +184,9 @@ export default function AppHeader({ children }) {
   // (a form POST followed by a 302 to VU would trip the CSP
   // form-action rule in Chromium)
   const signOut = async () => {
+    if (signingOut.current) return;
+    signingOut.current = true;
+
     clearActiveRole();
     let redirect = "/";
     try {

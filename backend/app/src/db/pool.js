@@ -47,3 +47,15 @@ export const pool = new Pool({
 pool.on("error", (err) => {
   console.error("db pool: idle connection lost:", err.message);
 });
+
+// A client checked out for a transaction is no longer heard
+// by the pool: pg-pool drops its idle listener at checkout,
+// and an 'error' pg emits on a connection that dies under a
+// query would be thrown and end the process. Every client
+// gets a listener of its own when it is created, so the
+// failure reaches the route only as its query's rejection
+pool.on("connect", (client) => {
+  client.on("error", (err) => {
+    console.error("db pool: connection lost:", err.message);
+  });
+});

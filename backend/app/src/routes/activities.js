@@ -34,6 +34,11 @@
 //  Attachments are stored on disk under uploads/ with a
 //  sanitized theme-subtheme-user-timestamp name; the original
 //  name survives in attachment_original_name for downloads.
+//
+//  The manager's own note (manager_comments) is written for
+//  the committee: the employee's routes — create, /my, the
+//  edit and the resubmit — never return it. What the employee
+//  is told goes in rejection_comment.
 // -----------------------------------------------------------
 
 import { Router } from "express";
@@ -45,6 +50,7 @@ import { sendReturnEmail } from "./emailService.js";
 import { sendCommitteeReturnEmail } from "./emailService.js";
 import { requireActiveRoleIn } from "../auth/requireActiveRole.js";
 import { numberOf, parseId, requireIdParam } from "../utils/input.js";
+import { isDataError, MSG_BAD_DATA } from "../utils/dbErrors.js";
 import { compareCodes } from "../utils/codes.js";
 import multer from "multer";
 import path from "path";
@@ -102,6 +108,12 @@ const MSG_TOO_BIG = "Klaida: priedas per didelis (iki 100 MB)";
 const MSG_TOO_MANY_FIELDS = "Klaida: užklausoje per daug laukų";
 const MSG_UNKNOWN_ACTION = "Klaida: nežinomas veiksmas";
 const MSG_BAD_DESCRIPTION = "Klaida: Netinkamas aprašymas";
+const MSG_BAD_COMMENT = "Klaida: Netinkamas komentaras";
+
+// The longest each segment of a stored file name may be: the
+// codes and the name come from the request, and a name past
+// the filesystem's 255 bytes cannot even be opened
+const NAME_SEGMENT_MAX = 60;
 
 // The actions each verdict route knows; anything else sent as
 // action is refused rather than skipped
@@ -166,7 +178,9 @@ async function loadUserFullName(req, res, next) {
 //
 // Makes a value safe for a filename: lowercased, spaces to
 // underscores, everything outside [a-z0-9_.-] dropped —
-// Lithuanian letters included — and then any leading dots.
+// Lithuanian letters included — then any leading dots, and
+// cut to NAME_SEGMENT_MAX characters, so three segments and
+// the unique tail always fit in a file name.
 // The stored name starts with the theme code's segment, and
 // send (behind res.download) refuses a name that starts with
 // a dot as a dotfile, so a code beginning with a Lithuanian
@@ -183,7 +197,8 @@ function cleanSegment(value, fallback) {
     .trim()
     .replace(/\s+/g, "_")
     .replace(/[^a-z0-9_.-]/g, "")
-    .replace(/^\.+/, "");
+    .replace(/^\.+/, "")
+    .slice(0, NAME_SEGMENT_MAX);
 }
 
 
@@ -252,6 +267,9 @@ const MSG_PAIR = "Klaida: potemė nepriklauso pasirinktai temai";
 // naming the current status, so the UI can refresh). Callers
 // await it inside their try, so a re-read that fails lands
 // in their catch as a 500 instead of an unhandled rejection.
+// A caller inside a transaction passes its client: asking the
+// pool for a second connection while holding one can wait
+// for ever once every connection is held that way.
 //
 // Used by:
 //   - PATCH /:id, PATCH /:id/manager, PATCH /:id/committee,
@@ -259,8 +277,8 @@ const MSG_PAIR = "Klaida: potemė nepriklauso pasirinktai temai";
 //     conditional write reports rowCount 0
 // -----------------------------------------------------------
 
-async function answerLostRace(res, id, ownerEid = null) {
-  const q = await pool.query(
+async function answerLostRace(res, id, ownerEid = null, db = pool) {
+  const q = await db.query(
     `SELECT employee_eid, status FROM activities WHERE id = $1`,
     [id]
   );
@@ -414,9 +432,12 @@ function hasExpectedMagic(filePath, ext) {
 // away, the connection dropped) has its half-written copy
 // closed and removed — multer's own engine pipes into the
 // file and waits for a finish that never comes, keeping both
-// the partial file and its descriptor. A name that cannot be
-// built (a field sent as a nested object) is handed back to
-// multer as an error, answered like any failed upload.
+// the partial file and its descriptor. A write that fails
+// (a full or failing disk) removes the file it had begun
+// before handing the error to multer, which only removes the
+// files whose storing finished. A name that cannot be built
+// (a field sent as a nested object) is handed back to multer
+// as an error, answered like any failed upload.
 //
 // Used by:
 //   - uploadAttachment (below)
@@ -455,7 +476,7 @@ const storage = {
     });
 
     file.stream.pipe(out);
-    out.on("error", cb);
+    out.on("error", (err) => fs.unlink(finalPath, () => cb(err)));
     out.on("finish", () => {
       cb(null, { destination: uploadDir, filename: finalName, path: finalPath, size: out.bytesWritten });
     });
@@ -624,7 +645,6 @@ router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => 
                    description,
                    status,
                    rejection_comment,
-                   manager_comments,
                    score,
                    attachment_path,
                    attachment_original_name,
@@ -644,6 +664,12 @@ router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => 
 
       res.status(201).json(act.rows[0]);
     } catch (e) {
+      if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
+      // A theme or subtheme deleted between the pair check
+      // and the write is refused by the foreign key: the
+      // pair is gone, so the answer is the one the check
+      // gives
+      if (e.code === "23503" && /theme/.test(e.constraint ?? "")) return res.status(400).json({ error: MSG_PAIR });
       console.error("POST /api/activities error:", e);
       res.status(500).json({ error: "internal error" });
     } finally {
@@ -663,7 +689,8 @@ router.post("/", guard, loadUserFullName, uploadAttachment, async (req, res) => 
 // -----------------------------------------------------------
 //
 // The caller's own activities, newest first, with theme and
-// subtheme codes/titles joined in.
+// subtheme codes/titles joined in — everything the row holds
+// but the manager's note, which is not for the employee.
 //
 // Used by:
 //   - employee/myActivities.jsx — the main list
@@ -686,7 +713,6 @@ router.get("/my", guard, async (req, res) => {
          a.description,
          a.status,
          a.rejection_comment,
-         a.manager_comments,
          a.score,
          a.attachment_path,
          a.attachment_original_name,
@@ -1025,6 +1051,7 @@ router.get("/evaluated/employee/:eid/subthemes", committeeGuard, async (req, res
     q.rows.sort((a, b) => compareCodes(a.theme_code, b.theme_code) || compareCodes(a.subtheme_code, b.subtheme_code));
     res.json(q.rows);
   } catch (e) {
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
     console.error("GET /api/activities/evaluated/employee/:eid/subthemes error:", e);
     res.status(500).json({ error: "internal error" });
   }
@@ -1203,8 +1230,11 @@ router.patch("/:id/manager", managerGuard, requireId, async (req, res) => {
     }
 
     if (manager_comments !== undefined) {
+      if (manager_comments !== null && typeof manager_comments !== "string") {
+        return res.status(400).json({ error: MSG_BAD_COMMENT });
+      }
       fields.push(`manager_comments = $${i++}`);
-      vals.push(manager_comments == null ? null : String(manager_comments).trim());
+      vals.push(manager_comments === null ? null : manager_comments.trim());
     }
 
     if (!fields.length) {
@@ -1307,6 +1337,11 @@ router.patch("/:id/manager", managerGuard, requireId, async (req, res) => {
 
     res.json(q.rows[0]);
   } catch (e) {
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
+    // A theme or subtheme deleted between the pair check and
+    // the write is refused by the foreign key: the pair is
+    // gone, so the answer is the one the check gives
+    if (e.code === "23503" && /theme/.test(e.constraint ?? "")) return res.status(400).json({ error: MSG_PAIR });
     console.error("PATCH /api/activities/:id/manager error:", e);
     res.status(500).json({ error: "internal error" });
   }
@@ -1374,6 +1409,14 @@ router.patch("/:id/committee", committeeGuard, requireId, async (req, res) => {
       });
     }
 
+    // ĮVERTINTA rows pass so a score can be corrected, but a
+    // return is only ever offered on PATVIRTINTA ones: on a
+    // scored row it comes from a page that missed another
+    // member's score, and must not wipe it
+    if (action === "return" && row.status !== "PATVIRTINTA") {
+      return await answerLostRace(res, id);
+    }
+
     const fields = [];
     const vals = [];
     let i = 1;
@@ -1431,8 +1474,11 @@ router.patch("/:id/committee", committeeGuard, requireId, async (req, res) => {
     }
 
     if (committee_comments !== undefined) {
+      if (committee_comments !== null && typeof committee_comments !== "string") {
+        return res.status(400).json({ error: MSG_BAD_COMMENT });
+      }
       fields.push(`committee_comments = $${i++}`);
-      vals.push(committee_comments == null ? null : String(committee_comments).trim());
+      vals.push(committee_comments === null ? null : committee_comments.trim());
     }
 
     if (!fields.length) {
@@ -1447,14 +1493,18 @@ router.patch("/:id/committee", committeeGuard, requireId, async (req, res) => {
 
     vals.push(id);
 
-    // Conditional write: still PATVIRTINTA/ĮVERTINTA, or the
-    // verdict lost a race (see answerLostRace)
+    // Conditional write: still PATVIRTINTA/ĮVERTINTA — a
+    // return PATVIRTINTA alone — or the verdict lost a race
+    // (see answerLostRace)
+    const statusNow = action === "return"
+      ? "status = 'PATVIRTINTA'"
+      : "status IN ('PATVIRTINTA', 'ĮVERTINTA')";
     const upd = await pool.query(
       `UPDATE activities
           SET ${fields.join(", ")},
               updated_at = NOW()
         WHERE id = $${i}
-          AND status IN ('PATVIRTINTA', 'ĮVERTINTA')`,
+          AND ${statusNow}`,
       vals
     );
     if (upd.rowCount === 0) return await answerLostRace(res, id);
@@ -1501,6 +1551,11 @@ router.patch("/:id/committee", committeeGuard, requireId, async (req, res) => {
 
     res.json(q.rows[0]);
   } catch (e) {
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
+    // A theme or subtheme deleted between the pair check and
+    // the write is refused by the foreign key: the pair is
+    // gone, so the answer is the one the check gives
+    if (e.code === "23503" && /theme/.test(e.constraint ?? "")) return res.status(400).json({ error: MSG_PAIR });
     console.error("PATCH /api/activities/:id/committee error:", e);
     res.status(500).json({ error: "internal error" });
   }
@@ -1704,7 +1759,7 @@ router.patch("/:id", guard, requireId, loadUserFullName, uploadAttachment, async
           AND status IN ('PATEIKTA', 'TIKSLINTI')`,
       vals
     );
-    if (upd.rowCount === 0) return await answerLostRace(res, id, eid);
+    if (upd.rowCount === 0) return await answerLostRace(res, id, eid, client);
     await client.query("COMMIT");
     committed = true;
     kept = true;
@@ -1720,7 +1775,10 @@ router.patch("/:id", guard, requireId, loadUserFullName, uploadAttachment, async
       });
     }
 
-    const q = await pool.query(
+    // Read on the client this edit still holds: a second
+    // connection from the pool can wait for ever while every
+    // connection is held by an edit waiting the same way
+    const q = await client.query(
       `SELECT
          a.id,
          a.theme_id,
@@ -1729,7 +1787,6 @@ router.patch("/:id", guard, requireId, loadUserFullName, uploadAttachment, async
          a.description,
          a.status,
          a.rejection_comment,
-         a.manager_comments,
          a.score,
          a.attachment_path,
          a.attachment_original_name,
@@ -1748,6 +1805,11 @@ router.patch("/:id", guard, requireId, loadUserFullName, uploadAttachment, async
 
     res.json(q.rows[0]);
   } catch (e) {
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
+    // A theme or subtheme deleted between the pair check and
+    // the write is refused by the foreign key: the pair is
+    // gone, so the answer is the one the check gives
+    if (e.code === "23503" && /theme/.test(e.constraint ?? "")) return res.status(400).json({ error: MSG_PAIR });
     console.error("PATCH /api/activities/:id error:", e);
     res.status(500).json({ error: "internal error" });
   } finally {
@@ -1903,7 +1965,6 @@ router.post("/:id/resubmit", guard, requireId, async (req, res) => {
          a.description,
          a.status,
          a.rejection_comment,
-         a.manager_comments,
          a.score,
          a.attachment_path,
          a.attachment_original_name,

@@ -20,10 +20,6 @@
 //  requireActiveRoleIn is
 //  real; nodemailer is mocked; multer writes real files into
 //  uploads/ (tracked and removed after the run).
-//
-//  Known bugs are pinned as todo tests under BUG banners:
-//  each asserts the behaviour the route should have, and
-//  stays a todo until the route is fixed.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -697,22 +693,18 @@ test("create: a file the server cannot write (disk full) → 500 with the cause 
 
 
 // -----------------------------------------------------------
-// BUG — a failed write keeps the partial file
+// create — a failed write leaves no file
 // -----------------------------------------------------------
 //
 // When the disk fills up or fails while an attachment is
-// being stored, the storage engine hands the write error to
-// multer and leaves the file it has already created: multer
-// removes only the files whose storing finished, and the
-// engine does not unlink on its own error. The answer is the
-// right 500, but the empty or half-written file stays in
-// uploads/ for good. It should go like every other upload no
-// row points at.
+// being stored, the storage engine removes the file it had
+// begun before handing the error on — multer removes only the
+// files whose storing finished — so the 500 leaves nothing
+// behind in uploads/.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a write that fails while the attachment is stored leaves no file behind",
-  { todo: "known bug: the storage engine hands the write stream's error to multer without unlinking the file it has already created, and multer never tracked that file, so it stays in uploads/" },
+  "a write that fails while the attachment is stored leaves no file behind",
   async (t) => {
     employee();
     stubFullName();
@@ -749,21 +741,17 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — a long code breaks the stored name
+// create — a long code still fits the stored name
 // -----------------------------------------------------------
 //
 // The stored file name is built from the theme and subtheme
-// codes the form sends, cleaned but never shortened. A code a
-// few hundred letters long makes the name longer than the
-// filesystem allows, the file cannot even be opened, and the
-// create is answered 500 as if the server had failed. A long
-// code should still store the attachment under a name cut to
-// fit, or be refused as bad input.
+// codes the form sends, each segment cut to a fixed length,
+// so a code a few hundred letters long still makes a name the
+// filesystem accepts instead of a 500.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a theme or subtheme code hundreds of letters long is never answered 500",
-  { todo: "known bug: cleanSegment has no length cap, so a 300-letter theme_code or subtheme_code makes the stored name longer than NAME_MAX; open() fails with ENAMETOOLONG and the upload error is answered 500" },
+  "a theme or subtheme code hundreds of letters long is never answered 500",
   async () => {
     employee();
     const before = snapshotUploads();
@@ -906,19 +894,17 @@ function nulFileNameRequest(method, fields) {
 
 
 // -----------------------------------------------------------
-// BUG — a NUL character in a create
+// create — a NUL character
 // -----------------------------------------------------------
 //
-// The NUL character passes every check on the title, the
-// description and the attachment's original name, but
-// Postgres cannot store it in text and refuses the INSERT, so
-// the employee gets a 500 for input that is simply bad. Such
-// a create should be refused with a 400 before the INSERT.
+// Postgres cannot store the NUL character in text: a title,
+// description or original file name holding one makes it
+// refuse the INSERT, and the create is answered 400 as bad
+// input, not 500.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a NUL character in the title, description or file name of a create → 400",
-  { todo: "known bug: nothing refuses U+0000 in the title, the description or the original file name; Postgres rejects it in text (SQLSTATE 22021) and the failed INSERT is answered 500" },
+  "a NUL character in the title, description or file name of a create → 400",
   async () => {
     employee();
     const before = snapshotUploads();
@@ -966,6 +952,54 @@ test("GET /my: scoped to the caller's eid, newest first", async () => {
   });
   assert.equal(res.status, 200);
   assert.deepEqual(queryLog()[0].params, ["emp-1"]);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// the employee never gets the manager's note
+// -----------------------------------------------------------
+//
+// The manager's own note is written for the committee, so
+// none of the employee's routes — the create, /my, the edit
+// and the resubmit — selects or returns it; what the
+// employee is told travels as the rejection comment.
+// -----------------------------------------------------------
+
+test("create, /my, the edit and the resubmit never read the manager's note", async () => {
+  employee();
+  const calls = [
+    ["POST", "/api/activities", { body: { theme_id: 1, subtheme_id: 2, title: "Konferencija" } }, () => {
+      stubFullName();
+      stubPair();
+      onQuery(/INSERT INTO activities/, [{ id: 6 }]);
+    }],
+    ["GET", "/api/activities/my", {}, () => {
+      onQuery(/WHERE a\.employee_eid = \$1 ORDER BY a\.created_at DESC/, []);
+    }],
+    ["PATCH", "/api/activities/10", { body: { title: "Naujas" } }, () => {
+      stubFullName();
+      stubEmployeePatch();
+    }],
+    ["POST", "/api/activities/10/resubmit", {}, () => {
+      onQuery(/SELECT employee_eid, status FROM activities/, [{ employee_eid: "emp-1", status: "TIKSLINTI" }]);
+      onQuery(/UPDATE activities SET status = 'PATEIKTA', rejection_comment = NULL/, { rowCount: 1 });
+      onQuery(/SELECT a\.id, a\.theme_id/, [{ id: 10, status: "PATEIKTA" }]);
+    }],
+  ];
+
+  for (const [method, url, init, stub] of calls) {
+    resetDb();
+    stub();
+    const res = await api(app.base, method, url, { ...init, headers: asRole("Darbuotojas") });
+    assert.ok(res.status < 300, `${method} ${url} answered ${res.status}`);
+    const reads = queryLog().filter((q) => q.sql.includes("manager_comments")).map((q) => q.sql.slice(0, 60));
+    assert.deepEqual(reads, [], `${method} ${url} reads the manager's note`);
+  }
 });
 
 
@@ -1088,18 +1122,16 @@ test("GET /evaluated/employees + /evaluated/employee/:eid/subthemes", async () =
 
 
 // -----------------------------------------------------------
-// BUG — a NUL character in the employee id
+// calculate feed — a NUL character in the employee id
 // -----------------------------------------------------------
 //
-// The employee id in the calculate feed's URL is bound into
-// its query as it arrives, so an encoded NUL character makes
-// Postgres refuse the query and the feed answers 500. An id
-// that cannot name an employee should be a 400 or a 404.
+// An encoded NUL character in the feed's employee id makes
+// Postgres refuse the query; it is answered 400, as an id
+// that cannot name anybody.
 // -----------------------------------------------------------
 
 test(
-  "BUG: an employee id with a NUL character in the calculate feed → 400 or 404",
-  { todo: "known bug: the :eid is bound into the query unchecked, so a %00 in it reaches Postgres, which rejects it (SQLSTATE 22021), and the feed answers 500" },
+  "an employee id with a NUL character in the calculate feed → 400 or 404",
   async () => {
     committee();
     onQuery(/COALESCE\(SUM\(a\.score\), 0\) AS total_score/, refusesNul([]));
@@ -1426,20 +1458,17 @@ test("manager verdict: a comment that is not a string → 400 or a clean save, n
 
 
 // -----------------------------------------------------------
-// BUG — a manager field that cannot become text
+// manager verdict — a field that cannot become text
 // -----------------------------------------------------------
 //
-// A JSON object whose toString is not a function cannot be
-// turned into text or a number at all: the manager comment's
-// conversion and the theme id's parse throw on it, and the
-// verdict is answered 500. Like the null, the number and the
-// array above, such a field should be refused or ignored,
-// never a 500.
+// A JSON object whose toString is not a function is neither
+// text nor a number: a manager comment that is not text is
+// refused and a theme id that is not a number is ignored, so
+// such a body gets a 400 or a clean save, never a 500.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a manager comment or theme id that cannot become text → 400 or a clean save, never 500",
-  { todo: "known bug: String(manager_comments) and parseId(theme_id) throw 'Cannot convert object to primitive value' on an object whose toString is not a function, and the route's catch answers 500" },
+  "a manager comment or theme id that cannot become text → 400 or a clean save, never 500",
   async () => {
     manager();
     const failed = [];
@@ -1467,19 +1496,17 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — a NUL character in a verdict comment
+// verdicts — a NUL character in a comment
 // -----------------------------------------------------------
 //
-// The rejection reason, the manager's comment and the
-// committee's comment are stored as sent, only trimmed. A NUL
-// character in any of them makes Postgres refuse the UPDATE,
-// and the verdict is answered 500. It should be refused with
-// a 400 before anything is written.
+// A NUL character in the rejection reason, the manager's
+// comment or the committee's comment makes Postgres refuse
+// the UPDATE; the verdict is answered 400 and nothing is
+// written.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a NUL character in a manager or committee comment → 400",
-  { todo: "known bug: rejection_comment, manager_comments and committee_comments are not checked for U+0000; Postgres rejects the UPDATE (SQLSTATE 22021) and the verdict is answered 500" },
+  "a NUL character in a manager or committee comment → 400",
   async () => {
     const answers = [];
     for (const [field, who, stub, role, url, body] of [
@@ -1798,25 +1825,21 @@ test("return: a dead mail relay does not fail the return", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — a stale return wipes a score
+// committee return — only on PATVIRTINTA rows
 // -----------------------------------------------------------
 //
-// The committee route lets ĮVERTINTA rows through its gate
-// and its conditional UPDATE so that a score can be corrected
-// from the results page, and a return passes the same gate.
-// A return is only offered in the PATVIRTINTA queue, so a
-// member whose queue is stale can return an activity another
-// member has just scored: the score is wiped, the activity
-// drops back to PATEIKTA and every manager is mailed. A
-// return on a scored row should get the lost-race 409, with
-// no write that could touch the scored row and no mail. The
-// fake database holds the row as ĮVERTINTA: only an UPDATE
-// whose condition admits that status finds it.
+// The committee route lets ĮVERTINTA rows through so a score
+// can be corrected from the results page, but a return is
+// only ever offered in the PATVIRTINTA queue: a return on a
+// row another member has just scored comes from a stale page
+// and gets the lost-race 409, with no write that could touch
+// the scored row and no manager mailed. The fake database
+// holds the row as ĮVERTINTA: only an UPDATE whose condition
+// admits that status would find it.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a return on a row another member has just scored → 409, nothing written, no mail",
-  { todo: "known bug: score and return share the gate and the conditional UPDATE that admit ĮVERTINTA, so a return on a scored row is saved — score wiped, status PATEIKTA, every manager mailed — and answered 200" },
+  "a return on a row another member has just scored → 409, nothing written, no mail",
   async () => {
     committee();
     onQuery(/SELECT status FROM activities WHERE id = \$1/, [{ status: "ĮVERTINTA" }]);
@@ -1903,19 +1926,17 @@ test("score: blank strings, booleans, arrays and hex strings → 400, no UPDATE"
 
 
 // -----------------------------------------------------------
-// BUG — a committee field that cannot become text
+// committee verdict — a field that cannot become text
 // -----------------------------------------------------------
 //
-// The committee route converts its comment and parses its
-// subtheme id the same way the manager route does, so a JSON
-// object whose toString is not a function throws there too
-// and the verdict is answered 500. Such a field should be
-// refused or ignored, never a 500.
+// The committee route treats its comment and its subtheme id
+// like the manager route: a comment that is not text is
+// refused and an id that is not a number ignored, so such a
+// body gets a 400 or a clean save, never a 500.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a committee comment or subtheme id that cannot become text → 400 or a clean save, never 500",
-  { todo: "known bug: String(committee_comments) and parseId(subtheme_id) throw 'Cannot convert object to primitive value' on an object whose toString is not a function, and the route's catch answers 500" },
+  "a committee comment or subtheme id that cannot become text → 400 or a clean save, never 500",
   async () => {
     committee();
     const failed = [];
@@ -2279,19 +2300,16 @@ test("employee edit: a title or description that is not text → 400; null clear
 
 
 // -----------------------------------------------------------
-// BUG — a NUL character in an edit
+// employee edit — a NUL character
 // -----------------------------------------------------------
 //
-// The same character in an edited title or description, or
-// in the name of a replacement file, reaches the UPDATE
-// unchecked; Postgres refuses it and the edit is answered
-// 500. It should be a 400, like the other text the edit
-// refuses.
+// The edit meets a NUL character in a title, description or
+// replacement file name the way the create does: Postgres
+// refuses the UPDATE, and the edit is answered 400.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a NUL character in an edited title, description or file name → 400",
-  { todo: "known bug: the edit does not refuse U+0000 either; Postgres rejects the UPDATE (SQLSTATE 22021) and the edit is answered 500" },
+  "a NUL character in an edited title, description or file name → 400",
   async () => {
     employee();
     const before = snapshotUploads();
@@ -2379,24 +2397,21 @@ test("employee edit: locked read, UPDATE and COMMIT in one transaction; the repl
 
 
 // -----------------------------------------------------------
-// BUG — an edit waits for a second connection
+// employee edit — one connection per edit
 // -----------------------------------------------------------
 //
 // The edit holds its transaction's connection until its
-// finally, yet reads its answer, and the lost race's re-read,
-// through the pool, which needs a second connection. pg's
-// pool hands out ten and waits for a free one without a time
-// limit, so ten edits at once each hold one connection and
-// wait for another forever: the backend stops answering
-// everything, the session store included. With room for a
-// single connection one edit shows it. Every query of the
-// edit should run on the client it holds, or the client be
-// released before the pool is asked again.
+// finally, so it reads its answer, and a lost race its
+// re-read, on that same client: asking pg's pool, which has
+// no acquire timeout, for a second connection while holding
+// one would wait for ever once every connection is held that
+// way. With room for a single connection, an edit and a
+// lost-race edit are both answered.
 // -----------------------------------------------------------
 
 test(
-  "BUG: an edit and a lost-race edit are answered when the pool has room for one connection",
-  { todo: "known bug: the edit runs its answer's SELECT, and answerLostRace its re-read, through pool.query while it still holds the client from pool.connect, released only in the finally; with every connection held that way the requests wait forever, since pg's pool has no acquire timeout", timeout: 15_000 },
+  "an edit and a lost-race edit are answered when the pool has room for one connection",
+  { timeout: 15_000 },
   async () => {
     // pg's pool with room for one connection, over the fake
     // database: pool.query holds it for one statement,
@@ -2480,24 +2495,22 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — the connection dies in the middle of an edit
+// employee edit — the connection dies mid-transaction
 // -----------------------------------------------------------
 //
-// A client taken with pool.connect has no error listener:
-// pg-pool removes its own idle listener at checkout. When the
-// connection dies under a query, pg fails the query and also
-// emits the error on the client, and an error event nobody
-// listens to is thrown — it ends the whole process. The fake
-// client is handed out the way pg-pool hands one out, with
-// the pool's connect and acquire events, and dies that way
-// under the locked read. The edit should answer 500 with
-// nothing escaping it. The test holds the process's
-// uncaughtException listeners while the request runs.
+// pg-pool drops its own listener from a client at checkout,
+// and an error event nobody hears is thrown; db/pool.js gives
+// every client a listener of its own when the pool creates
+// it. The fake client is handed out the way pg-pool hands one
+// out, with the pool's connect and acquire events, and dies
+// under the locked read: the edit answers 500 and nothing
+// escapes it. The test holds the process's uncaughtException
+// listeners while the request runs.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a connection that dies in the middle of an edit is answered 500 and ends nothing",
-  { todo: "known bug: the client from pool.connect gets no 'error' listener (pg-pool removes its idle one at checkout), so the 'error' pg emits on a dropped connection is thrown as an uncaught exception that ends the process", timeout: 10_000 },
+  "a connection that dies in the middle of an edit is answered 500 and ends nothing",
+  { timeout: 10_000 },
   async () => {
     employee();
     stubFullName();
@@ -2721,9 +2734,11 @@ test("employee edit: a refused edit leaves no uploaded file behind", async () =>
   res = await patchWithFile({ title: "   " }, "tuscias.txt");
   assert.equal(res.status, 400);
 
-  // the UPDATE fails
+  // the UPDATE fails — inside the edit's transaction, so the
+  // 500 comes from the UPDATE, not from an unscripted BEGIN
   resetDb();
   stubFullName();
+  onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
   onQuery(/SELECT employee_eid, status, attachment_path FROM activities/, [
     { employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null },
   ]);
@@ -3308,18 +3323,17 @@ function pairGone(res) {
 
 
 // -----------------------------------------------------------
-// BUG — a subtheme deleted after the create's pair check
+// create — a subtheme deleted after the pair check
 // -----------------------------------------------------------
 //
 // The create checks the pair and then inserts; a subtheme
 // deleted in between makes the foreign key refuse the INSERT,
-// and the employee gets a 500 where the route has a friendly
-// answer for exactly this case.
+// and the create answers what the check itself would have:
+// the pair 400.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a create whose subtheme is deleted after the pair check → the pair 400 or a 409",
-  { todo: "known bug: a subtheme deleted between the pair check and the INSERT makes the foreign key refuse the INSERT (SQLSTATE 23503), and the route answers 500" },
+  "a create whose subtheme is deleted after the pair check → the pair 400 or a 409",
   async () => {
     employee();
     stubFullName();
@@ -3341,18 +3355,16 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — a subtheme deleted after the edit's pair check
+// employee edit — a subtheme deleted after the check
 // -----------------------------------------------------------
 //
-// The edit's pair check runs inside its transaction, but it
-// locks only the activity's row, not the subtheme: the same
-// deletion in between makes the foreign key refuse the
-// UPDATE, answered 500.
+// The edit's pair check locks only the activity's row, not
+// the subtheme: a subtheme deleted before the UPDATE makes
+// the foreign key refuse it, answered with the pair 400.
 // -----------------------------------------------------------
 
 test(
-  "BUG: an edit whose new subtheme is deleted after the pair check → the pair 400 or a 409",
-  { todo: "known bug: a subtheme deleted between the pair check and the UPDATE makes the foreign key refuse the UPDATE (SQLSTATE 23503), and the edit answers 500" },
+  "an edit whose new subtheme is deleted after the pair check → the pair 400 or a 409",
   async () => {
     employee();
     stubFullName();
@@ -3376,17 +3388,16 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — a subtheme deleted after the manager's pair check
+// manager verdict — a subtheme deleted after the check
 // -----------------------------------------------------------
 //
 // A manager moving an activity to another theme and subtheme
-// meets the same gap: a subtheme deleted between the check
-// and the UPDATE is refused by the foreign key, answered 500.
+// meets the same gap between the pair check and the UPDATE;
+// the foreign key's refusal is answered with the pair 400.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a manager reassignment whose subtheme is deleted after the pair check → the pair 400 or a 409",
-  { todo: "known bug: a subtheme deleted between the manager route's pair check and its UPDATE makes the foreign key refuse the UPDATE (SQLSTATE 23503), and the verdict answers 500" },
+  "a manager reassignment whose subtheme is deleted after the pair check → the pair 400 or a 409",
   async () => {
     manager();
     // registered first — the first matching handler wins
@@ -3409,16 +3420,16 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — a subtheme deleted after the committee's pair check
+// committee verdict — a subtheme deleted after the check
 // -----------------------------------------------------------
 //
-// The committee's reassignment while scoring has the same
-// gap between its pair check and its UPDATE, answered 500.
+// The committee's reassignment while scoring has the same gap
+// between its pair check and its UPDATE, answered with the
+// pair 400.
 // -----------------------------------------------------------
 
 test(
-  "BUG: a committee reassignment whose subtheme is deleted after the pair check → the pair 400 or a 409",
-  { todo: "known bug: a subtheme deleted between the committee route's pair check and its UPDATE makes the foreign key refuse the UPDATE (SQLSTATE 23503), and the verdict answers 500" },
+  "a committee reassignment whose subtheme is deleted after the pair check → the pair 400 or a 409",
   async () => {
     committee();
     // registered first — the first matching handler wins
@@ -3497,6 +3508,7 @@ test("a lost race whose re-read fails → a JSON 500 on every route, not an unha
       form: () => activityForm({ title: "X" }),
       stub: () => {
         stubFullName();
+        onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
         onQuery(/^SELECT employee_eid, status, attachment_path FROM activities/, [{ employee_eid: "emp-1", status: "PATEIKTA", attachment_path: null }]);
         onQuery(/^UPDATE activities SET/, { rowCount: 0 });
         onQuery(/^SELECT employee_eid, status FROM activities/, dbDown);

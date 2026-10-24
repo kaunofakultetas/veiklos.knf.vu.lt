@@ -194,6 +194,10 @@ export default function createSamlRouter({ setup }) {
     // auto-grant Darbuotojas on first sign-in, store the login
     // in the session and send the browser home
     const assert = async (req, res) => {
+        // Set once the assertion has passed every check: a
+        // failure after that point is ours, whatever it is —
+        // a lost database connection carries no SQLSTATE
+        let accepted = false;
         try {
             const sp = spOf(req);
             const { samlContent, extract } = await sp.parseLoginResponse(idp, "post", req);
@@ -229,6 +233,7 @@ export default function createSamlRouter({ setup }) {
                 console.error("SAML assert: the response does not hold exactly one assertion with an ID");
                 return res.status(401).send("SAML assertion without a single ID");
             }
+            accepted = true;
             if (!(await rememberAssertion(assertionId, assertionExpiry(extract)))) {
                 if (mapSamlAttributes(req.session?.samlUser?.attributes ?? {}).eid === eid) {
                     return res.redirect("/");
@@ -305,10 +310,12 @@ export default function createSamlRouter({ setup }) {
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            // A DB error after a valid assertion is ours, not the
-            // IdP's — say so instead of blaming the assertion
-            if (error?.code && /^[0-9A-Z]{5}$/.test(error.code)) {
-                console.error("SAML assert: DB error after a valid assertion:", error);
+            // A failure after a valid assertion is ours,
+            // not the IdP's — say so instead of blaming the
+            // assertion, and keep its details (a database
+            // address) in the log
+            if (accepted) {
+                console.error("SAML assert: failed after a valid assertion:", error);
                 return res.status(500).send("Login failed on our side; the assertion was fine");
             }
             const detail = failedStatusDetail(req.body?.SAMLResponse);

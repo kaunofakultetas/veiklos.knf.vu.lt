@@ -7,9 +7,6 @@
 //  signed-in non-manager gets a 403 on every route. Nothing
 //  in the frontend calls these routes; the pins keep the
 //  dormant behavior from drifting.
-//
-//  Pinned as an expected failure until it is fixed, the known
-//  bug: an eid holding a NUL character answers 500.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -147,21 +144,16 @@ test("assign: missing fields → 400", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — a NUL character in the eid
+// assign — a NUL character in the eid
 // -----------------------------------------------------------
 //
-// Postgres refuses text that holds a NUL character, and the
-// eid goes into the INSERT as sent, so a grant for such an
-// eid fails the statement and answers 500 — only the
-// foreign-key refusal is mapped. An eid with a NUL in it is
-// bad input: the usual 400. The fake database refuses a NUL
-// in any parameter the way Postgres does and answers every
-// other query as usual.
+// Postgres cannot store the NUL character in text; an eid
+// holding one makes it refuse the query, answered 400 as bad
+// input.
 // -----------------------------------------------------------
 
 test(
-  "BUG: assign: a user_eid with a NUL character → 400, not 500",
-  { todo: "known bug: POST /api/roles/assign binds user_eid as sent — Postgres refuses U+0000 in text with SQLSTATE 22021 (invalid byte sequence for encoding \"UTF8\": 0x00), which is not mapped (only 23503 is) and answers 500" },
+  "assign: a user_eid with a NUL character → 400, not 500",
   async () => {
     // Postgres refuses NUL in text as an invalid byte
     // sequence, SQLSTATE 22021

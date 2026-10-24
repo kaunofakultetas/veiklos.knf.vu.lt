@@ -61,11 +61,15 @@ export function requireIdParam(name) {
 // parseId
 // -----------------------------------------------------------
 //
-// parseInt for a theme or subtheme id sent in a body, with
-// one difference: a value outside the int4 range comes back
-// as NaN, so each route treats it exactly like the garbage
-// parseInt already turns into NaN — refused on create and on
-// the employee's edit, ignored by the verdict routes.
+// A theme or subtheme id sent in a body, as a whole number in
+// the int4 range or NaN — each route treats NaN as garbage:
+// refused on create and on the employee's edit, ignored by
+// the verdict routes. Text is read the way parseInt reads it.
+// A JSON number is cut to its whole part directly: through
+// parseInt it would be read from its text, which JavaScript
+// writes in exponent notation for a huge number or a tiny
+// fraction, so both would come back as a small, valid id.
+// Anything else — an object, an array, a boolean — is NaN.
 //
 // Used by:
 //   - routes/activities.js — POST /, PATCH /:id,
@@ -73,7 +77,9 @@ export function requireIdParam(name) {
 // -----------------------------------------------------------
 
 export function parseId(value) {
-  const n = parseInt(value, 10);
+  let n = NaN;
+  if (typeof value === "number") n = Number.isFinite(value) ? Math.trunc(value) : NaN;
+  else if (typeof value === "string") n = parseInt(value, 10);
   return Math.abs(n) <= INT4_MAX ? n : NaN;
 }
 
@@ -89,7 +95,8 @@ export function parseId(value) {
 //
 // The number a request field holds, or null when it holds
 // anything else: a finite JSON number passes as it is, a
-// string passes only when it spells a plain decimal. The
+// string only when it spells a plain decimal whose value is
+// finite — hundreds of digits would make Infinity. The
 // committee pages always send JSON numbers; the string form
 // is kept for clients that send them as text.
 //
@@ -101,7 +108,10 @@ export function parseId(value) {
 
 export function numberOf(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value === "string" && DECIMAL_TEXT.test(value)) return Number(value);
+  if (typeof value === "string" && DECIMAL_TEXT.test(value)) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
   return null;
 }
 

@@ -3,16 +3,18 @@
 //
 //  /committee/limits, two tables on one card: each theme's
 //  total sum (its money budget) and each subtheme's score
-//  cap. Every row has its own number input and save button;
-//  saves go one row at a time. The inputs have no label of
-//  their own, so each is named for assistive tech by its
-//  column and row: "Nauja suma: 6.1.", "Naujas limitas:
-//  6.1.1.".
+//  cap. Every row has its own number input and save button,
+//  and a save sends that one row's value. Rows save on their
+//  own: a row's button stays disabled while its own save is
+//  in flight, whatever the other rows do. The inputs have no
+//  label of their own, so each is named for assistive tech
+//  by its column's caption followed by the row's code.
 //
 //  The inputs are "new value" fields seeded with 0, not with
 //  the current values — the current value sits in its own
 //  read-only column, and a successful save resets the input
-//  back to 0.
+//  back to 0, unless a new draft was typed into it while the
+//  save was in flight.
 //
 //  Split into (root component last):
 //
@@ -20,6 +22,7 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
+import { useBusyIds } from "@/components/sharedHooks.js";
 import { apiJson, apiSend } from "@/components/api.js";
 import "@/components/employee.css";
 
@@ -35,9 +38,12 @@ import "@/components/employee.css";
 //
 // Loads the theme tree once; caps and themeTotals are
 // dictionaries of the per-row draft inputs keyed by
-// subtheme/theme id. A save PATCHes the one value and patches
-// the loaded tree in place, so the "current" columns update
-// without a refetch.
+// subtheme/theme id, and each table keeps its busy flags per
+// row (useBusyIds), so one row's save never re-enables
+// another row's button. A save PATCHes the one value and
+// patches the loaded tree in place, so the "current" columns
+// update without a refetch; the row's draft goes back to 0
+// unless it changed while the save was in flight.
 //
 // Used by:
 //   - App.jsx — route /committee/limits
@@ -46,22 +52,24 @@ import "@/components/employee.css";
 export default function LimitsPage() {
   const [themes, setThemes] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
+  // The status line: { text, error } or null — styled as an
+  // error only when it is one
+  const [status, setStatus] = useState(null);
 
-  // Draft inputs and per-row busy state — subtheme caps
+  // Draft inputs and per-row busy flags — subtheme caps
   const [caps, setCaps] = useState({});
-  const [savingId, setSavingId] = useState(null);
+  const capBusy = useBusyIds();
 
-  // Draft inputs and per-row busy state — theme totals
+  // Draft inputs and per-row busy flags — theme totals
   const [themeTotals, setThemeTotals] = useState({});
-  const [savingThemeId, setSavingThemeId] = useState(null);
+  const totalBusy = useBusyIds();
 
 
   // Load the tree and zero every draft input
   useEffect(() => {
     const load = async () => {
       setLoading(true);
-      setMsg("");
+      setStatus(null);
       try {
         const data = await apiJson("/api/themes");
 
@@ -86,7 +94,7 @@ export default function LimitsPage() {
         setThemeTotals(initialThemeTotals);
       } catch (e) {
         console.error("failed to load themes:", e);
-        setMsg(e.message || "Klaida: Nepavyko užkrauti temų ir potemių.");
+        setStatus({ text: e.message || "Klaida: Nepavyko užkrauti temų ir potemių.", error: true });
       } finally {
         setLoading(false);
       }
@@ -108,18 +116,18 @@ export default function LimitsPage() {
   const handleSaveCap = async (subId) => {
     const raw = caps[subId];
     if (raw === "" || raw === null || raw === undefined) {
-      setMsg("Klaida: Ribos reikšmė negali būti tuščia.");
+      setStatus({ text: "Klaida: Ribos reikšmė negali būti tuščia.", error: true });
       return;
     }
     const num = Number(raw);
     if (!Number.isFinite(num) || num < 0) {
-      setMsg("Klaida: Ribos reikšmė turi būti teigiamas skaičius.");
+      setStatus({ text: "Klaida: Ribos reikšmė turi būti teigiamas skaičius.", error: true });
       return;
     }
 
     try {
-      setSavingId(subId);
-      setMsg("");
+      capBusy.start(subId);
+      setStatus(null);
       await apiSend(`/api/themes/subthemes/${subId}/cap`, { method: "PATCH", json: { cap: num } });
 
       setThemes((prev) =>
@@ -131,17 +139,18 @@ export default function LimitsPage() {
         }))
       );
 
-      setCaps((prev) => ({
-        ...prev,
-        [subId]: 0,
-      }));
+      // Only the draft just saved goes back to 0 — one typed
+      // into the row while the save was in flight is kept
+      setCaps((prev) =>
+        prev[subId] === raw ? { ...prev, [subId]: 0 } : prev
+      );
 
-      setMsg("Ribos sėkmingai atnaujintos.");
+      setStatus({ text: "Ribos sėkmingai atnaujintos.", error: false });
     } catch (e) {
       console.error("failed to save cap:", e);
-      setMsg(e.message || "Klaida: Nepavyko išsaugoti.");
+      setStatus({ text: e.message || "Klaida: Nepavyko išsaugoti.", error: true });
     } finally {
-      setSavingId(null);
+      capBusy.stop(subId);
     }
   };
 
@@ -158,36 +167,35 @@ export default function LimitsPage() {
   const handleSaveThemeTotal = async (themeId) => {
     const raw = themeTotals[themeId];
     if (raw === "" || raw === null || raw === undefined) {
-      setMsg("Klaida: Suma negali būti tuščia.");
+      setStatus({ text: "Klaida: Suma negali būti tuščia.", error: true });
       return;
     }
 
     const num = Number(raw);
     if (!Number.isFinite(num) || num < 0) {
-      setMsg("Klaida: Suma turi būti teigiamas skaičius.");
+      setStatus({ text: "Klaida: Suma turi būti teigiamas skaičius.", error: true });
       return;
     }
 
     try {
-      setSavingThemeId(themeId);
-      setMsg("");
+      totalBusy.start(themeId);
+      setStatus(null);
       await apiSend(`/api/themes/${themeId}/total-sum`, { method: "PATCH", json: { total_sum: num } });
 
       setThemes((prev) =>
         prev.map((t) => (t.id === themeId ? { ...t, total_sum: num } : t))
       );
 
-      setThemeTotals((prev) => ({
-        ...prev,
-        [themeId]: 0,
-      }));
+      setThemeTotals((prev) =>
+        prev[themeId] === raw ? { ...prev, [themeId]: 0 } : prev
+      );
 
-      setMsg("Temos suma atnaujinta.");
+      setStatus({ text: "Temos suma atnaujinta.", error: false });
     } catch (e) {
       console.error("failed to save theme total:", e);
-      setMsg(e.message || "Klaida: Nepavyko išsaugoti sumos.");
+      setStatus({ text: e.message || "Klaida: Nepavyko išsaugoti sumos.", error: true });
     } finally {
-      setSavingThemeId(null);
+      totalBusy.stop(themeId);
     }
   };
 
@@ -245,10 +253,10 @@ export default function LimitsPage() {
                             <button
                               type="button"
                               onClick={() => handleSaveThemeTotal(t.id)}
-                              disabled={savingThemeId === t.id}
+                              disabled={totalBusy.isBusy(t.id)}
                               className="btn btn-primary btn-sm"
                             >
-                              {savingThemeId === t.id
+                              {totalBusy.isBusy(t.id)
                                 ? "Saugoma…"
                                 : "Išsaugoti"}
                             </button>
@@ -307,10 +315,10 @@ export default function LimitsPage() {
                               <button
                                 type="button"
                                 onClick={() => handleSaveCap(s.id)}
-                                disabled={savingId === s.id}
+                                disabled={capBusy.isBusy(s.id)}
                                 className="btn btn-primary btn-sm"
                               >
-                                {savingId === s.id
+                                {capBusy.isBusy(s.id)
                                   ? "Saugoma…" : "Išsaugoti"}
                               </button>
                             </td>
@@ -323,9 +331,9 @@ export default function LimitsPage() {
               </>
             )}
 
-            {msg && (
-              <div className="form-status form-status--error">
-                {msg}
+            {status && (
+              <div className={status.error ? "form-status form-status--error" : "form-status"}>
+                {status.text}
               </div>
             )}
           </div>

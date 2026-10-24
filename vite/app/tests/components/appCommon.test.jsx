@@ -8,12 +8,11 @@
 //  select stays shut — and the keyboard/ARIA layer: the
 //  trigger's aria-haspopup / aria-expanded and forwarded id,
 //  the list as a labelled group with the selected option
-//  pressed, arrow keys entering and walking the list, Escape
-//  and an outside mousedown shutting it. Pinned as expected
-//  failures, the known bugs: the list stays open when Tab
-//  takes the focus out of it, and CommentModal's backdrop
-//  closes the prompt while its confirm is in flight and when
-//  a drag that began inside the dialog ends on it.
+//  pressed, arrow keys entering and walking the list, Escape,
+//  an outside mousedown and the focus leaving shutting it —
+//  and CommentModal's backdrop, which closes the prompt only
+//  on a press and release of its own and never while the
+//  confirm is in flight.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -250,19 +249,16 @@ test("AppSelect: a mousedown outside shuts the list; the document listener exist
 
 
 // -----------------------------------------------------------
-// BUG — AppSelect stays open after Tab
+// AppSelect — the focus leaving shuts it
 // -----------------------------------------------------------
 //
-// The list shuts on a pick, on Escape, on the trigger and on
-// a mousedown outside, but not when the focus leaves it: a
-// keyboard user who tabs on past the options leaves it open
-// over the form, the trigger still announcing itself
-// expanded. Focus leaving the component should shut the list
-// the way an outside mousedown does. A known bug, pinned as
-// an expected failure until it is fixed.
+// Focus leaving the component shuts the list the way an
+// outside mousedown does, so a keyboard user who tabs on
+// past the options does not leave it open over the form with
+// the trigger still announcing itself expanded.
 // -----------------------------------------------------------
 
-test.fails("BUG: AppSelect: tabbing out of the open list shuts it", async () => {
+test("AppSelect: tabbing out of the open list shuts it", async () => {
   const user = userEvent.setup();
   render(
     <>
@@ -320,19 +316,16 @@ test("AppSelect: labelledBy names the trigger by the caption, then the value", (
 
 
 // -----------------------------------------------------------
-// BUG — CommentModal closes mid-confirm
+// CommentModal — open while its confirm is in flight
 // -----------------------------------------------------------
 //
-// While the confirm is in flight only the two buttons are
-// disabled: a click on the backdrop still closes the prompt,
-// and when the page then refuses the verdict, the comment the
-// user typed has gone with it. The prompt should stay open
-// until its confirm ends, closing on success as it does now.
-// A known bug, pinned as an expected failure until it is
-// fixed.
+// While the confirm is in flight the backdrop closes nothing,
+// like the two disabled buttons, so a verdict the page then
+// refuses finds the prompt still open with the typed comment;
+// a confirm that succeeds closes it.
 // -----------------------------------------------------------
 
-test.fails("BUG: CommentModal: a backdrop click while the confirm is in flight leaves the prompt open", async () => {
+test("CommentModal: a backdrop click while the confirm is in flight leaves the prompt open", async () => {
   let answer;
   const onConfirm = vi.fn(() => new Promise((resolve) => { answer = resolve; }));
   const onClose = vi.fn().mockName("onClose");
@@ -357,19 +350,17 @@ test.fails("BUG: CommentModal: a backdrop click while the confirm is in flight l
 
 
 // -----------------------------------------------------------
-// BUG — CommentModal closes on a drag out of the dialog
+// CommentModal — a drag out of the dialog
 // -----------------------------------------------------------
 //
 // A text selection that starts in the textarea and is let go
 // over the backdrop ends in a click on their common ancestor,
-// the backdrop, which closes the prompt without checking that
-// the press began on it — the typed comment is lost to a
-// sloppy selection. Only a press and release on the backdrop
-// itself should close the prompt. A known bug, pinned as an
-// expected failure until it is fixed.
+// the backdrop; as the press began inside the dialog, the
+// prompt stays open with its comment. A press and release on
+// the backdrop itself still closes it.
 // -----------------------------------------------------------
 
-test.fails("BUG: CommentModal: a drag from the textarea onto the backdrop keeps the prompt open; a click on the backdrop closes it", async () => {
+test("CommentModal: a drag from the textarea onto the backdrop keeps the prompt open; a click on the backdrop closes it", async () => {
   const onClose = vi.fn().mockName("onClose");
   const { user, comment, backdrop } = renderPrompt({ onClose });
 

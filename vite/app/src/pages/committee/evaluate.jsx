@@ -9,9 +9,19 @@
 //
 //  The score is not typed directly: the member enters how
 //  many people carried the activity out and the score becomes
-//  1/n rounded to 2 decimals (0 people → score 0). Scoring
-//  sets the status to ĮVERTINTA and the row moves to the
-//  results page.
+//  1/n rounded to 2 decimals (0 people → score 0). Only a
+//  whole count gives a score: a blank, negative or
+//  fractional one previews nothing and is refused before any
+//  request. Scoring sets the status to ĮVERTINTA and the row
+//  moves to the results page. A success answer that is not
+//  the activity does not say the verdict was stored, so it is
+//  refused and the row kept.
+//
+//  The review modal is a dialog that takes the focus and
+//  gives it back. Its backdrop closes it only on a press and
+//  release of its own and never while a save is in flight,
+//  and a save's answer touches the modal only while it still
+//  shows that activity.
 //
 //  Auth rides in the session cookie; only the X-Active-Role
 //  header travels with each request.
@@ -20,6 +30,7 @@
 //
 //    statusClass     — status → pill css class
 //    formatDate      — ISO → lt-LT date-time
+//    scoreForCount   — a people count → its score
 //    QueueTable      — the PATVIRTINTA rows + row actions
 //    ActivityDetails — the modal's read-only fields
 //    EvaluateModal   — review + scoring modal (own state)
@@ -27,7 +38,8 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
-import { CommentModal } from "@/components/appCommon.jsx";
+import { CommentModal, ModalStatus } from "@/components/appCommon.jsx";
+import { useBackdropClose, useModalDialog } from "@/components/sharedHooks.js";
 import { apiJson, downloadAttachment, reasonOf } from "@/components/api.js";
 import "@/components/employee.css";
 
@@ -92,6 +104,34 @@ function formatDate(iso) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// scoreForCount
+// -----------------------------------------------------------
+//
+// The score a people count gives — 1/n rounded to 2
+// decimals, 0 for nobody — or null for a count the save
+// refuses: blank, negative or not a whole number. The live
+// preview and the save both ask it, so the preview never
+// shows a score that would not be sent. The results page
+// keeps a copy of the same rule.
+//
+// Used by:
+//   - EvaluateModal (below) — the preview and the save
+// -----------------------------------------------------------
+
+function scoreForCount(count) {
+  if (!count.trim()) return null;
+  const n = Number(count);
+  if (!Number.isInteger(n) || n < 0) return null;
+  return n === 0 ? 0 : Number((1 / n).toFixed(2));
 }
 
 
@@ -297,23 +337,27 @@ function ActivityDetails({ act, downloading, onDownload }) {
 // -----------------------------------------------------------
 //
 // The review/scoring modal for one activity. It owns the
-// scoring state — mounted fresh per opened row, so the
-// fields seed from the row: committee comments, the people
-// count (blank) and the score preview. "Įvertinti" arms
-// scoring mode; "Išsaugoti įvertinimą" validates the people
-// count, derives score = 1/n (2 decimals, 0 people → 0) and
-// hands { action: "score", … } to onScore, which resolves
-// with the updated activity or throws (the page has already
-// shown the error). Scoring always leaves PATVIRTINTA, so a
-// successful save closes the modal. Status text — the
-// validation refusals and the saved confirmation — goes up
-// through onMessage.
+// scoring state — mounted fresh per opened row, keyed by its
+// id, so the fields seed from the row: committee comments,
+// the people count (blank) and the score preview.
+// "Įvertinti" arms scoring mode; "Išsaugoti įvertinimą"
+// validates the people count — given, not negative, whole —
+// derives its score (scoreForCount) and hands
+// { action: "score", … } to onScore, which resolves with the
+// updated activity or rejects with the text to show. Scoring
+// always leaves PATVIRTINTA, so the page closes the modal on
+// a successful save and confirms it on its own line. The box
+// is a dialog named by its title that takes the focus; the
+// backdrop closes it only on a press and release of its own
+// and not while the save is in flight. The validation
+// refusals, a refused save and a refused download show on
+// the modal's own status line, inside the box.
 //
 // Used by:
 //   - EvaluatePage (below) — while an activity is selected
 // -----------------------------------------------------------
 
-function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, onMessage }) {
+function EvaluateModal({ activity, downloading, onDownload, onScore, onClose }) {
 
   const act = activity;
 
@@ -328,25 +372,24 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
     act.committee_comments || ""
   );
   const [peopleNum, setPeopleNum] = useState("");
+  const [status, setStatus] = useState(null);
+  const backdrop = useBackdropClose(onClose, savingScore);
+  const dialogRef = useModalDialog();
 
 
-  // Typing a count previews 1/n live; a bad count blanks it
+  // Typing a count previews its score live; a count the save
+  // would refuse — a cleared one included — previews nothing
   const handlePeopleNumChange = (e) => {
     const val = e.target.value;
     setPeopleNum(val);
 
-    const n = Number(val);
-    if (Number.isFinite(n) && n >= 0) {
-      const s = n === 0 ? 0 : Number((1 / n).toFixed(2));
-      setEditScore(String(s));
-    } else {
-      setEditScore("");
-    }
+    const s = scoreForCount(val);
+    setEditScore(s === null ? "" : String(s));
   };
 
 
   // First click arms scoring mode; second click validates the
-  // people count, derives score = 1/n and saves
+  // people count, derives its score and saves
   const handleEvaluateClick = async () => {
     if (!editingScore) {
       setEditingScore(true);
@@ -354,26 +397,37 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
     }
 
     if (!peopleNum.trim()) {
-      onMessage("Klaida: Įveskite veiklos vykdytojų kiekį.");
+      setStatus({ text: "Klaida: Įveskite veiklos vykdytojų kiekį.", error: true });
       return;
     }
 
     const n = Number(peopleNum);
     if (!Number.isFinite(n) || n < 0) {
-      onMessage("Veiklos vykdytojų kiekis turi būti 0 arba teigiamas skaičius.");
+      setStatus({ text: "Veiklos vykdytojų kiekis turi būti 0 arba teigiamas skaičius.", error: true });
       return;
     }
-    const num = n === 0 ? 0 : Number((1 / n).toFixed(2));
+
+    // People are counted whole: a fraction would give a score
+    // no real count gives, above one for a count below one
+    if (!Number.isInteger(n)) {
+      setStatus({ text: "Klaida: Veiklos vykdytojų kiekis turi būti sveikas skaičius.", error: true });
+      return;
+    }
+    const num = scoreForCount(peopleNum);
     setEditScore(String(num));
 
     try {
       setSavingScore(true);
+      setStatus(null);
       const updated = await onScore({
         action: "score",
         score: num,
         committee_comments: editCommitteeComments,
       });
 
+      // The page has already closed the modal when the answer
+      // left PATVIRTINTA, as scoring always does; otherwise
+      // the modal shows the saved row, back in view mode
       setEditScore(
         updated.score !== null && updated.score !== undefined
           ? String(updated.score)
@@ -381,28 +435,37 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
       );
       setEditCommitteeComments(updated.committee_comments || "");
       setEditingScore(false);
-      onMessage("Įvertinimas išsaugotas.");
-
-      // Scoring always leaves PATVIRTINTA, so this closes
-      // the modal on success
-      if (updated.status !== "PATVIRTINTA") {
-        onClose();
-      }
-    } catch {
-      // ignore — onScore already surfaced the error
+    } catch (e) {
+      setStatus({ text: e.message, error: true });
     } finally {
       setSavingScore(false);
     }
   };
 
 
+  // A refused download is told here, not behind the overlay
+  const download = async (a) => {
+    setStatus(null);
+    try {
+      await onDownload(a);
+    } catch (e) {
+      setStatus({ text: e.message, error: true });
+    }
+  };
+
+
   return (
-    <div className="employee-modal-backdrop" onClick={onClose}>
+    <div className="employee-modal-backdrop" {...backdrop}>
       <div
+        ref={dialogRef}
         className="employee-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="evaluate-modal-title"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="employee-modal-title">Veiklų įvertinimas</h3>
+        <h3 className="employee-modal-title" id="evaluate-modal-title">Veiklų įvertinimas</h3>
         <div className="employee-modal-meta">
           Darbuotojas: <strong>{act.full_name}</strong>
           <br />
@@ -414,7 +477,7 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
           <ActivityDetails
             act={act}
             downloading={downloading}
-            onDownload={onDownload}
+            onDownload={download}
           />
 
           {/* Committee comments — writable only in scoring
@@ -490,6 +553,8 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
           </div>
         </div>
 
+        <ModalStatus status={status} />
+
         <div className="employee-modal-footer">
           <button
             type="button"
@@ -531,10 +596,16 @@ function EvaluateModal({ activity, downloading, onDownload, onScore, onClose, on
 // Owns the queue, which activity the review modal and the
 // return prompt are open for, and every request; verdicts go
 // through callCommitteeAction (PATCH
-// /api/activities/:id/committee). A response whose status
+// /api/activities/:id/committee), which refuses a success
+// answer that is not the activity. A response whose status
 // left PATVIRTINTA drops out of the queue — both scoring and
-// returning do. One error/status line (msg) serves the table,
-// the modal and the prompt.
+// returning do. A score's answer updates or closes the modal
+// only while it still shows that activity.
+// callCommitteeAction and handleDownload reject with the text
+// to show, which the modal and the prompt show on their own
+// status lines; the page's line serves the queue — the load
+// and the saved confirmation, styled as an error only when
+// it is one — and opening a row clears it.
 //
 // Used by:
 //   - App.jsx — route /committee/evaluate
@@ -544,7 +615,8 @@ export default function EvaluatePage() {
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
+  // The page's line: { text, error } or null
+  const [status, setStatus] = useState(null);
   const [actingId, setActingId] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
 
@@ -558,7 +630,7 @@ export default function EvaluatePage() {
   useEffect(() => {
     const load = async () => {
       setLoading(true);
-      setMsg("");
+      setStatus(null);
       try {
         const data = await apiJson("/api/activities/committee");
 
@@ -568,7 +640,7 @@ export default function EvaluatePage() {
 
         setItems(data);
       } catch (e) {
-        setMsg(e.message);
+        setStatus({ text: e.message, error: true });
       } finally {
         setLoading(false);
       }
@@ -584,10 +656,9 @@ export default function EvaluatePage() {
     if (!act.attachment_path) return;
     try {
       setDownloadingId(act.id);
-      setMsg("");
       await downloadAttachment(act);
     } catch (e) {
-      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
+      throw new Error(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
     } finally {
       setDownloadingId(null);
     }
@@ -598,9 +669,16 @@ export default function EvaluatePage() {
   // this queue, otherwise it is patched in place
   const callCommitteeAction = async (id, body) => {
     setActingId(id);
-    setMsg("");
+    setStatus(null);
     try {
       const data = await apiJson(`/api/activities/${id}/committee`, { method: "PATCH", json: body });
+
+      // A 2xx answer that is not this activity — the client
+      // hands back {} for a body that is not JSON — does not
+      // say the verdict was stored
+      if (String(data?.id) !== String(id) || typeof data.status !== "string") {
+        throw new Error("Klaida: netikėtas serverio atsakymas.");
+      }
 
       if (data.status !== "PATVIRTINTA") {
         setItems((prev) => prev.filter((x) => x.id !== id));
@@ -610,27 +688,42 @@ export default function EvaluatePage() {
 
       return data;
     } catch (e) {
-      setMsg(`Klaida: ${reasonOf(e)}`);
-      throw e;
+      throw new Error(`Klaida: ${reasonOf(e)}`);
     } finally {
       setActingId(null);
     }
   };
 
 
-  // Opening the return prompt also clears the status line
-  const handleReturn = (act) => {
-    setReturningActivity(act);
-    setMsg("");
+  // Opening a row also clears the status line, which spoke of
+  // the row before
+  const openModal = (act) => {
+    setSelectedActivity(act);
+    setStatus(null);
   };
 
 
-  // The modal's save: the PATCH result also replaces the
-  // selected activity, so a modal that stays open shows the
-  // saved row
+  // Opening the return prompt also clears the status line
+  const handleReturn = (act) => {
+    setReturningActivity(act);
+    setStatus(null);
+  };
+
+
+  // The modal's save. Its answer reaches the modal only while
+  // the modal still shows this activity: a status that left
+  // PATVIRTINTA closes it, any other replaces its row with
+  // the saved one. A modal closed or moved on to another row
+  // in the meantime is left as it is. The confirmation goes
+  // on the page's line, which the closed modal uncovers
   const handleScore = async (body) => {
-    const updated = await callCommitteeAction(selectedActivity.id, body);
-    setSelectedActivity(updated);
+    const id = selectedActivity.id;
+    const updated = await callCommitteeAction(id, body);
+    setSelectedActivity((cur) => {
+      if (cur?.id !== id) return cur;
+      return updated.status !== "PATVIRTINTA" ? null : updated;
+    });
+    setStatus({ text: "Įvertinimas išsaugotas.", error: false });
     return updated;
   };
 
@@ -650,29 +743,31 @@ export default function EvaluatePage() {
               items={items}
               loading={loading}
               actingId={actingId}
-              onOpen={setSelectedActivity}
+              onOpen={openModal}
               onReturn={handleReturn}
             />
 
-            {msg && (
-              <div className="form-status form-status--error">
-                {msg}
+            {status && (
+              <div className={status.error ? "form-status form-status--error" : "form-status"}>
+                {status.text}
               </div>
             )}
           </div>
         </section>
       </main>
 
-      {/* Mounted fresh per opened row — the modal seeds its
-          scoring fields from the activity on mount */}
+      {/* Mounted fresh per opened row — keyed by the
+          activity, so a row opened straight from another one
+          does not inherit its scoring fields, which the
+          modal seeds from the activity on mount */}
       {selectedActivity && (
         <EvaluateModal
+          key={selectedActivity.id}
           activity={selectedActivity}
           downloading={downloadingId === selectedActivity.id}
           onDownload={handleDownload}
           onScore={handleScore}
           onClose={() => setSelectedActivity(null)}
-          onMessage={setMsg}
         />
       )}
 
@@ -693,7 +788,6 @@ export default function EvaluatePage() {
             })
           }
           onClose={() => setReturningActivity(null)}
-          onMessage={setMsg}
         />
       )}
     </div>

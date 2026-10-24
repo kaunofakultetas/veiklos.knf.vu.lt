@@ -1,6 +1,28 @@
 :80 {
+    root * /app/dist
+
+    # Vite's build files carry a hash of their content in their
+    # name, so a name never changes meaning: a file found is
+    # cached for a year, and a name that does not exist (a tab
+    # still running an older build) is a plain 404 — not
+    # index.html served under a script's name, which the
+    # browser refuses, and not cached, as a later build may
+    # bring that name back
+    handle /assets/* {
+        header {
+            Cache-Control "public, max-age=31536000, immutable"
+            match {
+                status 200
+            }
+        }
+        file_server
+    }
+
+    # Every other path is the app itself — index.html for any
+    # route of the SPA, a deep link included — revalidated on
+    # every visit, so a deployed build is picked up at once
     handle {
-        root * /app/dist
+        header Cache-Control "no-cache"
         try_files {path} /index.html
         file_server
     }

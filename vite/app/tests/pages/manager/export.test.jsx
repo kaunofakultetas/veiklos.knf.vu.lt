@@ -7,19 +7,15 @@
 //  every activity, the employee filter lists each employee
 //  once (name or eID — a numeric one too — Lithuanian order,
 //  no eID → skipped) with a search box, each dropdown
-//  announces its popup state and closes on Escape, the theme
+//  announces its popup state, is named by its caption and
+//  then by what it shows, and closes on Escape, the theme
 //  filter narrows and resets the subtheme filter, the four
 //  filters AND together, the export hands the exact header
 //  and rows to aoa_to_sheet, appends "Veiklos" and writes a
-//  timestamped file, and an empty selection refuses with
-//  "Nėra veiklų eksportui.".
-//
-//  Known bugs are pinned with test.fails beside the tests of
-//  their feature: a text longer than an XLSX cell holds makes
-//  the export fail without a word, the file name is stamped
-//  in UTC while the cells are local, the empty-selection
-//  refusal outlives a later successful export, and the filter
-//  triggers are not named by their captions.
+//  file stamped with the local date and time, a text longer
+//  than an XLSX cell holds is cut to fit, and an empty
+//  selection refuses with "Nėra veiklų eksportui.", which a
+//  later successful export clears.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -548,22 +544,21 @@ test("a filtered preview exports only its rows", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — a text longer than a cell holds
+// a text longer than a cell holds
 // -----------------------------------------------------------
 //
 // An XLSX cell holds at most 32,767 characters and SheetJS
 // refuses to write a workbook with a longer text, while the
 // backend accepts descriptions and comments far longer than
-// that. The page hands such a text to the sheet uncut and
-// catches nothing, so "Eksportuoti" ends in an uncaught
-// error: no file and no word to the manager. The export
-// should still yield a file with the long text cut to the
-// limit, or say why it cannot. The mocked writeFile refuses
-// the way the real one does, and the test takes the escaping
-// error so it does not fail the run.
+// that. The page cuts every such text to fit, ending it in
+// "…", so "Eksportuoti" still yields a file instead of an
+// uncaught error and no word to the manager. The mocked
+// writeFile refuses the way the real one does, and the first
+// test takes any escaping error so it cannot fail the run on
+// its own.
 // -----------------------------------------------------------
 
-test.fails("BUG: a text longer than a cell holds still exports, cut to fit, or the page says why it cannot", async () => {
+test("a text longer than a cell holds still exports, cut to fit, or the page says why it cannot", async () => {
   resetXlsx();
   const limit = 32767;
 
@@ -605,6 +600,25 @@ test.fails("BUG: a text longer than a cell holds still exports, cut to fit, or t
   }
 });
 
+test("a long description and a long comment reach the sheet cut to the 32,767 characters a cell holds", async () => {
+  resetXlsx();
+  signInAs("Vadybininkas");
+  onRequest("GET", "/api/activities/all", [{ ...ACTIVITIES[0], description: "a".repeat(40000), committee_comments: "k".repeat(32768) }]);
+  onRequest("GET", "/api/themes", THEMES);
+  const { user } = renderPage(ManagerExportPage);
+  await screen.findByText("Paskaitų ciklas");
+
+  await user.click(screen.getByRole("button", { name: "Eksportuoti" }));
+
+  const [header, row] = XLSX.utils.aoa_to_sheet.mock.calls[0][0];
+  expect(header).toEqual(HEADER);
+  expect(row[7]).toBe(`${"a".repeat(32766)}…`);
+  expect(row[12]).toBe(`${"k".repeat(32766)}…`);
+  expect(row.slice(1, 7)).toEqual(["Jonas Jonaitis", "6.1.", "Studijų kokybė", "6.1.1.", "Paskaitos", "Paskaitų ciklas"]);
+  expect(row[11]).toBe("Tinka");
+  expect(XLSX.writeFile).toHaveBeenCalledTimes(1);
+});
+
 
 
 
@@ -612,20 +626,18 @@ test.fails("BUG: a text longer than a cell holds still exports, cut to fit, or t
 
 
 // -----------------------------------------------------------
-// BUG — the file name stamped in UTC
+// the file name in local time
 // -----------------------------------------------------------
 //
-// The cells carry the manager's local time, but the file name
-// is stamped from toISOString, which is UTC: in Vilnius the
-// stamp runs two or three hours behind, and an export made
-// soon after midnight is named after the day before. The
-// stamp should be the same local date and time the cells
-// use. The test container runs in UTC, so the pin moves the
-// runner's zone to Vilnius and fixes the clock just after
-// midnight, then puts both back.
+// The cells carry the manager's local time, and so does the
+// file name's stamp: UTC would run two or three hours behind
+// in Vilnius and name an export made soon after midnight
+// after the day before. The test container runs in UTC, so
+// the test moves the runner's zone to Vilnius and fixes the
+// clock just after midnight, then puts both back.
 // -----------------------------------------------------------
 
-test.fails("BUG: the file name is stamped with the local date and time, as the cells are", async () => {
+test("the file name is stamped with the local date and time, as the cells are", async () => {
   resetXlsx();
   const user = await loadPage();
   const runnerZone = process.env.TZ;
@@ -685,17 +697,16 @@ test("an empty selection is refused with a message and no workbook", async () =>
 
 
 // -----------------------------------------------------------
-// BUG — the refusal outlives a successful export
+// a successful export clears the refusal
 // -----------------------------------------------------------
 //
-// "Nėra veiklų eksportui." is set when the selection is empty
-// and nothing ever clears it: once the filters change and the
-// next export writes its file, the old refusal still stands
-// in the status line, as if that export had been refused
-// too. A successful export should clear it.
+// "Nėra veiklų eksportui." is set when the selection is
+// empty. Once the filters change and the next export writes
+// its file, the refusal leaves the status line, so it does
+// not read as if that export had been refused too.
 // -----------------------------------------------------------
 
-test.fails("BUG: a successful export clears an earlier \"Nėra veiklų eksportui.\"", async () => {
+test("a successful export clears an earlier \"Nėra veiklų eksportui.\"", async () => {
   resetXlsx();
   const user = await loadPage();
 
@@ -782,21 +793,33 @@ test("the employee filter's search box is named", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — filter triggers named by their summary alone
+// filter triggers named by their captions
 // -----------------------------------------------------------
 //
-// A filter's caption is a bare label tied to nothing, so its
-// trigger is named by its contents only: the summary and the
-// arrow, which is not hidden from assistive tech. A screen
-// reader hears a placeholder or a count with no filter named,
-// and two filters with two picks each sound the same. Each
-// trigger's name should start with its filter's caption.
+// Each trigger is named by its filter's caption and then by
+// the summary it shows, the arrow hidden from assistive
+// tech, so a screen reader names the filter before a
+// placeholder or a count, and two filters with two picks
+// each do not sound the same.
 // -----------------------------------------------------------
 
-test.fails("BUG: each filter's trigger is named by its caption first", async () => {
+test("each filter's trigger is named by its caption first", async () => {
   await loadPage();
 
   for (const caption of ["Darbuotojas", "Tema", "Potemė", "Būsena"]) {
     expect(within(filterNamed(caption)).getByRole("button")).toHaveAccessibleName(new RegExp(`^${caption}`));
   }
+});
+
+test("a trigger's name goes on with the summary it shows, without the arrow", async () => {
+  const user = await loadPage();
+  const trigger = () => within(filterNamed("Darbuotojas")).getByRole("button");
+  expect(trigger()).toHaveAccessibleName("Darbuotojas (visi darbuotojai)");
+
+  await tick(user, "Darbuotojas", "Jonas Jonaitis");
+  expect(trigger()).toHaveAccessibleName("Darbuotojas Jonas Jonaitis");
+
+  await tick(user, "Darbuotojas", "u10004");
+  expect(trigger()).toHaveAccessibleName("Darbuotojas 2 pasirinkti");
+  expect(within(filterNamed("Būsena")).getByRole("button")).toHaveAccessibleName("Būsena (visos būsenos)");
 });

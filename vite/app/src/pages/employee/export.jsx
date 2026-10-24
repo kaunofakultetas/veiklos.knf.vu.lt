@@ -4,7 +4,10 @@
 //  /employee/export: the employee's own activities behind
 //  three multi-select filters (theme, subtheme, status), a
 //  preview table, and an XLSX download of the filtered rows
-//  built client-side with SheetJS.
+//  built client-side with SheetJS. The download keeps the
+//  rules both exports share (components/exportCommon.js): a
+//  text longer than an XLSX cell holds is cut to fit, and the
+//  file name carries the local date and time.
 //
 //  Empty filter = no filtering ("(visi)"). Picking themes
 //  narrows the subtheme options to those themes and resets
@@ -19,9 +22,10 @@
 //    ExportPage          — the page (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
 import { apiJsonAll } from "@/components/api.js";
+import { fileStamp, fitRows } from "@/components/exportCommon.js";
 import "@/components/employee.css";
 
 
@@ -126,9 +130,13 @@ function statusClass(status) {
 // selection: placeholder when empty, the option's label when
 // exactly one, "N pasirinkta" otherwise. No outside-click
 // close — the trigger toggles it and Escape closes it. The
-// trigger carries aria-haspopup / aria-expanded and the open
-// menu is a group named after the filter's label, so a screen
-// reader hears which filter the checkboxes belong to.
+// trigger carries aria-haspopup / aria-expanded and is named
+// by the filter's caption followed by the summary it shows,
+// the arrow hidden from assistive tech — AppSelect's
+// listbox-button pattern — so a screen reader names the
+// filter before what it holds; the open menu is a group
+// named after the filter's label, so the checkboxes are tied
+// to their filter too.
 //
 // Used by:
 //   - ExportPage (below) — theme / subtheme / status filters
@@ -146,6 +154,11 @@ function MultiSelectDropdown({
   // Escape hands focus back to the trigger — the focused
   // checkbox is about to unmount with the menu
   const triggerRef = useRef(null);
+
+  // The trigger is named by the caption and then by itself,
+  // so both need ids, unique per filter on the page
+  const captionId = useId();
+  const triggerId = useId();
 
   const toggleOpen = () => setOpen((o) => !o);
 
@@ -176,18 +189,20 @@ function MultiSelectDropdown({
 
   return (
     <div className="multi-select" onKeyDown={handleKeyDown}>
-      <label className="multi-select-label">{label}</label>
+      <label className="multi-select-label" id={captionId}>{label}</label>
 
       <button
         type="button"
+        id={triggerId}
         ref={triggerRef}
         className="multi-select-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-labelledby={`${captionId} ${triggerId}`}
         onClick={toggleOpen}
       >
         <span className="multi-select-summary">{summary}</span>
-        <span className="multi-select-chevron">▾</span>
+        <span className="multi-select-chevron" aria-hidden="true">▾</span>
       </button>
 
       {open && (
@@ -225,7 +240,10 @@ function MultiSelectDropdown({
 // Loads the theme tree and /api/activities/my in parallel on
 // mount; filtering happens client-side over that snapshot.
 // The XLSX is written with XLSX.writeFile, which triggers the
-// browser download itself — no backend export endpoint.
+// browser download itself — no backend export endpoint. A
+// written file clears the status line, so an earlier "Nėra
+// veiklų eksportui." does not stand beside a download that
+// worked.
 //
 // Used by:
 //   - App.jsx — route /employee/export
@@ -361,7 +379,9 @@ export default function ExportPage() {
   );
 
 
-  // Build and download the workbook client-side
+  // Build and download the workbook client-side, every text
+  // cell cut to what an XLSX cell holds — SheetJS refuses to
+  // write a longer one, and the whole download with it
   const exportXLSX = () => {
     if (!filteredActivities.length) {
       setMsg("Nėra veiklų eksportui.");
@@ -394,15 +414,15 @@ export default function ExportPage() {
       a.score == null ? "" : Number(a.score),
     ]);
 
-    const xlsxData = [header, ...rows];
-
-    const worksheet = XLSX.utils.aoa_to_sheet(xlsxData);
+    const worksheet = XLSX.utils.aoa_to_sheet(fitRows([header, ...rows]));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Veiklos");
 
-    const now = new Date();
-    const ts = now.toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    XLSX.writeFile(workbook, `veiklos-eksportas-${ts}.xlsx`);
+    XLSX.writeFile(workbook, `veiklos-eksportas-${fileStamp(new Date())}.xlsx`);
+
+    // The file is written: an earlier "nothing to export"
+    // refusal no longer applies
+    setMsg("");
   };
 
 

@@ -9,15 +9,10 @@
 //  while their POST is in flight, and POST their exact
 //  bodies, the two delete buttons ask their exact confirms
 //  and DELETE, every successful change reloads the tree
-//  (collapsing it — except the parent of a new subtheme),
+//  (collapsing it — except the parent of a new subtheme), a
+//  deleted theme never stays the new subtheme's parent,
 //  backend errors are shown verbatim without a reload, and
 //  every native field is reachable by its label.
-//
-//  A known bug is pinned with test.fails beside the theme
-//  delete: deleting the theme the new-subtheme form points at
-//  leaves the deleted theme as its parent, so the form posts
-//  under a theme that is gone, or with no theme left keeps
-//  Sukurti potemę enabled.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -481,21 +476,18 @@ test("delete theme: confirm text, cancel sends nothing, DELETE /api/themes/:id, 
 
 
 // -----------------------------------------------------------
-// BUG — the subtheme form keeps a deleted parent
+// delete theme — the subtheme form lets go of it
 // -----------------------------------------------------------
 //
-// load() seeds the new subtheme's parent only while it is
-// empty, so deleting the theme the form points at leaves the
-// deleted id in place: the picker falls back to its
-// placeholder, yet a code and a title enable Sukurti potemę,
-// which posts under the deleted theme and gets the backend's
-// "Klaida: tema nerasta" back. After the reload the parent
-// should move to a theme that is left, or the button should
-// wait for a pick; either way nothing is posted under the
-// deleted theme.
+// Deleting the theme the new-subtheme form points at moves
+// the form off it with the reload: the parent becomes a
+// theme that is left, or the button waits for a pick, so a
+// code and a title post nothing under the deleted theme —
+// which the backend would refuse with "Klaida: tema
+// nerasta".
 // -----------------------------------------------------------
 
-test.fails("BUG: once its parent theme is deleted, Sukurti potemę posts nothing under it", async () => {
+test("once its parent theme is deleted, Sukurti potemę posts nothing under it", async () => {
   const state = scriptTree();
   onRequest("DELETE", "/api/themes/1", () => {
     state.tree = [THEMES[1]];
@@ -532,17 +524,16 @@ test.fails("BUG: once its parent theme is deleted, Sukurti potemę posts nothing
 
 
 // -----------------------------------------------------------
-// BUG — the subtheme form keeps the last theme deleted
+// delete theme — the last one
 // -----------------------------------------------------------
 //
-// The same stale parent when the deleted theme was the last
-// one: the tree shows "(temų nėra)" and the picker its
-// placeholder, yet a code and a title enable Sukurti potemę,
-// where an empty tree keeps it disabled for lack of a parent
-// (see "empty tree" above).
+// When the deleted theme was the last one the form is left
+// without a parent: the tree shows "(temų nėra)" and a code
+// and a title keep Sukurti potemę disabled, as on an empty
+// tree (see "empty tree" above).
 // -----------------------------------------------------------
 
-test.fails("BUG: deleting the last theme keeps Sukurti potemę disabled for lack of a parent", async () => {
+test("deleting the last theme keeps Sukurti potemę disabled for lack of a parent", async () => {
   const state = scriptTree([THEMES[0]]);
   onRequest("DELETE", "/api/themes/1", () => {
     state.tree = [];

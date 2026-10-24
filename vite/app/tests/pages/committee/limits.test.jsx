@@ -7,13 +7,13 @@
 //  none) with every draft input named by column and row
 //  ("Nauja suma: 6.1.", "Naujas limitas: 6.1.1."), a theme
 //  total and a subtheme cap are saved with the exact PATCH
-//  bodies, the row updates and the draft resets, the
-//  client-side validation refuses empty and negative input
-//  without a request, and backend errors are shown as sent.
+//  bodies, the row updates and the draft resets — unless a
+//  new draft was typed during the save — overlapping row
+//  saves each keep their own busy state, the client-side
+//  validation refuses empty and negative input without a
+//  request, and backend errors are shown as sent.
 //
-//  Pinned as expected failures, the known bugs: overlapping
-//  row saves that share one busy state, and the saved
-//  confirmations styled as errors.
+//  The saved confirmations are not styled as errors.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -117,20 +117,17 @@ test("saves a theme total: PATCH body, updated cell, reset draft, message", asyn
 
 
 // -----------------------------------------------------------
-// BUG — overlapping row saves share one busy state
+// overlapping row saves keep their own busy state
 // -----------------------------------------------------------
 //
-// Each table keeps a single busy row id, so starting a save
-// in a second row while the first is still pending moves the
-// busy state there: the first row's button turns back into
-// an enabled save although its request is still in flight,
-// and whichever save finishes first clears the busy state of
-// the other. Every row must keep its own disabled busy label
-// while its own save is pending. A known bug, pinned as an
-// expected failure until it is fixed.
+// Each row keeps a busy flag of its own, so a save started in
+// a second row while the first is still pending leaves the
+// first row's button disabled under its busy label until its
+// own answer arrives, and neither save's end re-enables the
+// other row.
 // -----------------------------------------------------------
 
-test.fails("BUG: a row keeps its disabled busy label while its own save is pending", async () => {
+test("a row keeps its disabled busy label while its own save is pending", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/themes", THEMES);
   // Each total-sum PATCH waits in `pending` until released;
@@ -157,6 +154,58 @@ test.fails("BUG: a row keeps its disabled busy label while its own save is pendi
 
   pending.forEach((release) => release());
   expect(await within(first).findByText("7.00")).toBeInTheDocument();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// a draft typed while its row saves
+// -----------------------------------------------------------
+//
+// A save resets its row's draft to 0 only while the draft
+// still holds the value it sent: a new one typed into the row
+// while the save was in flight stays for the next save, in
+// the theme table and in the subtheme table alike.
+// -----------------------------------------------------------
+
+test("a draft typed into a row while its save is pending survives the save's answer", async () => {
+  signInAs("Komisijos narys");
+  onRequest("GET", "/api/themes", THEMES);
+  // Each PATCH waits in `pending` until released
+  const pending = [];
+  const answerLater = (answer) => () => new Promise((resolve) => { pending.push(() => resolve(answer)); });
+  onRequest("PATCH", "/api/themes/1/total-sum", answerLater({ id: 1, code: "6.1.", title: "Studijų kokybė", total_sum: "7" }));
+  onRequest("PATCH", "/api/themes/subthemes/12/cap", answerLater({ id: 12, theme_id: 1, code: "6.1.2.", title: "Seminarai", description: null, cap: "3" }));
+  const { user } = renderPage(LimitsPage);
+  await screen.findByRole("heading", { name: "Temų bendros sumos" });
+
+  const themeInput = screen.getByRole("spinbutton", { name: "Nauja suma: 6.1." });
+  await user.clear(themeInput);
+  await user.type(themeInput, "7");
+  await user.click(within(rowNamed("Studijų kokybė")).getByRole("button", { name: "Išsaugoti" }));
+  expect(within(rowNamed("Studijų kokybė")).getByRole("button")).toHaveTextContent("Saugoma…");
+  await user.clear(themeInput);
+  await user.type(themeInput, "8");
+
+  const capInput = screen.getByRole("spinbutton", { name: "Naujas limitas: 6.1.2." });
+  await user.clear(capInput);
+  await user.type(capInput, "3");
+  await user.click(within(rowNamed("6.1.2. — Seminarai")).getByRole("button", { name: "Išsaugoti" }));
+  expect(within(rowNamed("6.1.2. — Seminarai")).getByRole("button")).toHaveTextContent("Saugoma…");
+  await user.clear(capInput);
+  await user.type(capInput, "4");
+
+  pending.forEach((release) => release());
+  expect(await within(rowNamed("Studijų kokybė")).findByText("7.00")).toBeInTheDocument();
+  expect(await within(rowNamed("6.1.2. — Seminarai")).findByText("3.00")).toBeInTheDocument();
+  expect(themeInput).toHaveValue(8);
+  expect(capInput).toHaveValue(4);
+  expect(requestsTo("PATCH", "/api/themes/1/total-sum").map((r) => r.body)).toEqual([{ total_sum: 7 }]);
+  expect(requestsTo("PATCH", "/api/themes/subthemes/12/cap").map((r) => r.body)).toEqual([{ cap: 3 }]);
 });
 
 
@@ -199,17 +248,14 @@ test("saves a subtheme cap: PATCH body and updated cell", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — the saved confirmations show as errors
+// the saved confirmations are not errors
 // -----------------------------------------------------------
 //
-// The page has one status line and always styles it as an
-// error, so the confirmations after a saved theme sum and a
-// saved subtheme limit sit in the red error box like a
-// refusal. A confirmation must not be styled as an error. A
-// known bug, pinned as an expected failure until it is fixed.
+// The confirmations of a saved sum and of a saved limit are
+// styled as confirmations; only refusals use the error box.
 // -----------------------------------------------------------
 
-test.fails("BUG: the saved-sum and saved-limit confirmations are not styled as errors", async () => {
+test("the saved-sum and saved-limit confirmations are not styled as errors", async () => {
   signInAs("Komisijos narys");
   onRequest("GET", "/api/themes", THEMES);
   onRequest("PATCH", "/api/themes/2/total-sum", { id: 2, code: "6.2.", title: "Mokslas", total_sum: "12.5" });

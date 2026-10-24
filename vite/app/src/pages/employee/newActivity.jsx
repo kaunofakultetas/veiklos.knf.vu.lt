@@ -114,9 +114,15 @@ function sortedSubthemes(theme) {
 // -----------------------------------------------------------
 //
 // Loads the theme tree once on mount and preselects the first
-// theme + its first subtheme in code order. Title and
+// theme + its first subtheme in code order; a theme switch
+// preselects the new theme's first subtheme, while a re-pick
+// of the theme already selected changes nothing. Title and
 // description are required in the UI (the backend only
-// requires the title).
+// requires the title). A file that reaches the 100 MB limit
+// is refused at the pick and again at submit, the way the
+// backend would refuse it. While a submit is in flight the
+// fields are locked, so nothing typed meanwhile is lost to
+// the reset that follows its success.
 //
 // Used by:
 //   - App.jsx — route /employee/new
@@ -175,6 +181,22 @@ export default function NewActivityPage() {
   const currentSubtheme = subthemes.find((s) => String(s.id) === selectedSubthemeId);
 
 
+  // A theme switch preselects the new theme's first subtheme
+  // in code order. AppSelect reports a click on the option
+  // already selected like any other pick, so a pick of the
+  // theme already selected is ignored — answering it would
+  // throw away the subtheme the employee chose
+  const handleThemeChange = (val) => {
+    if (String(val) === String(selectedThemeId)) return;
+    setSelectedThemeId(val);
+    const t = themes.find(
+      (theme) => String(theme.id) === String(val)
+    );
+    const firstSub = sortedSubthemes(t)[0];
+    setSelectedSubthemeId(firstSub ? String(firstSub.id) : "");
+  };
+
+
   // Multipart submit — see the header on why the codes are
   // appended before the file
   const onSubmit = async (e) => {
@@ -190,7 +212,9 @@ export default function NewActivityPage() {
       setMsg("Klaida: Užpildykite visus privalomus laukus.");
       return;
     }
-    if (file && file.size > ATTACHMENT_MAX_BYTES) {
+    // A file of exactly the limit counts as too big: the
+    // backend turns away a file that reaches it
+    if (file && file.size >= ATTACHMENT_MAX_BYTES) {
       setMsg(ATTACHMENT_TOO_BIG);
       return;
     }
@@ -246,6 +270,11 @@ export default function NewActivityPage() {
       <main className="page-content">
         <section className="card employee-card">
           <div className="card-body">
+            {/* While a submit is in flight every field is
+                locked: the request carries the values of the
+                moment it was sent, and its success clears the
+                form, so a correction typed meanwhile would be
+                lost */}
             <form onSubmit={onSubmit} className="employee-form">
 
               {/* Theme picker — changing it re-sorts and
@@ -262,18 +291,11 @@ export default function NewActivityPage() {
                   <AppSelect
                     labelledBy="new-activity-theme-label"
                     value={selectedThemeId}
-                    onChange={(val) => {
-                      setSelectedThemeId(val);
-                      const t = themes.find(
-                        (theme) => String(theme.id) === String(val)
-                      );
-                      const firstSub = sortedSubthemes(t)[0];
-                      setSelectedSubthemeId(firstSub ? String(firstSub.id) : "");
-                    }}
+                    onChange={handleThemeChange}
                     options={themes}
                     getLabel={(t) => `${t.code} — ${t.title}`}
                     placeholder="Pasirinkite temą"
-                    disabled={loadingThemes || themes.length === 0}
+                    disabled={submitting || loadingThemes || themes.length === 0}
                   />
                 )}
               </div>
@@ -292,7 +314,7 @@ export default function NewActivityPage() {
                   placeholder={
                     subthemes.length ? "Pasirinkite potemę" : "(potemių nėra)"
                   }
-                  disabled={!subthemes.length}
+                  disabled={submitting || !subthemes.length}
                 />
               </div>
 
@@ -325,6 +347,7 @@ export default function NewActivityPage() {
                   value={activityName}
                   onChange={(e) => setActivityName(e.target.value)}
                   placeholder="Įveskite veiklos pavadinimą"
+                  readOnly={submitting}
                 />
               </div>
 
@@ -340,6 +363,7 @@ export default function NewActivityPage() {
                   value={activityDescription}
                   onChange={(e) => setActivityDescription(e.target.value)}
                   placeholder="Aprašykite veiklą"
+                  readOnly={submitting}
                 />
               </div>
 
@@ -357,8 +381,11 @@ export default function NewActivityPage() {
                   onChange={(e) => {
                     const picked = e.target.files[0] || null;
                     // Refuse an oversized pick on the spot —
-                    // the input is cleared so nothing is sent
-                    if (picked && picked.size > ATTACHMENT_MAX_BYTES) {
+                    // the input is cleared so nothing is
+                    // sent. A file of exactly the limit
+                    // counts: the backend turns away one that
+                    // reaches it
+                    if (picked && picked.size >= ATTACHMENT_MAX_BYTES) {
                       setMsg(ATTACHMENT_TOO_BIG);
                       setFile(null);
                       setFileInputKey((k) => k + 1);
@@ -368,6 +395,7 @@ export default function NewActivityPage() {
                     setFile(picked);
                   }}
                   className="field-input-file"
+                  disabled={submitting}
                 />
                 {file && (
                   <div className="employee-file-hint">

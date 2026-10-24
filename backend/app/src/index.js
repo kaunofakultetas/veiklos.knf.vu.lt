@@ -216,6 +216,11 @@ app.use((err, req, res, _next) => {
 
 
 const port = process.env.PORT || 4000;
-app.listen(port, "0.0.0.0", () => {
+const server = app.listen(port, "0.0.0.0", () => {
   console.log(`API listening on port ${port}`);
 });
+
+// A 100 MB attachment takes longer than Node's five-minute
+// default on a slow upload link, after which Node answers 408
+// and drops the upload half-way; half an hour covers it
+server.requestTimeout = 30 * 60 * 1000;

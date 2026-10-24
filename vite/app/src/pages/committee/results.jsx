@@ -11,6 +11,18 @@
 //  in this list and is patched in place. Auth rides in the
 //  session cookie; only the X-Active-Role header travels.
 //
+//  Only a whole people count gives a score — a blank,
+//  negative or fractional one previews nothing and is refused
+//  before any request — and a theme without subthemes cannot
+//  be saved: with no subtheme to send, the backend would pair
+//  the new theme with the activity's old subtheme and refuse
+//  it. A success answer that is not the activity is refused
+//  too. The modal is a dialog that takes the focus and gives
+//  it back; its backdrop closes it only on a press and
+//  release of its own and never while a save is in flight,
+//  and a save's answer touches the modal only while it still
+//  shows that activity.
+//
 //  Split into (root component last):
 //
 //    codeToNums          — "1.2.3" → [1,2,3]
@@ -18,6 +30,7 @@
 //    sortedSubthemes     — a theme's subthemes, code-ordered
 //    statusClass         — status → pill css class
 //    formatDate          — ISO → lt-LT date-time
+//    scoreForCount       — a people count → its score
 //    ResultsTable        — the ĮVERTINTA rows with scores
 //    ThemeSubthemeFields — theme/subtheme, editable while
 //                          re-scoring
@@ -27,7 +40,8 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
-import { AppSelect } from "@/components/appCommon.jsx";
+import { AppSelect, ModalStatus } from "@/components/appCommon.jsx";
+import { useBackdropClose, useModalDialog } from "@/components/sharedHooks.js";
 import { apiJson, apiJsonAll, downloadAttachment, reasonOf } from "@/components/api.js";
 import "@/components/employee.css";
 
@@ -168,6 +182,34 @@ function formatDate(iso) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// scoreForCount
+// -----------------------------------------------------------
+//
+// The score a people count gives — 1/n rounded to 2
+// decimals, 0 for nobody — or null for a count the save
+// refuses: blank, negative or not a whole number. The live
+// preview and the save both ask it, so the preview never
+// shows a score that would not be sent. The evaluate page
+// keeps a copy of the same rule.
+//
+// Used by:
+//   - ResultsModal (below) — the preview and the save
+// -----------------------------------------------------------
+
+function scoreForCount(count) {
+  if (!count.trim()) return null;
+  const n = Number(count);
+  if (!Number.isInteger(n) || n < 0) return null;
+  return n === 0 ? 0 : Number((1 / n).toFixed(2));
 }
 
 
@@ -440,23 +482,29 @@ function ActivityDetails({ act, downloading, onDownload }) {
 // -----------------------------------------------------------
 //
 // The review/re-scoring modal for one activity. It owns the
-// edit state — mounted fresh per opened row, so the fields
-// seed from the row: theme/subtheme ids, committee comments,
-// the people count (blank) and the score preview.
-// "Pervertinti" arms re-scoring; "Išsaugoti įvertinimą"
-// validates the people count, derives score = 1/n (2
-// decimals, 0 people → 0) and hands { action: "score", …,
-// theme_id, subtheme_id } to onRescore, which resolves with
-// the updated activity or throws. Re-scoring keeps ĮVERTINTA,
-// so the modal stays open showing the saved values. Status
-// text — validation refusals, the saved confirmation and a
-// refused save's "Klaida: …" — goes up through onMessage.
+// edit state — mounted fresh per opened row, keyed by its
+// id, so the fields seed from the row: theme/subtheme ids,
+// committee comments, the people count (blank) and the score
+// preview. "Pervertinti" arms re-scoring; "Išsaugoti
+// įvertinimą" — disabled while the picked theme leaves no
+// subtheme to save — validates the people count (given, not
+// negative, whole), derives its score (scoreForCount) and
+// hands { action: "score", …, theme_id, subtheme_id } to
+// onRescore, which resolves with the updated activity or
+// throws. Re-scoring keeps ĮVERTINTA, so the modal stays
+// open showing the saved values. The box is a dialog named
+// by its title that takes the focus; the backdrop closes it
+// only on a press and release of its own and not while the
+// save is in flight. The validation refusals, the saved
+// confirmation, a refused save's "Klaida: …" and a refused
+// download show on the modal's own status line, inside the
+// box.
 //
 // Used by:
 //   - ResultsPage (below) — while an activity is selected
 // -----------------------------------------------------------
 
-function ResultsModal({ activity, themes, downloading, onDownload, onRescore, onClose, onMessage }) {
+function ResultsModal({ activity, themes, downloading, onDownload, onRescore, onClose }) {
 
   const act = activity;
 
@@ -471,29 +519,34 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
     act.committee_comments || ""
   );
   const [peopleNum, setPeopleNum] = useState("");
+  const [status, setStatus] = useState(null);
+  const backdrop = useBackdropClose(onClose, savingScore);
+  const dialogRef = useModalDialog();
 
   // Theme reassignment
   const [editThemeId, setEditThemeId] = useState(String(act.theme_id));
   const [editSubthemeId, setEditSubthemeId] = useState(String(act.subtheme_id));
 
+  // A theme without subthemes leaves no subtheme to send, and
+  // the backend would then pair the new theme with the old
+  // subtheme and refuse it — so the save waits for a theme
+  // that has subthemes
+  const noSubtheme = editingScore && !editSubthemeId;
 
-  // Typing a count previews 1/n live; a bad count blanks it
+
+  // Typing a count previews its score live; a count the save
+  // would refuse — a cleared one included — previews nothing
   const handlePeopleNumChange = (e) => {
     const val = e.target.value;
     setPeopleNum(val);
 
-    const n = Number(val);
-    if (Number.isFinite(n) && n >= 0) {
-      const s = n === 0 ? 0 : Number((1 / n).toFixed(2));
-      setEditScore(String(s));
-    } else {
-      setEditScore("");
-    }
+    const s = scoreForCount(val);
+    setEditScore(s === null ? "" : String(s));
   };
 
 
   // First click arms re-scoring; second click validates the
-  // people count, derives score = 1/n and saves with the
+  // people count, derives its score and saves with the
   // theme/subtheme too
   const handleReevaluateClick = async () => {
     if (!editingScore) {
@@ -502,21 +555,29 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
     }
 
     if (!peopleNum.trim()) {
-      onMessage("Klaida: Įveskite veiklos vykdytojų kiekį.");
+      setStatus({ text: "Klaida: Įveskite veiklos vykdytojų kiekį.", error: true });
       return;
     }
 
     const n = Number(peopleNum);
     if (!Number.isFinite(n) || n < 0) {
-      onMessage("Veiklos vykdytojų kiekis turi būti 0 arba teigiamas skaičius.");
+      setStatus({ text: "Veiklos vykdytojų kiekis turi būti 0 arba teigiamas skaičius.", error: true });
       return;
     }
 
-    const num = n === 0 ? 0 : Number((1 / n).toFixed(2));
+    // People are counted whole: a fraction would give a score
+    // no real count gives, above one for a count below one
+    if (!Number.isInteger(n)) {
+      setStatus({ text: "Klaida: Veiklos vykdytojų kiekis turi būti sveikas skaičius.", error: true });
+      return;
+    }
+
+    const num = scoreForCount(peopleNum);
     setEditScore(String(num));
 
     try {
       setSavingScore(true);
+      setStatus(null);
       const data = await onRescore({
         action: "score",
         score: num,
@@ -536,22 +597,38 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
       );
       setEditCommitteeComments(data.committee_comments || "");
       setEditingScore(false);
-      onMessage("Įvertinimas atnaujintas.");
+      setStatus({ text: "Įvertinimas atnaujintas.", error: false });
     } catch (e) {
-      onMessage(`Klaida: ${reasonOf(e)}`);
+      setStatus({ text: `Klaida: ${reasonOf(e)}`, error: true });
     } finally {
       setSavingScore(false);
     }
   };
 
 
+  // A refused download is told here, not behind the overlay
+  const download = async (a) => {
+    setStatus(null);
+    try {
+      await onDownload(a);
+    } catch (e) {
+      setStatus({ text: e.message, error: true });
+    }
+  };
+
+
   return (
-    <div className="employee-modal-backdrop" onClick={onClose}>
+    <div className="employee-modal-backdrop" {...backdrop}>
       <div
+        ref={dialogRef}
         className="employee-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="results-modal-title"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="employee-modal-title">
+        <h3 className="employee-modal-title" id="results-modal-title">
           Įvertintos veiklos rezultatas
         </h3>
 
@@ -577,7 +654,7 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
           <ActivityDetails
             act={act}
             downloading={downloading}
-            onDownload={onDownload}
+            onDownload={download}
           />
 
           {/* Committee comments — writable only while
@@ -654,6 +731,8 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
           </div>
         </div>
 
+        <ModalStatus status={status} />
+
         <div className="employee-modal-footer">
           <button
             type="button"
@@ -668,7 +747,7 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
             type="button"
             onClick={handleReevaluateClick}
             className="btn btn-primary btn-sm"
-            disabled={savingScore}
+            disabled={savingScore || noSubtheme}
           >
             {editingScore
               ? savingScore
@@ -696,9 +775,13 @@ function ResultsModal({ activity, themes, downloading, onDownload, onRescore, on
 // every request: /api/activities/evaluated and /api/themes
 // load in parallel on mount; re-scoring PATCHes
 // /api/activities/:id/committee with action "score" plus the
-// (possibly reassigned) theme/subtheme ids and patches the
-// row and the open modal in place. One error/status line
-// (msg) serves the table and the modal.
+// (possibly reassigned) theme/subtheme ids, refuses a
+// success answer that is not the activity, and patches the
+// row in place — and the open modal too, while it still
+// shows that activity. handleDownload rejects with the text
+// to show, which the modal shows on its own status line, as
+// it does its save's outcome; the page's line serves the
+// load, and opening a row clears it.
 //
 // Used by:
 //   - App.jsx — route /committee/results
@@ -746,10 +829,9 @@ export default function ResultsPage() {
     if (!act.attachment_path) return;
     try {
       setDownloadingId(act.id);
-      setMsg("");
       await downloadAttachment(act);
     } catch (e) {
-      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
+      throw new Error(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
     } finally {
       setDownloadingId(null);
     }
@@ -763,14 +845,23 @@ export default function ResultsPage() {
   };
 
 
-  // The modal's save: PATCH, then patch the row and the open
-  // modal in place (re-scoring keeps ĮVERTINTA). Throws on a
-  // failed response — the modal shows the message
+  // The modal's save: PATCH, then patch the row in place
+  // (re-scoring keeps ĮVERTINTA), and the modal while it
+  // still shows this activity — one closed or moved on to
+  // another row in the meantime is left as it is. Throws on a
+  // failed response, and on a 2xx answer that is not this
+  // activity — the client hands back {} for a body that is
+  // not JSON, which does not say the score was stored. The
+  // modal shows the message
   const handleRescore = async (body) => {
-    const data = await apiJson(`/api/activities/${selectedActivity.id}/committee`, { method: "PATCH", json: body });
+    const id = selectedActivity.id;
+    const data = await apiJson(`/api/activities/${id}/committee`, { method: "PATCH", json: body });
+    if (String(data?.id) !== String(id) || typeof data.status !== "string") {
+      throw new Error("Klaida: netikėtas serverio atsakymas.");
+    }
 
     setItems((prev) => prev.map((x) => (x.id === data.id ? data : x)));
-    setSelectedActivity(data);
+    setSelectedActivity((cur) => (cur?.id === id ? data : cur));
     return data;
   };
 
@@ -801,17 +892,19 @@ export default function ResultsPage() {
         </section>
       </main>
 
-      {/* Mounted fresh per opened row — the modal seeds its
-          edit fields from the activity on mount */}
+      {/* Mounted fresh per opened row — keyed by the
+          activity, so a row opened straight from another one
+          does not inherit its edit fields, which the modal
+          seeds from the activity on mount */}
       {selectedActivity && (
         <ResultsModal
+          key={selectedActivity.id}
           activity={selectedActivity}
           themes={themes}
           downloading={downloadingId === selectedActivity.id}
           onDownload={handleDownload}
           onRescore={handleRescore}
           onClose={() => setSelectedActivity(null)}
-          onMessage={setMsg}
         />
       )}
     </div>

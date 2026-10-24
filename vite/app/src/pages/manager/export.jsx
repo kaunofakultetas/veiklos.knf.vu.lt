@@ -8,7 +8,10 @@
 //
 //  The export carries more columns than the preview: it adds
 //  descriptions and all three comment fields (rejection,
-//  manager, committee).
+//  manager, committee). It keeps the rules both exports share
+//  (components/exportCommon.js): a text longer than an XLSX
+//  cell holds is cut to fit, and the file name carries the
+//  local date and time.
 //
 //  Split into (root component last):
 //
@@ -19,9 +22,10 @@
 //    ManagerExportPage   — the page (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx/dist/xlsx.full.min.js";
 import { apiJsonAll } from "@/components/api.js";
+import { fileStamp, fitRows } from "@/components/exportCommon.js";
 import "@/components/employee.css";
 
 
@@ -126,11 +130,14 @@ function statusClass(status) {
 // search box (withSearch) that narrows the visible options —
 // used for the employee list, which can get long. Summary:
 // placeholder / single label / "N pasirinkti". The trigger
-// announces its popup state (aria-haspopup / aria-expanded),
-// the menu is a group named after `label`, and Escape closes
-// it. Note this is a diverged copy of the one in
-// employee/export.jsx (that one has no search and says
-// "pasirinkta").
+// announces its popup state (aria-haspopup / aria-expanded)
+// and is named by the filter's caption followed by the
+// summary it shows, the arrow hidden from assistive tech —
+// AppSelect's listbox-button pattern — so a screen reader
+// names the filter before what it holds; the menu is a group
+// named after `label`, and Escape closes it. Note this is a
+// diverged copy of the one in employee/export.jsx (that one
+// has no search and says "pasirinkta").
 //
 // Used by:
 //   - ManagerExportPage (below) — all four filters
@@ -147,6 +154,11 @@ function MultiSelectDropdown({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const triggerRef = useRef(null);
+
+  // The trigger is named by the caption and then by itself,
+  // so both need ids, unique per filter on the page
+  const captionId = useId();
+  const triggerId = useId();
 
   const toggleOpen = () => setOpen((o) => !o);
 
@@ -183,18 +195,20 @@ function MultiSelectDropdown({
 
   return (
     <div className="multi-select" onKeyDown={handleKeyDown}>
-      <label className="field-label multi-select-label">{label}</label>
+      <label className="field-label multi-select-label" id={captionId}>{label}</label>
 
       <button
         type="button"
+        id={triggerId}
         ref={triggerRef}
         className="field-select multi-select-trigger"
         onClick={toggleOpen}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-labelledby={`${captionId} ${triggerId}`}
       >
         <span className="multi-select-summary">{summary}</span>
-        <span className="multi-select-chevron">▼</span>
+        <span className="multi-select-chevron" aria-hidden="true">▼</span>
       </button>
 
       {/* A named group, so a screen reader says which filter
@@ -248,7 +262,9 @@ function MultiSelectDropdown({
 // Loads /api/activities/all and the theme tree in parallel on
 // mount; all filtering is client-side. The employee filter's
 // options are derived from the activities themselves, so only
-// employees who have registered something appear.
+// employees who have registered something appear. A written
+// file clears the status line, so an earlier "Nėra veiklų
+// eksportui." does not stand beside a download that worked.
 //
 // Used by:
 //   - App.jsx — route /manager/export
@@ -409,7 +425,9 @@ export default function ManagerExportPage() {
 
 
   // Build and download the workbook client-side — includes
-  // the comment columns the preview table omits
+  // the comment columns the preview table omits — every text
+  // cell cut to what an XLSX cell holds: SheetJS refuses to
+  // write a longer one, and the whole download with it
   const exportXLSX = () => {
     if (!filteredActivities.length) {
       setMsg("Nėra veiklų eksportui.");
@@ -450,13 +468,15 @@ export default function ManagerExportPage() {
       a.committee_comments ?? "",
     ]);
 
-    const worksheet = XLSX.utils.aoa_to_sheet([header, ...rows]);
+    const worksheet = XLSX.utils.aoa_to_sheet(fitRows([header, ...rows]));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Veiklos");
 
-    const now = new Date();
-    const ts = now.toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    XLSX.writeFile(workbook, `veiklos-eksportas-vadybininkas-${ts}.xlsx`);
+    XLSX.writeFile(workbook, `veiklos-eksportas-vadybininkas-${fileStamp(new Date())}.xlsx`);
+
+    // The file is written: an earlier "nothing to export"
+    // refusal no longer applies
+    setMsg("");
   };
 
 

@@ -60,8 +60,9 @@ export function getActiveRole() {
 // start from; tabs already open keep theirs.
 //
 // Used by:
-//   - App.jsx — Profile, when a role is picked or the only
-//     one picks itself
+//   - App.jsx — HomeGate, replacing a stored role the
+//     session does not own; Profile, when a role is picked
+//     or the only one picks itself
 //   - components/appHeader.jsx — a switch, and the repair of
 //     a role the caller no longer owns
 // -----------------------------------------------------------
@@ -85,6 +86,7 @@ export function setActiveRole(role) {
 // on sign-out, and when the caller owns no role at all.
 //
 // Used by:
+//   - App.jsx — HomeGate, when the session owns no role
 //   - components/appHeader.jsx — sign-out and the no-roles
 //     answer
 // -----------------------------------------------------------

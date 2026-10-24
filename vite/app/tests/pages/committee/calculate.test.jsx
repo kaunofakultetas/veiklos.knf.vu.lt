@@ -6,18 +6,15 @@
 //  table (null → 0), the theme <select> filling the read-only
 //  sums, the "Skaičiuoti" disabled rules, the PATCH with the
 //  rounded point value and the result box that fills only
-//  after a save, the employee picker (search, no-match text,
-//  label fallbacks, the search box named by aria-label) → the
-//  subthemes GET, the results table math (score × point,
-//  caps, "—" rows, "Iš viso"), the empty states and error
-//  messages verbatim, and the status box: plain form-status
-//  for the saved confirmation, form-status--error for errors.
-//
-//  Pinned as expected failures, the known bugs: a refused
-//  employee load that leaves the previous employee's table, a
-//  late answer for an earlier pick that overwrites the one
-//  picked since, and a theme switched during a save that then
-//  shows a value never saved.
+//  after a save — and stays blank for a theme picked while
+//  the save was in flight — the employee picker (search,
+//  no-match text, label fallbacks, the search box named by
+//  aria-label) → the subthemes GET, a refused or superseded
+//  employee load that leaves no stale rows behind, the
+//  results table math (score × point, caps, "—" rows, "Iš
+//  viso"), the empty states and error messages verbatim, and
+//  the status box: plain form-status for the saved
+//  confirmation, form-status--error for errors.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -278,22 +275,19 @@ test("a refused PATCH shows the backend's reason in the error box and leaves the
 
 
 // -----------------------------------------------------------
-// BUG — theme switched while Skaičiuoti saves
+// theme switched while Skaičiuoti saves
 // -----------------------------------------------------------
 //
-// Picking another theme blanks the result box, but a save
-// still in flight marks the box as calculated only when its
-// answer arrives — after that reset — so the box then shows
-// the newly picked theme's value as if it had been saved,
-// though nothing was stored for that theme. The box must
-// stay blank for a theme that was never saved, and no save
-// may go to it; a fix that locks the theme picker until the
-// save ends passes too, as no other theme can then be
-// picked. A known bug, pinned as an expected failure until
-// it is fixed.
+// Picking another theme blanks the result box, and a save
+// still in flight for the previous theme leaves it blank
+// when its answer arrives: the value was stored for the
+// theme saved, not for the one picked since, and no save
+// goes to the new theme. The test passes a theme picker
+// locked until the save ends just as well, as no other theme
+// can then be picked.
 // -----------------------------------------------------------
 
-test.fails("BUG: a theme picked while Skaičiuoti saves keeps a blank result box and gets no save", async () => {
+test("a theme picked while Skaičiuoti saves keeps a blank result box and gets no save", async () => {
   let release;
   onRequest("PATCH", "/api/themes/1/pointvalue", () => new Promise((resolve) => { release = () => resolve(THEME1_SAVED); }));
   const { user, container } = await renderLoaded(THEMES_TWO_COMPUTABLE);
@@ -517,19 +511,17 @@ test("a refused subthemes load shows the backend's reason", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — a refused employee keeps the previous table
+// a refused employee empties the previous table
 // -----------------------------------------------------------
 //
 // When the subthemes of the next employee picked are refused,
-// the refusal shows but the loaded list is never cleared:
-// the previous employee's rows and "Iš viso" stay on screen
-// under the picker that now names the refused employee, where
-// they read as that employee's results. Next to the refusal
-// there must be no rows and no total. A known bug, pinned as
-// an expected failure until it is fixed.
+// the refusal shows and the rows loaded for the previous
+// employee go: no rows and no "Iš viso" stay under the picker
+// that now names the refused employee, where they would read
+// as that employee's results.
 // -----------------------------------------------------------
 
-test.fails("BUG: a refused load for the next employee shows no rows or total of the previous one", async () => {
+test("a refused load for the next employee shows no rows or total of the previous one", async () => {
   onRequest("GET", "/api/activities/evaluated/employee/e1/subthemes", SUBTHEMES);
   onRequest("GET", "/api/activities/evaluated/employee/e2/subthemes", { status: 404, body: { error: "Darbuotojas nerastas" } });
   const { user } = await renderLoaded();
@@ -553,20 +545,17 @@ test.fails("BUG: a refused load for the next employee shows no rows or total of 
 
 
 // -----------------------------------------------------------
-// BUG — a late answer overwrites the later pick
+// a late answer for an earlier pick is dropped
 // -----------------------------------------------------------
 //
-// Every pick starts its own subthemes load and nothing
-// cancels or orders them, so when the answer for an earlier
-// pick arrives after the one for the employee picked since,
-// it overwrites that employee's state: the earlier
-// employee's rows and total appear under the picker that
-// names the later one. A superseded answer must be dropped
-// and the later pick's state kept. A known bug, pinned as an
-// expected failure until it is fixed.
+// Every pick starts its own subthemes load; when the answer
+// for an earlier pick arrives after the one for the employee
+// picked since, it is dropped, and the later employee's
+// state — here an empty table — stays under the picker that
+// names that employee.
 // -----------------------------------------------------------
 
-test.fails("BUG: a late answer for an earlier pick leaves the employee picked since untouched", async () => {
+test("a late answer for an earlier pick leaves the employee picked since untouched", async () => {
   let releaseFirst;
   onRequest("GET", "/api/activities/evaluated/employee/e1/subthemes", () => new Promise((resolve) => { releaseFirst = () => resolve(SUBTHEMES); }));
   onRequest("GET", "/api/activities/evaluated/employee/e2/subthemes", []);

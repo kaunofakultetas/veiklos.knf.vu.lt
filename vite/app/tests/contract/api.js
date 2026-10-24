@@ -33,12 +33,12 @@
 
 // Field lists shared by several activity endpoints — one
 // definition each, so a row shape is pinned once
-const ACTIVITY_ROW_MY = ["id", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "score", "attachment_path", "attachment_original_name", "created_at", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
-const ACTIVITY_ROW_OWN = ["id", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
+const ACTIVITY_ROW_MY = ["id", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "score", "attachment_path", "attachment_original_name", "created_at", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
+const ACTIVITY_ROW_OWN = ["id", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
 const ACTIVITY_ROW_FULL = ["id", "employee_eid", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "committee_comments", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
 const ACTIVITY_ROW_EVALUATED = ["id", "theme_id", "subtheme_id", "title", "description", "status", "created_at", "updated_at", "rejection_comment", "manager_comments", "committee_comments", "score", "attachment_path", "attachment_original_name", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
 const ACTIVITY_ROW_PENDING = ["id", "theme_id", "subtheme_id", "title", "description", "status", "created_at", "rejection_comment", "manager_comments", "committee_comments", "score", "attachment_path", "attachment_original_name", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
-const ACTIVITY_ROW_CREATED = ["id", "employee_eid", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at"];
+const ACTIVITY_ROW_CREATED = ["id", "employee_eid", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at"];
 const ACTIVITY_FORM = ["theme_id", "subtheme_id", "title", "description", "theme_code", "subtheme_code", "attachment"];
 
 const SUBTHEME_ROW = ["id", "theme_id", "code", "title", "description", "cap"];

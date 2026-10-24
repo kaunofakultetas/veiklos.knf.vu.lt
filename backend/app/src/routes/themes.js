@@ -34,6 +34,7 @@ import { attachRoles } from "../auth/attachRoles.js";
 import { requireActiveRoleIn } from "../auth/requireActiveRole.js";
 import { numberOf, requireIdParam } from "../utils/input.js";
 import { compareCodes } from "../utils/codes.js";
+import { isDataError, MSG_BAD_DATA } from "../utils/dbErrors.js";
 
 
 const router = Router();
@@ -53,6 +54,7 @@ const requireThemeId = requireIdParam("themeId");
 // A theme delete's refusal while activities use the theme —
 // the up-front check and the foreign key give the same one
 const MSG_THEME_IN_USE = "Klaida: negalima ištrinti temos, nes yra su ja susietų veiklų.";
+const MSG_BAD_DESCRIPTION = "Klaida: Netinkamas aprašymas";
 
 
 
@@ -113,7 +115,9 @@ router.get("/", readGuard, async (_req, res) => {
 //
 // Body: { code, title }, both trimmed. 409 on a duplicate
 // code (unique violation 23505). Both must be text that is
-// not blank once trimmed; anything else is the 400.
+// not blank once trimmed; anything else is the 400, and so
+// is a value Postgres refuses to store (a NUL character, a
+// code too long for the unique index).
 //
 // Used by:
 //   - manager/themes.jsx — "Pridėti temą" form
@@ -135,6 +139,7 @@ router.post("/", manageGuard, async (req, res) => {
     res.status(201).json(q.rows[0]);
   } catch (e) {
     if (e.code === "23505") return res.status(409).json({ error: "Klaida: Tema su tokiu kodu jau egzistuoja" });
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
     console.error("POST /api/themes", e);
     res.status(500).json({ error: "internal error" });
   }
@@ -152,9 +157,11 @@ router.post("/", manageGuard, async (req, res) => {
 //
 // Body: { code, title, description? }. 409 on a duplicate
 // subtheme code. Code and title must be text that is not
-// blank once trimmed. A theme that no longer exists (deleted
-// in another tab) is a 404 — the foreign key refuses the
-// INSERT.
+// blank once trimmed; the description, when sent, text or
+// null. A value Postgres refuses to store (a NUL character,
+// a code too long for the unique index) is a 400. A theme
+// that no longer exists (deleted in another tab) is a 404 —
+// the foreign key refuses the INSERT.
 //
 // Used by:
 //   - manager/themes.jsx — "Pridėti potemę" form
@@ -167,6 +174,7 @@ router.post("/:themeId/subthemes", manageGuard, requireThemeId, async (req, res)
     const cleanCode = typeof code === "string" ? code.trim() : "";
     const cleanTitle = typeof title === "string" ? title.trim() : "";
     if (!cleanCode || !cleanTitle) return res.status(400).json({ error: "Klaida: Potemės kodas ir pavadinimas yra privalomi" });
+    if (description != null && typeof description !== "string") return res.status(400).json({ error: MSG_BAD_DESCRIPTION });
 
     const q = await pool.query(
       `INSERT INTO subthemes (theme_id, code, title, description)
@@ -178,6 +186,7 @@ router.post("/:themeId/subthemes", manageGuard, requireThemeId, async (req, res)
   } catch (e) {
     if (e.code === "23505") return res.status(409).json({ error: "Klaida: potemė su tokiu kodu jau egzistuoja" });
     if (e.code === "23503") return res.status(404).json({ error: "Klaida: tema nerasta" });
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
     console.error("POST /api/themes/:themeId/subthemes", e);
     res.status(500).json({ error: "internal error" });
   }

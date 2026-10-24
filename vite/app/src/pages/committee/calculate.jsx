@@ -21,6 +21,13 @@
 //  freshly displayed one; a save updates the open employee's
 //  rows of that theme at once.
 //
+//  Late answers never land on a newer pick: an employee's
+//  rows that arrive after another employee was picked are
+//  dropped, and a save that answers after another theme was
+//  picked does not fill that theme's result box. A refused
+//  employee load empties the table, so the previous
+//  employee's results never show under the new name.
+//
 //  Split into (root component last):
 //
 //    LAYOUT / PANEL / TABLE_STYLE / TH_STYLE / TD_STYLE
@@ -33,7 +40,7 @@
 //    CalculatePage        — state, loads, save (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { apiJson, apiJsonAll, apiSend } from "@/components/api.js";
 import "@/components/employee.css";
 
@@ -535,10 +542,12 @@ function EmployeeResultsTable({ rows, loading }) {
 //
 // Owns the data and the requests: theme totals and the
 // employee list load together on mount, the selected
-// employee's subtheme sums load on selection, and
-// "Skaičiuoti" computes AND persists the point value. The
-// result box only fills after a successful save
-// (hasCalculated), and picking another theme blanks it again.
+// employee's subtheme sums load on selection — only the
+// latest pick's answer is used, and a refusal empties the
+// rows — and "Skaičiuoti" computes AND persists the point
+// value. The result box only fills after a successful save
+// of the theme still picked (hasCalculated, checked against
+// pickedThemeId), and picking another theme blanks it again.
 // One status line (msg) serves every request; msgIsError
 // picks its box — form-status--error for a refused request
 // or a validation refusal, the plain form-status for the
@@ -567,6 +576,11 @@ export default function CalculatePage() {
   const [msgIsError, setMsgIsError] = useState(false);
   const [savingPoint, setSavingPoint] = useState(false);
   const [hasCalculated, setHasCalculated] = useState(false);
+
+  // The theme picked right now, outside the render cycle: a
+  // save that answers after the pick moved on reads it to
+  // tell whether its theme is still the one on screen
+  const pickedThemeId = useRef("");
 
 
   // Theme totals and employees load in parallel on mount
@@ -602,14 +616,15 @@ export default function CalculatePage() {
   }, []);
 
 
-  // Switching themes invalidates the shown point value
+  // The selected employee's per-subtheme sums. Every pick
+  // starts a load of its own; the cleanup marks the one a
+  // newer pick replaced as stale, so an answer arriving late
+  // for an employee no longer picked changes nothing. A
+  // refused load empties the rows: the previous employee's
+  // results must not stay under the new name
   useEffect(() => {
-    setHasCalculated(false);
-  }, [selectedThemeId]);
+    let stale = false;
 
-
-  // The selected employee's per-subtheme sums
-  useEffect(() => {
     const loadSubthemes = async () => {
       if (!selectedEmployeeEid) {
         setEmployeeSubthemes([]);
@@ -621,6 +636,7 @@ export default function CalculatePage() {
 
       try {
         const data = await apiJson(`/api/activities/evaluated/employee/${selectedEmployeeEid}/subthemes`);
+        if (stale) return;
 
         // A non-list 200 body (an object, null, a string)
         // would blow up the results table on the next render
@@ -628,15 +644,20 @@ export default function CalculatePage() {
 
         setEmployeeSubthemes(data);
       } catch (e) {
+        if (stale) return;
         console.error("load employee subthemes error:", e);
+        setEmployeeSubthemes([]);
         setMsg(e.message || "Klaida: Nepavyko užkrauti darbuotojo veiklų skaičiuoklei.");
         setMsgIsError(true);
       } finally {
-        setSubthemesLoading(false);
+        if (!stale) setSubthemesLoading(false);
       }
     };
 
     loadSubthemes();
+    return () => {
+      stale = true;
+    };
   }, [selectedEmployeeEid]);
 
 
@@ -658,6 +679,16 @@ export default function CalculatePage() {
     selectedThemeScoreSum > 0 && selectedThemeTotalSum > 0
       ? selectedThemeTotalSum / selectedThemeScoreSum
       : null;
+
+
+  // Picking a theme blanks the shown point value, which
+  // belongs to the theme it was saved for; the ref follows
+  // the pick at once, before any save in flight can answer
+  const handlePickTheme = (themeId) => {
+    pickedThemeId.current = themeId;
+    setSelectedThemeId(themeId);
+    setHasCalculated(false);
+  };
 
 
   // "Skaičiuoti" both computes AND persists the point value
@@ -698,7 +729,10 @@ export default function CalculatePage() {
         )
       );
 
-      setHasCalculated(true);
+      // The box fills only while the saved theme is still the
+      // one picked: a theme picked during the save was never
+      // saved, so its box stays blank
+      if (pickedThemeId.current === String(selectedTheme.theme_id)) setHasCalculated(true);
       setMsg("1 balo vertė išsaugota.");
       setMsgIsError(false);
     } catch (e) {
@@ -737,7 +771,7 @@ export default function CalculatePage() {
                 <PointValueCalculator
                   themeTotals={themeTotals}
                   selectedThemeId={selectedThemeId}
-                  onSelectTheme={setSelectedThemeId}
+                  onSelectTheme={handlePickTheme}
                   totalSum={selectedThemeTotalSum}
                   scoreSum={selectedThemeScoreSum}
                   valuePerScore={valuePerScore}

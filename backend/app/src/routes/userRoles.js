@@ -16,8 +16,10 @@
 //  for every route — the caller must OWN the Vadybininkas
 //  role; the X-Active-Role header plays no part here, unlike
 //  the other routers. A manager MAY revoke their own
-//  Vadybininkas role (the page confirms it first); the base
-//  "Darbuotojas" role cannot be revoked at all, since
+//  Vadybininkas role (the page confirms it first) — unless
+//  they are its last holder: only a manager administers
+//  roles, so the role must never be left without one. The
+//  base "Darbuotojas" role cannot be revoked at all, since
 //  attachRoles re-grants it on the user's next request.
 //
 //  Used by:
@@ -28,6 +30,7 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { authorize } from "../auth/authorize.js";
 import { emailOf } from "../utils/input.js";
+import { isDataError, MSG_BAD_DATA } from "../utils/dbErrors.js";
 
 
 // The role every signed-in user gets automatically
@@ -35,12 +38,16 @@ import { emailOf } from "../utils/input.js";
 // next request, so it is refused up front
 const BASE_ROLE = "Darbuotojas";
 
+// The role that administers roles — it must keep a holder
+const MANAGER_ROLE = "Vadybininkas";
+
 // Shared response texts — one wording per situation
 const MSG_EMAIL_REQUIRED = "Klaida: Vartotojo el. paštas yra privalomas";
 const MSG_EMAIL_ROLE_REQUIRED = "Klaida: Vartotojo el. paštas ir rolė yra privalomi";
 const MSG_USER_NOT_FOUND = "Klaida: Vartotojas nerastas";
 const MSG_UNKNOWN_ROLE = "Klaida: nežinoma rolė";
 const MSG_BASE_ROLE = `Klaida: rolė ${BASE_ROLE} yra bazinė ir nešalinama`;
+const MSG_LAST_MANAGER = "Klaida: Paskutinio vadybininko pašalinti negalima";
 
 
 const router = Router();
@@ -167,6 +174,7 @@ router.get("/", async (req, res) => {
 
     res.json({ user, roles, allRoles });
   } catch (e) {
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
     console.error("GET /api/user-roles", e);
     res.status(500).json({ error: "internal error" });
   }
@@ -210,6 +218,7 @@ router.post("/assign", async (req, res) => {
 
     res.sendStatus(204);
   } catch (e) {
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
     console.error("POST /api/user-roles/assign", e);
     res.status(500).json({ error: "internal error" });
   }
@@ -228,7 +237,13 @@ router.post("/assign", async (req, res) => {
 // Body: { email, role }. Revokes the role; an unknown role
 // name is treated as already-removed (204), only an unknown
 // user is a 404. The base "Darbuotojas" role is refused with
-// a 400 — attachRoles would hand it straight back anyway.
+// a 400 — attachRoles would hand it straight back anyway —
+// and Vadybininkas with a 409 when the user is its last
+// holder. The revoke runs in a transaction that locks the
+// manager role's holder rows for that check, so two revokes
+// at the same moment (the only two managers revoking each
+// other) run one after the other, the second one seeing the
+// first.
 //
 // Used by:
 //   - manager/roles.jsx — the "Pašalinti" buttons
@@ -246,14 +261,36 @@ router.post("/remove", async (req, res) => {
     const roleId = await findRoleId(input.role);
     if (roleId === null) return res.sendStatus(204);
 
-    await pool.query(
-      `DELETE FROM user_roles
-        WHERE user_eid = $1 AND role_id = $2`,
-      [user.id, roleId]
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      if (input.role === MANAGER_ROLE) {
+        const holders = await client.query(
+          `SELECT user_eid FROM user_roles WHERE role_id = $1 FOR UPDATE`,
+          [roleId]
+        );
+        const eids = holders.rows.map((r) => r.user_eid);
+        if (eids.length === 1 && eids[0] === user.id) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({ error: MSG_LAST_MANAGER });
+        }
+      }
+      await client.query(
+        `DELETE FROM user_roles
+          WHERE user_eid = $1 AND role_id = $2`,
+        [user.id, roleId]
+      );
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
 
     res.sendStatus(204);
   } catch (e) {
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
     console.error("POST /api/user-roles/remove", e);
     res.status(500).json({ error: "internal error" });
   }

@@ -7,26 +7,27 @@
 //  "(nėra)" fallbacks and the buttons its status allows, the
 //  attachment download fetches with the header and hands a
 //  blob URL to a temporary link, delete and resubmit ask for
-//  confirmation and patch the list in place, the review modal
-//  shows the row's values and closes from the button or the
-//  backdrop, the edit mode's inputs are named by their
-//  captions and PATCH multipart with the codes before the
-//  file, refreshing the row and the modal, the client refuses
-//  an incomplete edit and an oversized pick without a
-//  request, and backend errors are shown behind the page's
-//  own prefixes.
+//  confirmation and patch the list in place, each row staying
+//  busy until its own answer, the review modal shows the
+//  row's values and closes from the button or the backdrop,
+//  the edit mode's inputs are named by their captions and
+//  PATCH multipart with the codes before the file, refreshing
+//  the row and the modal, the client refuses an incomplete
+//  edit and an oversized pick — a file the size of the limit
+//  included — without a request, and backend errors are shown
+//  behind the page's own prefixes.
 //
-//  Pinned as expected failures, the known bugs: the dialog is
-//  not tied to the activity it was opened for (the backdrop
-//  closes it mid-save, a late save answer lands in another
-//  activity's dialog, a row opened from the keyboard behind
-//  it takes over the draft), a drag out onto the backdrop
-//  closes it, its messages land behind the overlay, a saved
-//  file pick is sent again, re-picking the theme resets the
-//  subtheme, assistive tech is never told it is a dialog,
-//  one busy delete at a time, a file the size of the limit
-//  passes, and a resubmit answer misses a dialog opened
-//  meanwhile.
+//  The dialog is held to its activity as well: it is a modal
+//  dialog named by its heading that takes the focus, its
+//  backdrop closes it only on a click of its own and never
+//  mid-save, a save or resubmit answer refreshes only a
+//  dialog that shows that activity, a row opened from the
+//  keyboard behind it never takes over the draft, a saved
+//  file pick is not sent again, and re-picking the theme
+//  keeps the subtheme.
+//
+//  The dialog's messages — a refused save, and what it
+//  refuses before sending anything — show inside it.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -55,19 +56,19 @@ const THEMES = [
 // description, E approved
 const ACTIVITIES = [
   { id: 101, theme_id: 1, subtheme_id: 11, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.1.", subtheme_title: "Paskaitos",
-    title: "Kursas A", description: "Aprašas A", status: "PATEIKTA", rejection_comment: null, manager_comments: null, score: null,
+    title: "Kursas A", description: "Aprašas A", status: "PATEIKTA", rejection_comment: null, score: null,
     attachment_path: "uploads/1_1.1_ataskaita.pdf", attachment_original_name: "ataskaita.pdf", created_at: "2026-03-05T10:20:00Z" },
   { id: 102, theme_id: 1, subtheme_id: 12, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.2.", subtheme_title: "Seminarai",
-    title: "Seminaras B", description: "", status: "TIKSLINTI", rejection_comment: "Patikslinkite datą", manager_comments: null, score: null,
+    title: "Seminaras B", description: "", status: "TIKSLINTI", rejection_comment: "Patikslinkite datą", score: null,
     attachment_path: null, attachment_original_name: null, created_at: "2026-03-06T09:00:00Z" },
   { id: 103, theme_id: 2, subtheme_id: 21, theme_code: "2.", theme_title: "Mokslas", subtheme_code: "2.1.", subtheme_title: "Straipsniai",
-    title: "Straipsnis C", description: "Aprašas C", status: "ĮVERTINTA", rejection_comment: null, manager_comments: "Tinka", score: "4.5",
+    title: "Straipsnis C", description: "Aprašas C", status: "ĮVERTINTA", rejection_comment: null, score: "4.5",
     attachment_path: "uploads/2_2.1_x.pdf", attachment_original_name: null, created_at: "2026-03-07T12:00:00Z" },
   { id: 104, theme_id: 2, subtheme_id: 21, theme_code: "2.", theme_title: "Mokslas", subtheme_code: "2.1.", subtheme_title: "Straipsniai",
-    title: "Projektas D", description: null, status: "ATMESTA", rejection_comment: "Netinka temai", manager_comments: null, score: null,
+    title: "Projektas D", description: null, status: "ATMESTA", rejection_comment: "Netinka temai", score: null,
     attachment_path: null, attachment_original_name: null, created_at: "2026-03-08T12:00:00Z" },
   { id: 105, theme_id: 1, subtheme_id: 11, theme_code: "1.", theme_title: "Studijos", subtheme_code: "1.1.", subtheme_title: "Paskaitos",
-    title: "Renginys E", description: "Aprašas E", status: "PATVIRTINTA", rejection_comment: null, manager_comments: "Patvirtinta", score: null,
+    title: "Renginys E", description: "Aprašas E", status: "PATVIRTINTA", rejection_comment: null, score: null,
     attachment_path: null, attachment_original_name: null, created_at: "2026-03-09T12:00:00Z" },
 ];
 
@@ -373,18 +374,17 @@ test("a refused DELETE shows the prefixed reason and keeps the row", async () =>
 
 
 // -----------------------------------------------------------
-// BUG — one busy delete at a time
+// concurrent deletes
 // -----------------------------------------------------------
 //
-// The page keeps a single deleting id for the whole table,
-// so a delete started on a second row while the first is
-// still in flight takes the busy state over: the first row's
-// button turns back into an enabled "Ištrinti" although its
-// request has not answered. Every row whose delete is in
-// flight should stay busy until its own answer arrives.
+// The busy flags are kept per row, so a delete started on a
+// second row while the first is still in flight leaves the
+// first row's button disabled on "Šalinama…": every row whose
+// delete is in flight stays busy until its own answer
+// arrives.
 // -----------------------------------------------------------
 
-test.fails("BUG: a row whose delete is in flight stays busy while another row's delete starts", async () => {
+test("a row whose delete is in flight stays busy while another row's delete starts", async () => {
   onRequest("DELETE", "/api/activities/101", () => new Promise(() => {}));
   onRequest("DELETE", "/api/activities/102", () => new Promise(() => {}));
   const { user } = mountPage();
@@ -474,18 +474,17 @@ test("a refused resubmit shows the prefixed reason and keeps the row as it was",
 
 
 // -----------------------------------------------------------
-// BUG — a resubmit answer misses the dialog opened meanwhile
+// resubmit into a dialog opened meanwhile
 // -----------------------------------------------------------
 //
-// A resubmit refreshes the open dialog only when that dialog
-// was open at the moment of the click: the handler compares
-// the answer with the selection it saw then. A dialog opened
-// for the same activity while the request is in flight keeps
-// showing TIKSLINTI after the row has turned PATEIKTA. The
-// dialog should follow the answer the way the row does.
+// A resubmit answer refreshes the dialog that shows its
+// activity when the answer arrives, not only one that was
+// already open at the click: a dialog opened for the same
+// activity while the request is in flight follows the answer
+// to PATEIKTA the way the row does.
 // -----------------------------------------------------------
 
-test.fails("BUG: a resubmit answered while the activity's dialog is open shows the new status in the dialog", async () => {
+test("a resubmit answered while the activity's dialog is open shows the new status in the dialog", async () => {
   const resubmit = deferred();
   onRequest("POST", "/api/activities/102/resubmit", resubmit.reply);
   const { user } = mountPage();
@@ -561,19 +560,18 @@ test("Peržiūrėti opens the modal with the row's values; Uždaryti and the bac
 
 
 // -----------------------------------------------------------
-// BUG — a drag out onto the backdrop closes the dialog
+// drag onto the backdrop
 // -----------------------------------------------------------
 //
-// The backdrop closes the dialog on any click that reaches
-// it, and the browser sends the click of a press and release
-// to the closest element that holds both ends. A text
-// selection started inside the dialog — in the description
-// while editing — and let go over the backdrop therefore
-// closes the dialog and throws the draft away. Only a click
-// that starts and ends on the backdrop should close it.
+// The browser sends the click of a press and release to the
+// closest element that holds both ends, so a text selection
+// started in the description while editing and let go over
+// the backdrop ends in a click on the backdrop. Only a click
+// that starts and ends on the backdrop closes the dialog;
+// this one keeps the dialog and the draft.
 // -----------------------------------------------------------
 
-test.fails("BUG: a selection dragged from the description out onto the backdrop keeps the dialog and the draft", async () => {
+test("a selection dragged from the description out onto the backdrop keeps the dialog and the draft", async () => {
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -594,19 +592,17 @@ test.fails("BUG: a selection dragged from the description out onto the backdrop 
 
 
 // -----------------------------------------------------------
-// BUG — the review dialog is not a dialog
+// dialog semantics
 // -----------------------------------------------------------
 //
-// The review/edit modal is a plain div laid over the page,
-// with no dialog role, no modal flag and no accessible name,
-// and the focus stays on the row's Peržiūrėti button behind
-// the overlay: a screen reader is never told that a dialog
-// opened, and the keyboard keeps working the page beneath.
-// It should be a modal dialog named by its heading that
-// takes the focus when it opens.
+// The review/edit modal is a modal dialog named by its
+// heading, and the focus moves into it when it opens, so a
+// screen reader is told that a dialog opened and the
+// keyboard starts inside it rather than on the row's
+// Peržiūrėti button behind the overlay.
 // -----------------------------------------------------------
 
-test.fails("BUG: Peržiūrėti opens a dialog named by its heading that holds the focus", async () => {
+test("Peržiūrėti opens a dialog named by its heading that holds the focus", async () => {
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -632,7 +628,8 @@ test.fails("BUG: Peržiūrėti opens a dialog named by its heading that holds th
 // theme_id, subtheme_id, title, description, theme_code,
 // subtheme_code and then the file, only the role header, and
 // the returned copy replaces the row and the modal, back in
-// view mode, with "Veikla sėkmingai atnaujinta.".
+// view mode, which confirms "Veikla sėkmingai atnaujinta." on
+// its own status line.
 // -----------------------------------------------------------
 
 test("Redaguoti → Išsaugoti PATCHes multipart with the codes before the file and refreshes the row and modal", async () => {
@@ -673,7 +670,7 @@ test("Redaguoti → Išsaugoti PATCHes multipart with the codes before the file 
 
   await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
 
-  expect(await screen.findByText("Veikla sėkmingai atnaujinta.")).toBeInTheDocument();
+  expect(await within(m).findByText("Veikla sėkmingai atnaujinta.")).not.toHaveClass("form-status--error");
   const [patch] = requestsTo("PATCH", "/api/activities/102");
   expect(patch.headers).toEqual({ "x-active-role": "Darbuotojas" });
   expect(patch.body).toBeInstanceOf(FormData);
@@ -743,17 +740,17 @@ test("an edit without a file keeps the current attachment: no attachment field, 
 
 
 // -----------------------------------------------------------
-// BUG — the backdrop closes the dialog mid-save
+// backdrop mid-save
 // -----------------------------------------------------------
 //
 // While a save is in flight the dialog disables its own
-// Uždaryti and Išsaugoti, yet a click on the backdrop still
-// closes it, and the late answer then pops a fresh dialog
-// open on the saved activity. The backdrop should stay as
-// shut as Uždaryti until the save has answered.
+// Uždaryti and Išsaugoti, and the backdrop stays as shut: a
+// click on it leaves the dialog open, and the answer then
+// lands in that same dialog, back in view mode on the saved
+// values.
 // -----------------------------------------------------------
 
-test.fails("BUG: a click on the backdrop while a save is in flight leaves the dialog open", async () => {
+test("a click on the backdrop while a save is in flight leaves the dialog open", async () => {
   const save = deferred();
   onRequest("PATCH", "/api/activities/101", save.reply);
   const { user } = mountPage();
@@ -781,19 +778,17 @@ test.fails("BUG: a click on the backdrop while a save is in flight leaves the di
 
 
 // -----------------------------------------------------------
-// BUG — a late save answer takes over another dialog
+// late save answer
 // -----------------------------------------------------------
 //
-// The page hands every save answer to whatever dialog is
-// open, and the dialog carries no key, so it is not tied to
-// the activity it was opened for. Closed mid-save and
-// followed by another row's dialog, the late answer swaps the
-// saved activity into that dialog, which still holds the
-// other activity's state. A save answer should only refresh a
-// dialog opened for its own activity.
+// The dialog is keyed by its activity, and a save answer
+// refreshes the dialog only while it still shows the saved
+// activity. With another row's dialog opened while the save
+// is in flight, the answer updates the saved row in the
+// table and leaves the other dialog on its own activity.
 // -----------------------------------------------------------
 
-test.fails("BUG: a save answered after another activity's dialog was opened leaves that dialog on its own activity", async () => {
+test("a save answered after another activity's dialog was opened leaves that dialog on its own activity", async () => {
   const save = deferred();
   onRequest("PATCH", "/api/activities/101", save.reply);
   const { user } = mountPage();
@@ -820,19 +815,18 @@ test.fails("BUG: a save answered after another activity's dialog was opened leav
 
 
 // -----------------------------------------------------------
-// BUG — the keyboard swaps the activity under an open draft
+// another row opened from the keyboard
 // -----------------------------------------------------------
 //
-// Nothing keeps the keyboard inside the dialog, so the focus
-// can reach the rows behind it. Opening another row from
-// there points the open dialog at that activity while it
-// keeps the draft typed for the first one, still in edit
-// mode, and Išsaugoti then writes that draft over the second
-// activity. A draft must only ever be saved to the activity
-// it was typed for.
+// Nothing traps the focus inside the dialog, so the keyboard
+// can still reach the rows behind it. Opening another row
+// from there mounts a fresh dialog for that activity — the
+// draft typed for the first one leaves with the old dialog —
+// so whatever is saved next goes to the second activity with
+// its own values, never with the first one's draft.
 // -----------------------------------------------------------
 
-test.fails("BUG: a draft is never saved to another activity opened from the keyboard behind the dialog", async () => {
+test("a draft is never saved to another activity opened from the keyboard behind the dialog", async () => {
   onRequest("PATCH", /^\/api\/activities\/\d+$/, (req) =>
     ownRowReply(ACTIVITIES.find((act) => req.path === `/api/activities/${act.id}`), { title: req.body.get("title") }));
   const { user } = mountPage();
@@ -862,17 +856,17 @@ test.fails("BUG: a draft is never saved to another activity opened from the keyb
 
 
 // -----------------------------------------------------------
-// BUG — a saved attachment pick is sent again
+// attachment pick after a save
 // -----------------------------------------------------------
 //
-// The dialog outlives a save and its picked file is reset
-// only by a new pick, so after a save that replaced the
-// attachment the next Redaguoti still names that file as
-// newly picked, and the next save uploads it once more.
-// Every edit should start with no file picked.
+// The dialog outlives a save, and a successful save clears
+// the picked file along with the edit form: after a save
+// that replaced the attachment, the next Redaguoti names the
+// new current file and no pick, and the next save sends no
+// attachment.
 // -----------------------------------------------------------
 
-test.fails("BUG: after a save that replaced the attachment, the next edit starts with no file picked and sends none", async () => {
+test("after a save that replaced the attachment, the next edit starts with no file picked and sends none", async () => {
   onRequest("PATCH", "/api/activities/101", (req) => ownRowReply(ACTIVITIES[0], {
     title: req.body.get("title"), attachment_path: "uploads/1_1.1_naujas.pdf", attachment_original_name: "naujas.pdf",
   }));
@@ -904,18 +898,17 @@ test.fails("BUG: after a save that replaced the attachment, the next edit starts
 
 
 // -----------------------------------------------------------
-// BUG — re-picking the shown theme resets the subtheme
+// theme re-pick
 // -----------------------------------------------------------
 //
 // The picker reports a click on the option already selected
-// like any other pick, and the dialog answers every theme
-// pick by preselecting that theme's first subtheme. Opening
-// the theme list and clicking the theme already shown thus
-// silently swaps the activity's subtheme for the first one.
-// Picking the same theme again should change nothing.
+// like any other pick. The dialog ignores a theme pick that
+// names the theme already shown, so opening the theme list
+// and clicking that theme keeps the activity's subtheme
+// instead of swapping it for the theme's first.
 // -----------------------------------------------------------
 
-test.fails("BUG: picking the theme already shown keeps the activity's subtheme", async () => {
+test("picking the theme already shown keeps the activity's subtheme", async () => {
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 
@@ -1050,17 +1043,17 @@ test("an oversized pick in edit mode is refused and cleared; a valid pick replac
 
 
 // -----------------------------------------------------------
-// BUG — a file the size of the limit passes the edit dialog
+// file at the limit
 // -----------------------------------------------------------
 //
-// The dialog refuses a pick only when it is larger than the
-// 100 MB limit, while the backend refuses a file that
-// reaches the limit, so a file of exactly that size is taken
-// here, uploaded in full and only then turned away. The
-// dialog should refuse it at the pick, like any larger file.
+// The backend refuses a file that reaches the 100 MB limit,
+// not only a larger one, so the dialog refuses a pick of
+// exactly that size at the pick, like any larger file,
+// rather than upload it in full only to have it turned away;
+// the following save goes out without an attachment.
 // -----------------------------------------------------------
 
-test.fails("BUG: a file the size of the 100 MB limit is refused at the pick in edit mode and never sent", async () => {
+test("a file the size of the 100 MB limit is refused at the pick in edit mode and never sent", async () => {
   onRequest("PATCH", "/api/activities/101", ownRowReply(ACTIVITIES[0], { title: "Kursas A1" }));
   const { user } = mountPage();
   await screen.findByText("Kursas A");
@@ -1124,17 +1117,15 @@ test("a refused PATCH shows the prefixed reason and keeps the draft in edit mode
 
 
 // -----------------------------------------------------------
-// BUG — a refused save is reported behind the dialog
+// a refused save is reported in the dialog
 // -----------------------------------------------------------
 //
-// The dialog has no message area of its own: everything it
-// reports goes to the page's status line under the table,
-// which sits behind the overlay, so a refused save looks as
-// if nothing happened. The dialog should show the refusal
-// inside itself.
+// A save the backend refuses is reported on the dialog's own
+// status line, inside the box, with the backend's reason
+// behind the page's own prefix.
 // -----------------------------------------------------------
 
-test.fails("BUG: a refused save is reported inside the dialog", async () => {
+test("a refused save is reported inside the dialog", async () => {
   // The backend's wording, "Klaida:" included — shown once
   onRequest("PATCH", "/api/activities/102", { status: 400, body: { error: "Klaida: Neteisinga potemė" } });
   const { user } = mountPage();
@@ -1156,17 +1147,15 @@ test.fails("BUG: a refused save is reported inside the dialog", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — the dialog's own refusals land behind it
+// the dialog's own refusals show in it
 // -----------------------------------------------------------
 //
-// The same goes for what the dialog refuses before sending
-// anything — an incomplete draft and a file over the limit:
-// the message goes to the page's status line behind the
-// overlay while the dialog shows nothing. Both should appear
-// inside the dialog.
+// What the dialog refuses before sending anything — an
+// incomplete draft, an oversized pick — shows inside it too,
+// and nothing is sent.
 // -----------------------------------------------------------
 
-test.fails("BUG: an incomplete draft and an oversized pick are refused inside the dialog", async () => {
+test("an incomplete draft and an oversized pick are refused inside the dialog", async () => {
   const { user } = mountPage();
   await screen.findByText("Kursas A");
 

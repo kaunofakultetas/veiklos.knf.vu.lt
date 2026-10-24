@@ -11,13 +11,6 @@
 //  titles, a theme that is gone, and numbers that are not
 //  numbers.
 //
-//  Pinned as expected failures until they are fixed, the
-//  known bugs: codes too long for their unique index, NUL
-//  characters in a code, title or description, subtheme
-//  descriptions that are not text, a theme delete whose
-//  dropped connection ends the process, and committee numbers
-//  too large to be finite.
-//
 //  verifySamlSession/attachRoles are mocked
 //  (helpers/authMock.js); requireActiveRoleIn is the real
 //  one.
@@ -774,7 +767,9 @@ test("DELETE /:id: an activity added after the check → 409 and ROLLBACK, not 5
 // client nobody listens to, Node's EventEmitter throws it.
 // From then on every statement fails, as on a pg client that
 // is no longer queryable. Statements before the drop go to
-// the fake database, scripted and logged as usual.
+// the fake database, scripted and logged as usual. It is
+// handed out the way pg-pool hands out a new client, with
+// the pool's connect and acquire events.
 //
 // Used by:
 //   - the BUG pin on the theme delete losing its connection
@@ -802,6 +797,8 @@ function droppingClient(failAt) {
     });
   };
   client.release = () => {};
+  pool.emit("connect", client);
+  pool.emit("acquire", client);
   return client;
 }
 
@@ -812,31 +809,23 @@ function droppingClient(failAt) {
 
 
 // -----------------------------------------------------------
-// BUG — the connection drops during a theme delete
+// DELETE /:id — the connection drops mid-transaction
 // -----------------------------------------------------------
 //
 // The theme delete runs its transaction on a client of its
-// own, taken from the pool. While a client is checked out the
-// pool stops listening for its errors, and the route adds no
-// listener of its own, so when the database goes away
-// mid-transaction pg's 'error' event on that client has
-// nobody to hear it: Node's EventEmitter throws it outside
-// the request, and the whole backend process ends. The delete
-// must fail like any other database error — a 500, and
-// nothing thrown. The fake client drops its connection at the
-// theme DELETE, and a plain query of that statement fails the
-// same way; the test holds the process's uncaughtException
-// listeners while the request runs, so an escaping error is
-// caught and asserted on here instead of reaching the test
-// runner.
+// own; db/pool.js gives every client an error listener when
+// the pool creates it, so a database going away
+// mid-transaction reaches the route only as its query's
+// rejection: a 500, and nothing thrown outside the request.
+// The fake client is handed out like a new pg-pool client and
+// drops its connection at the theme DELETE; the test holds
+// the process's uncaughtException listeners while the request
+// runs.
 // -----------------------------------------------------------
 
 test(
-  "BUG: DELETE /:id: the connection drops mid-transaction → 500, nothing thrown outside the request",
-  {
-    todo: "known bug: DELETE /api/themes/:id runs its transaction on a pool.connect() client with no 'error' listener — when the connection drops, pg emits 'error' on that client, the EventEmitter throws it as an uncaught exception and the process ends",
-    timeout: 10_000,
-  },
+  "DELETE /:id: the connection drops mid-transaction → 500, nothing thrown outside the request",
+  { timeout: 10_000 },
   async () => {
     manager();
     onQuery(/^(BEGIN|COMMIT|ROLLBACK)$/, { rowCount: 0 });
@@ -1038,21 +1027,16 @@ function refusedLikePostgres(codeAt, indexName, answer) {
 
 
 // -----------------------------------------------------------
-// BUG — a theme code too long for its unique index
+// POST / — a code too long for the unique index
 // -----------------------------------------------------------
 //
-// Theme codes are unique, so every code is also an entry in a
-// btree index, and an entry cannot pass the btree limit of
-// 2704 bytes. A longer code fails the INSERT with Postgres's
-// program-limit error; the route checks only that the code is
-// not blank and maps only the duplicate-code error, so the
-// manager gets a 500. A code that long is bad input — the
-// usual 400 that says so.
+// Postgres cannot index a code thousands of characters long
+// under the unique constraint (SQLSTATE 54000); such a code
+// is bad input, answered 400.
 // -----------------------------------------------------------
 
 test(
-  "BUG: POST /: a code too long for the unique index → 400, not 500",
-  { todo: "known bug: POST /api/themes checks the code only for blankness — a code past the btree entry limit fails the INSERT with SQLSTATE 54000 (index row size exceeds btree version 4 maximum 2704), which is not mapped and answers 500" },
+  "POST /: a code too long for the unique index → 400, not 500",
   async () => {
     manager();
     onQuery(/^INSERT INTO themes/, refusedLikePostgres(0, "themes_code_key", (sql, params) => [
@@ -1076,19 +1060,16 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — a subtheme code too long for its unique index
+// POST /:themeId/subthemes — a code past the index
 // -----------------------------------------------------------
 //
-// A subtheme code is unique within its theme, so it is an
-// entry in a btree index too and meets the same limit: a code
-// past it fails the INSERT with the program-limit error, and
-// the route, which maps only a duplicate code and a missing
-// theme, answers 500. It must be the usual 400.
+// The same holds for a subtheme code under the per-theme
+// unique constraint: Postgres refuses the INSERT, answered
+// 400.
 // -----------------------------------------------------------
 
 test(
-  "BUG: POST /:themeId/subthemes: a code too long for the unique index → 400, not 500",
-  { todo: "known bug: POST /api/themes/:themeId/subthemes checks the code only for blankness — a code past the btree entry limit fails the INSERT with SQLSTATE 54000, which is not mapped (only 23505 and 23503 are) and answers 500" },
+  "POST /:themeId/subthemes: a code too long for the unique index → 400, not 500",
   async () => {
     manager();
     onQuery(/^INSERT INTO subthemes/, refusedLikePostgres(1, "subthemes_theme_id_code_key", (sql, params) => [
@@ -1110,19 +1091,15 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — a NUL character in a theme's code or title
+// POST / — a NUL character
 // -----------------------------------------------------------
 //
-// Postgres refuses text that holds a NUL character, and the
-// code and title reach the INSERT as sent once trimmed, so
-// either one with a NUL in it fails the statement and the
-// manager gets a 500. Such text is bad input — the usual
-// 400.
+// A code or title holding the NUL character makes Postgres
+// refuse the INSERT; it is answered 400 as bad input.
 // -----------------------------------------------------------
 
 test(
-  "BUG: POST /: a NUL character in the code or the title → 400, not 500",
-  { todo: "known bug: POST /api/themes binds code and title as sent — Postgres refuses U+0000 in text with SQLSTATE 22021 (invalid byte sequence for encoding \"UTF8\": 0x00), which is not mapped and answers 500" },
+  "POST /: a NUL character in the code or the title → 400, not 500",
   async () => {
     for (const body of [
       { code: "9.\u0000", title: "Tema" },
@@ -1146,18 +1123,16 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — a NUL character in a subtheme's text
+// POST /:themeId/subthemes — a NUL character
 // -----------------------------------------------------------
 //
-// The same refusal on the subtheme create, which sends the
-// code, the title and the description to Postgres as they
-// came: a NUL character in any of the three fails the INSERT
-// and answers 500 instead of the usual 400.
+// A code, title or description holding the NUL character
+// makes Postgres refuse the INSERT; it is answered 400 as bad
+// input.
 // -----------------------------------------------------------
 
 test(
-  "BUG: POST /:themeId/subthemes: a NUL character in the code, title or description → 400, not 500",
-  { todo: "known bug: POST /api/themes/:themeId/subthemes binds code, title and description as sent — Postgres refuses U+0000 in text with SQLSTATE 22021, which is not mapped and answers 500" },
+  "POST /:themeId/subthemes: a NUL character in the code, title or description → 400, not 500",
   async () => {
     for (const body of [
       { code: "9.1.\u0000", title: "Potemė" },
@@ -1182,21 +1157,17 @@ test(
 
 
 // -----------------------------------------------------------
-// BUG — a subtheme description that is not text
+// POST /:themeId/subthemes — a description not text
 // -----------------------------------------------------------
 //
-// The description is optional, and whatever arrives in it is
-// inserted as it is: a number, a boolean, an array or an
-// object is turned into text by the driver and stored with a
-// 201. Like an activity's description it must be text or
-// absent — anything else is the usual 400 with nothing
-// inserted, while a missing or null description and a string
-// keep their 201.
+// The description, when sent, is text or null: a number, a
+// boolean, a list or an object is refused with a 400 and
+// nothing is inserted, rather than stored as whatever text pg
+// makes of it.
 // -----------------------------------------------------------
 
 test(
-  "BUG: POST /:themeId/subthemes: a description that is not a string → 400, nothing inserted",
-  { todo: "known bug: POST /api/themes/:themeId/subthemes binds description ?? null unchecked — 5, true, [\"a\"] and {lt:\"x\"} are stored as text and answered 201" },
+  "POST /:themeId/subthemes: a description that is not a string → 400, nothing inserted",
   async () => {
     const inserted = (sql, params) => [
       { id: 10, theme_id: 1, code: params[1], title: params[2], description: params[3], cap: null },
@@ -1269,20 +1240,17 @@ test("cap, total sum and point value: blank strings, booleans, arrays and hex st
 
 
 // -----------------------------------------------------------
-// BUG — committee numbers too large to be finite
+// cap, total sum and point value — past finite
 // -----------------------------------------------------------
 //
-// A decimal written out in a string passes numberOf, but a
-// string of hundreds of digits converts to Infinity, which is
-// not negative — so cap, total sum and point value all store
-// it, the NUMERIC columns accepting Infinity, and every sum
-// and point value computed from it is wrecked. It must be the
-// usual 400, with nothing written.
+// A decimal string of hundreds of digits is no amount the
+// committee can mean: numberOf refuses it, so each PATCH
+// answers 400 and runs no UPDATE rather than storing
+// Infinity.
 // -----------------------------------------------------------
 
 test(
-  "BUG: cap, total sum and point value: a decimal string too large to be finite → 400, no UPDATE",
-  { todo: "known bug: numberOf turns a decimal string of 400 nines into Infinity, which passes the routes' only check (num < 0), so the UPDATE stores NUMERIC 'Infinity' and answers 200" },
+  "cap, total sum and point value: a decimal string too large to be finite → 400, no UPDATE",
   async () => {
     for (const [url, field] of [
       ["/api/themes/subthemes/10/cap", "cap"],

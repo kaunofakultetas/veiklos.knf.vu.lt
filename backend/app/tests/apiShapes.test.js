@@ -45,12 +45,12 @@ import path from "node:path";
 const SRC = new URL("../src/", import.meta.url).pathname;
 
 // Row field lists several activity routes share — pinned once
-const ACT_MY = ["id", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "score", "attachment_path", "attachment_original_name", "created_at", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
-const ACT_OWN = ["id", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
+const ACT_MY = ["id", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "score", "attachment_path", "attachment_original_name", "created_at", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
+const ACT_OWN = ["id", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
 const ACT_FULL = ["id", "employee_eid", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "committee_comments", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
 const ACT_EVALUATED = ["id", "theme_id", "subtheme_id", "title", "description", "status", "created_at", "updated_at", "rejection_comment", "manager_comments", "committee_comments", "score", "attachment_path", "attachment_original_name", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
 const ACT_PENDING = ["id", "theme_id", "subtheme_id", "title", "description", "status", "created_at", "rejection_comment", "manager_comments", "committee_comments", "score", "attachment_path", "attachment_original_name", "full_name", "theme_code", "theme_title", "subtheme_code", "subtheme_title"];
-const ACT_CREATED = ["id", "employee_eid", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "manager_comments", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at"];
+const ACT_CREATED = ["id", "employee_eid", "theme_id", "subtheme_id", "title", "description", "status", "rejection_comment", "score", "attachment_path", "attachment_original_name", "created_at", "updated_at"];
 const ACT_FORM = ["theme_id", "subtheme_id", "title", "description"];
 const SUBTHEME = ["id", "theme_id", "code", "title", "description", "cap"];
 const OWNER_STATUS = ["employee_eid", "status"];
@@ -98,7 +98,14 @@ const SHAPES = {
     sends: "object", response: { keys: ["user", "roles", "allRoles"], nested: { user: { helper: "findUserByEmail", n: 0 } } },
   },
   "POST /api/user-roles/assign": { file: "routes/userRoles.js", at: 'router.post("/assign"', reads: { body: ["email", "role"], via: ["readEmailAndRole"] }, sql: [{ helper: "findRoleId", n: 0, out: ["id"] }, { n: 0, out: null }], sends: "none", response: { none: true } },
-  "POST /api/user-roles/remove": { file: "routes/userRoles.js", at: 'router.post("/remove"', reads: { body: ["email", "role"], via: ["readEmailAndRole"] }, sql: [{ n: 0, out: null }], sends: "none", response: { none: true } },
+  "POST /api/user-roles/remove": {
+    file: "routes/userRoles.js", at: 'router.post("/remove"', reads: { body: ["email", "role"], via: ["readEmailAndRole"] },
+    // the transaction: BEGIN, the manager role's holders
+    // read locked, ROLLBACK for its last holder, the DELETE,
+    // COMMIT, ROLLBACK on failure
+    sql: [{ n: 0, out: null }, { n: 1, out: ["user_eid"] }, { n: 2, out: null }, { n: 3, out: null }, { n: 4, out: null }, { n: 5, out: null }],
+    sends: "none", response: { none: true },
+  },
 
   // ---- routes/themes.js
   "GET /api/themes": {

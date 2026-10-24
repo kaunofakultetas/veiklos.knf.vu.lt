@@ -8,13 +8,19 @@
 //  answer that is either what the page asked for or a
 //  refusal whose `error` text the page shows. A refusal
 //  becomes a thrown Error carrying the backend's text, else
-//  the caller's fallback, else the HTTP status. The backend
-//  starts most of its texts with "Klaida:", so a page that
-//  wraps one in a "Klaida: …" sentence of its own takes
-//  reasonOf it, or the word would show twice.
+//  the caller's fallback, else the HTTP status. A call that
+//  gets no answer at all — offline, or the backend out of
+//  reach — throws the caller's fallback, else the client's
+//  own Lithuanian sentence saying the server could not be
+//  reached, never the browser's English error. The backend
+//  starts most of its texts with "Klaida:", as does that
+//  sentence, so a page that wraps one in a "Klaida: …"
+//  sentence of its own takes reasonOf it, or the word would
+//  show twice.
 //
 //  Split into:
 //
+//    UNREACHABLE        — the text for a call with no answer
 //    request            — the one fetch and the refusal check
 //    apiJson            — a call answered with JSON
 //    apiJsonAll         — several at once, refusals in order
@@ -24,6 +30,11 @@
 // -----------------------------------------------------------
 
 import { getActiveRole } from "./activeRole.js";
+
+
+// What a call that got no answer at all throws when its
+// caller passed no fallback of its own
+const UNREACHABLE = "Klaida: nepavyko susisiekti su serveriu.";
 
 
 
@@ -40,9 +51,13 @@ import { getActiveRole } from "./activeRole.js";
 // body, whose multipart Content-Type the browser sets),
 // activeRole (false for the routes the session alone
 // guards) and fallback (the text for a refusal without one
-// of its own). Resolves to the Response when it is a 2xx and
-// throws the refusal otherwise; a refusal's body that is not
-// JSON counts as one without a text.
+// of its own, and for a call that got no answer). Resolves
+// to the Response when it is a 2xx and throws the refusal
+// otherwise: the backend's text, else the fallback, else the
+// HTTP status — a refusal's body that is not JSON counts as
+// one without a text. When fetch itself fails it throws the
+// fallback, else UNREACHABLE, with the browser's own error
+// kept as the cause.
 //
 // Used by:
 //   - apiJson, apiSend, downloadAttachment (below)
@@ -60,7 +75,15 @@ async function request(path, { method = "GET", json, form, activeRole = true, fa
     body = JSON.stringify(json);
   }
 
-  const res = await fetch(path, { method, headers, body });
+  // No answer at all: the browser's own error is English and
+  // names nothing a user could act on
+  let res;
+  try {
+    res = await fetch(path, { method, headers, body });
+  } catch (e) {
+    throw new Error(fallback || UNREACHABLE, { cause: e });
+  }
+
   if (!res.ok) {
     const data = await res.json().catch(() => null);
     throw new Error(data?.error || fallback || `${res.status} ${res.statusText}`);
@@ -80,8 +103,8 @@ async function request(path, { method = "GET", json, form, activeRole = true, fa
 //
 // A call whose answer the page reads: resolves to the parsed
 // JSON — {} when a 2xx body is not JSON, so the page's own
-// shape checks refuse it — and throws a refusal. Options as
-// for request.
+// shape checks refuse it — and throws a refusal, or the text
+// for no answer at all. Options as for request.
 //
 // Used by:
 //   - apiJsonAll (below)
@@ -143,7 +166,8 @@ export async function apiJsonAll(calls) {
 // A call whose answer the page does not read — a 204 from a
 // delete or a role change, or a save the page then shows from
 // its own state: resolves once the backend has said yes,
-// throws a refusal. Options as for request.
+// throws a refusal, or the text for no answer at all.
+// Options as for request.
 //
 // Used by:
 //   - employee/newActivity.jsx — submitting an activity
@@ -174,7 +198,7 @@ export async function apiSend(path, options) {
 // handed to a temporary link under its original name —
 // "priedas" when there is none — and the object URL let go
 // again. Throws a refusal, the backend's "no attachment"
-// included.
+// included, or the text for no answer at all.
 //
 // Used by:
 //   - employee/myActivities.jsx, manager/review.jsx,

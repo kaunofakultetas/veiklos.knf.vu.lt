@@ -3,26 +3,27 @@
 //
 //  The PATVIRTINTA queue against the scripted fetch: the
 //  queue loads with the committee's X-Active-Role and renders
-//  rows with status pills, the review modal shows the row's
-//  read-only fields (muted placeholders for what is missing),
-//  "Grąžinti vadybininkei" asks for the reason and PATCHes
-//  { action: "return", committee_comments } — an empty
-//  reason is refused without a request — scoring derives 1/n
-//  from the people count, refuses an empty or negative count
-//  without a request, PATCHes { action: "score", … } and
-//  closes the modal only when the status left PATVIRTINTA,
-//  backend errors — a refused download included — are shown
-//  as "Klaida: …", the attachment travels through fetch with
-//  the header, and the modal's comments box and people count
+//  rows with status pills, the review modal — a dialog named
+//  by its title that takes the focus and gives it back —
+//  shows the row's read-only fields (muted placeholders for
+//  what is missing), "Grąžinti vadybininkei" asks for the
+//  reason and PATCHes { action: "return", committee_comments
+//  } — an empty reason is refused without a request — scoring
+//  derives 1/n from the people count and previews nothing for
+//  a cleared or fractional one, refuses an empty, negative or
+//  fractional count without a request, PATCHes { action:
+//  "score", … } and closes the modal only when the status
+//  left PATVIRTINTA, the backdrop leaves the modal open while
+//  a save is pending, a save's answer leaves a row opened in
+//  the meantime alone, a success answer that is not JSON is
+//  refused, opening a row clears the status line, backend
+//  errors — a refused download included — are shown as
+//  "Klaida: …", the attachment travels through fetch with the
+//  header, and the modal's comments box and people count
 //  answer to their labels.
 //
-//  Pinned as expected failures, the known bugs: a cleared
-//  people count that previews a score, a fractional count
-//  that is saved, the modal's refusals shown behind its
-//  overlay, the saved confirmation styled as an error, a
-//  status line left over when another row opens, the
-//  backdrop closing the modal mid-save, and a success answer
-//  that is not JSON taken as saved.
+//  The modal's refusals show on its own status line, and
+//  the saved confirmation is not styled as an error.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -228,6 +229,40 @@ test("Peržiūrėti opens the read-only modal; placeholders for missing fields; 
 
 
 // -----------------------------------------------------------
+// the modal is a dialog
+// -----------------------------------------------------------
+//
+// The review modal is a modal dialog named by its title: the
+// focus moves into it when it opens and goes back to the
+// row's "Peržiūrėti" when it closes, so neither a screen
+// reader nor the keyboard is left on the page beneath.
+// -----------------------------------------------------------
+
+test("Peržiūrėti opens a dialog named by its title that takes the focus and gives it back", async () => {
+  signInAs("Komisijos narys");
+  onRequest("GET", "/api/activities/committee", QUEUE);
+  const { user } = renderPage(EvaluatePage);
+  await screen.findByText("Seminaras apie X");
+  const opener = within(rowNamed("Seminaras apie X")).getByRole("button", { name: "Peržiūrėti" });
+
+  await user.click(opener);
+  const dialog = screen.getByRole("dialog", { name: "Veiklų įvertinimas" });
+  expect(dialog).toBe(modal());
+  expect(dialog).toHaveAttribute("aria-modal", "true");
+  expect(dialog).toContainElement(document.activeElement);
+
+  await user.click(within(dialog).getByRole("button", { name: "Uždaryti" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(opener).toHaveFocus();
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // return
 // -----------------------------------------------------------
 //
@@ -255,7 +290,7 @@ test("returning a row: the reason prompt, an empty reason refused, PATCH { actio
   expect(within(prompt).getByText("Seminaras apie X")).toBeInTheDocument();
 
   await user.click(within(prompt).getByRole("button", { name: "Patvirtinti grąžinimą" }));
-  expect(await screen.findByText("Klaida: Grąžinimui būtinas komentaras.")).toBeInTheDocument();
+  expect(await within(prompt).findByText("Klaida: Grąžinimui būtinas komentaras.")).toBeInTheDocument();
   expect(requestLog()).toHaveLength(1);
 
   await user.type(within(prompt).getByLabelText("Grąžinimo priežastis"), "Patikslinkite temą");
@@ -342,18 +377,16 @@ test("Įvertinti arms scoring: writable comments, people count, score = 1/n prev
 
 
 // -----------------------------------------------------------
-// BUG — a cleared people count previews a score of 0
+// a cleared people count previews no score
 // -----------------------------------------------------------
 //
-// The live preview turns the people count into a number, and
-// an emptied field counts as zero people, so clearing it
-// previews a score of 0 although no count is given — the
-// same empty field is refused on save. A cleared count must
-// leave the preview empty. A known bug, pinned as an
-// expected failure until it is fixed.
+// The live preview shows only a score the save would send:
+// clearing the people count leaves it empty instead of
+// counting the emptied field as zero people — the same empty
+// field is refused on save.
 // -----------------------------------------------------------
 
-test.fails("BUG: clearing the people count leaves the score preview empty, not 0", async () => {
+test("clearing the people count leaves the score preview empty, not 0", async () => {
   const user = await openScoring(ACT1);
   const [people, score] = within(modal()).getAllByRole("spinbutton");
   await user.type(people, "3");
@@ -401,20 +434,19 @@ test("empty and negative people counts are refused without a request", async () 
 
 
 // -----------------------------------------------------------
-// BUG — a fractional people count is saved
+// a fractional people count is refused
 // -----------------------------------------------------------
 //
-// The save checks only that the count is given and not
-// negative; the input's whole-number step is never enforced,
-// so a fractional count of people is turned into a score and
-// sent — a count below one gives a score above one, which
-// the backend refuses, and any other is stored silently. A
-// count that is not a whole number must be refused on the
-// page, with a message, before any request. A known bug,
-// pinned as an expected failure until it is fixed.
+// A count of people is a whole number, and the save enforces
+// it: a count that is not one is refused on the page with the
+// message that the count must be a whole number, before any
+// request, instead of being turned into a score — a count
+// between zero and one would give a score above one. The
+// modal stays in scoring mode with its save enabled, and the
+// preview shows no score for such a count.
 // -----------------------------------------------------------
 
-test.fails("BUG: a people count that is not a whole number is refused before any request", async () => {
+test("a people count that is not a whole number is refused before any request", async () => {
   onRequest("PATCH", "/api/activities/1/committee", ok({ ...ACT1, status: "ĮVERTINTA", score: 0.4 }));
   const user = await openScoring(ACT1);
 
@@ -427,6 +459,19 @@ test.fails("BUG: a people count that is not a whole number is refused before any
   expect(document.querySelector(".form-status--error")).toBeInTheDocument();
 });
 
+test("a fractional count previews no score and is refused with the whole-number message", async () => {
+  const user = await openScoring(ACT1);
+  const [people, score] = within(modal()).getAllByRole("spinbutton");
+
+  await user.type(people, "0.5");
+  expect(score).toHaveValue(null);
+  await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
+
+  expect(await screen.findByText("Klaida: Veiklos vykdytojų kiekis turi būti sveikas skaičius.")).toHaveClass("form-status--error");
+  expect(people).toHaveValue(0.5);
+  expect(requestLog().filter((r) => r.method === "PATCH")).toEqual([]);
+});
+
 
 
 
@@ -434,19 +479,16 @@ test.fails("BUG: a people count that is not a whole number is refused before any
 
 
 // -----------------------------------------------------------
-// BUG — the modal's refusals show behind the overlay
+// the modal's refusals show inside it
 // -----------------------------------------------------------
 //
-// The scoring modal reports its refusals through the page's
-// one status line, which sits under the table, dimmed behind
-// the modal's overlay or hidden by the modal itself — not
-// where the member just clicked save. A refusal raised in
-// the modal, a missing people count among them, must show
-// inside the modal. A known bug, pinned as an expected
-// failure until it is fixed.
+// A refusal raised in the scoring modal — the missing people
+// count among them — shows on the modal's own status line,
+// inside the box, not on the page's line behind the overlay,
+// where it would be dimmed, covered or below the fold.
 // -----------------------------------------------------------
 
-test.fails("BUG: the missing-count refusal shows inside the scoring modal", async () => {
+test("the missing-count refusal shows inside the scoring modal", async () => {
   const user = await openScoring(ACT1);
 
   await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
@@ -516,17 +558,15 @@ test("a reply still PATVIRTINTA keeps the modal open and patches the row in plac
 
 
 // -----------------------------------------------------------
-// BUG — the saved confirmation shows as an error
+// the saved confirmation is not an error
 // -----------------------------------------------------------
 //
-// The page has one status line and always styles it as an
-// error, so the confirmation after a successful score sits
-// in the red error box like a refusal. A confirmation must
-// not be styled as an error. A known bug, pinned as an
-// expected failure until it is fixed.
+// After a successful score the modal closes and the page's
+// line confirms it, styled as a confirmation rather than with
+// the error box the refusals use.
 // -----------------------------------------------------------
 
-test.fails("BUG: the saved confirmation is not styled as an error", async () => {
+test("the saved confirmation is not styled as an error", async () => {
   onRequest("PATCH", "/api/activities/1/committee", ok({ ...ACT1, status: "ĮVERTINTA", score: 0.33 }));
   const user = await openScoring(ACT1);
 
@@ -542,18 +582,16 @@ test.fails("BUG: the saved confirmation is not styled as an error", async () => 
 
 
 // -----------------------------------------------------------
-// BUG — opening a row keeps the previous status line
+// opening a row clears the status line
 // -----------------------------------------------------------
 //
-// Opening a row only selects it: unlike the results page it
-// does not clear the status line, so the confirmation or
-// refusal left by the previous row stays on screen beside
-// the newly opened one, where it reads as being about it.
-// Opening a row must clear the line. A known bug, pinned as
-// an expected failure until it is fixed.
+// Opening a row clears the status line, as on the results
+// page, so the confirmation or refusal the previous row left
+// does not stay on screen beside the newly opened one, where
+// it would read as being about it.
 // -----------------------------------------------------------
 
-test.fails("BUG: opening another row clears the previous row's status line", async () => {
+test("opening another row clears the previous row's status line", async () => {
   onRequest("PATCH", "/api/activities/1/committee", ok({ ...ACT1, status: "ĮVERTINTA", score: 0.33 }));
   const user = await openScoring(ACT1);
   await user.type(within(modal()).getAllByRole("spinbutton")[0], "3");
@@ -572,18 +610,19 @@ test.fails("BUG: opening another row clears the previous row's status line", asy
 
 
 // -----------------------------------------------------------
-// BUG — the backdrop closes the modal mid-save
+// while a score saves
 // -----------------------------------------------------------
 //
-// While a score is being saved the modal's Uždaryti button is
-// disabled, but a click on the backdrop still closes the
-// modal: only the buttons honour the saving state, so the
-// member can dismiss a save that is still in flight. While a
-// save is pending the backdrop must leave the modal open. A
-// known bug, pinned as an expected failure until it is fixed.
+// While a score is being saved the backdrop honours the
+// saving state like the disabled Uždaryti button: a click on
+// it leaves the modal open, and the save's answer then closes
+// it as usual. A row opened in the meantime — reachable from
+// the keyboard behind the overlay — gets a fresh modal of its
+// own, and the earlier save's answer neither closes it nor
+// swaps its activity.
 // -----------------------------------------------------------
 
-test.fails("BUG: the backdrop leaves the scoring modal open while the save is pending", async () => {
+test("the backdrop leaves the scoring modal open while the save is pending", async () => {
   let release;
   onRequest("PATCH", "/api/activities/1/committee", () => new Promise((resolve) => {
     release = () => resolve(ok({ ...ACT1, status: "ĮVERTINTA", score: 0.33 }));
@@ -602,6 +641,29 @@ test.fails("BUG: the backdrop leaves the scoring modal open while the save is pe
   expect(screen.queryByRole("heading", { level: 3 })).not.toBeInTheDocument();
 });
 
+test("a row opened while a score saves keeps its own modal when the answer arrives", async () => {
+  let release;
+  onRequest("PATCH", "/api/activities/1/committee", () => new Promise((resolve) => {
+    release = () => resolve(ok({ ...ACT1, status: "ĮVERTINTA", score: 0.33 }));
+  }));
+  const user = await openScoring(ACT1);
+  await user.type(within(modal()).getAllByRole("spinbutton")[0], "3");
+  await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
+  expect(await within(modal()).findByRole("button", { name: "Saugoma…" })).toBeDisabled();
+
+  await user.click(within(rowNamed("Paskaitų ciklas")).getByRole("button", { name: "Peržiūrėti" }));
+  expect(modal()).toHaveTextContent("Rasa Šukienė");
+  expect(within(modal()).getByRole("button", { name: "Įvertinti" })).toBeEnabled();
+  expect(within(modal()).queryByRole("spinbutton")).not.toBeInTheDocument();
+
+  release();
+  await waitFor(() => expect(screen.queryByText("Seminaras apie X")).not.toBeInTheDocument());
+  expect(modal()).toHaveTextContent("Rasa Šukienė");
+  expect(modal()).toHaveTextContent("Paskaitų ciklas");
+  expect(within(modal()).getByRole("button", { name: "Įvertinti" })).toBeEnabled();
+  expect(requestsTo("PATCH", "/api/activities/1/committee")).toHaveLength(1);
+});
+
 
 
 
@@ -612,10 +674,10 @@ test.fails("BUG: the backdrop leaves the scoring modal open while the save is pe
 // errors
 // -----------------------------------------------------------
 //
-// A refused PATCH shows "Klaida: " + the backend's reason; a
-// refused score keeps the modal in scoring mode, a refused
-// return keeps the row and the reason prompt open, the
-// reason kept and the button re-enabled.
+// A refused PATCH shows "Klaida: " + the backend's reason in
+// the dialog it came from; a refused score keeps the modal in
+// scoring mode, a refused return keeps the row and the reason
+// prompt open, the reason kept and the button re-enabled.
 // -----------------------------------------------------------
 
 test("a refused score shows Klaida: and keeps the modal in scoring mode", async () => {
@@ -625,7 +687,7 @@ test("a refused score shows Klaida: and keeps the modal in scoring mode", async 
   await user.type(within(modal()).getAllByRole("spinbutton")[0], "3");
   await user.click(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" }));
 
-  expect(await screen.findByText("Klaida: Neteisingas įvertinimas")).toHaveClass("form-status--error");
+  expect(await within(modal()).findByText("Klaida: Neteisingas įvertinimas")).toHaveClass("form-status--error");
   await waitFor(() => expect(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" })).toBeEnabled());
   expect(within(modal()).getAllByRole("spinbutton")[0]).toHaveValue(3);
   expect(rowNamed("Seminaras apie X")).toBeInTheDocument();
@@ -645,7 +707,7 @@ test("a refused return shows Klaida:, keeps the row and keeps the reason prompt 
   await user.type(within(prompt).getByLabelText("Grąžinimo priežastis"), "Patikslinkite temą");
   await user.click(within(prompt).getByRole("button", { name: "Patvirtinti grąžinimą" }));
 
-  expect(await screen.findByText("Klaida: Veikla jau įvertinta")).toBeInTheDocument();
+  expect(await within(prompt).findByText("Klaida: Veikla jau įvertinta")).toHaveClass("form-status--error");
   await waitFor(() => expect(within(prompt).getByRole("button", { name: "Patvirtinti grąžinimą" })).toBeEnabled());
   expect(within(prompt).getByLabelText("Grąžinimo priežastis")).toHaveValue("Patikslinkite temą");
   expect(rowNamed("Seminaras apie X")).toBeInTheDocument();
@@ -659,20 +721,19 @@ test("a refused return shows Klaida:, keeps the row and keeps the reason prompt 
 
 
 // -----------------------------------------------------------
-// BUG — a non-JSON success answer counts as saved
+// a non-JSON success answer is refused
 // -----------------------------------------------------------
 //
 // The API client turns a 2xx answer whose body is not JSON
-// into an empty object, and the save takes that for the
-// updated activity without checking its shape: the row
-// leaves the queue, the modal closes and the confirmation
-// shows, though nothing says the score was stored. Such an
-// answer must be refused with an error, the row and the
-// modal kept. A known bug, pinned as an expected failure
-// until it is fixed.
+// into an empty object, which does not say the verdict was
+// stored: the answer must be the activity it was sent for,
+// and anything else is refused with "Klaida: netikėtas
+// serverio atsakymas.". A score keeps its row and its modal,
+// back in scoring mode with no confirmation; a return keeps
+// its row and its reason prompt, the reason still typed.
 // -----------------------------------------------------------
 
-test.fails("BUG: a 2xx save answer that is not JSON is refused, keeping the row and the modal", async () => {
+test("a 2xx save answer that is not JSON is refused, keeping the row and the modal", async () => {
   // The answer is deliberately not JSON, so the entry opts
   // out of the contract guard
   onRequest("PATCH", "/api/activities/1/committee", { status: 200, body: "<html>login</html>" }, { offContract: true });
@@ -685,6 +746,27 @@ test.fails("BUG: a 2xx save answer that is not JSON is refused, keeping the row 
   expect(rowNamed("Seminaras apie X")).toBeInTheDocument();
   expect(within(modal()).getByRole("button", { name: "Išsaugoti įvertinimą" })).toBeEnabled();
   expect(screen.getAllByText(/^Klaida:/).length).toBeGreaterThan(0);
+});
+
+test("a 2xx return answer that is not JSON is refused too, keeping the row and the reason prompt", async () => {
+  signInAs("Komisijos narys");
+  onRequest("GET", "/api/activities/committee", QUEUE);
+  // The answer is deliberately not JSON, so the entry opts
+  // out of the contract guard
+  onRequest("PATCH", "/api/activities/1/committee", { status: 200, body: "<html>login</html>" }, { offContract: true });
+  const { user } = renderPage(EvaluatePage);
+  await screen.findByText("Seminaras apie X");
+
+  await user.click(within(rowNamed("Seminaras apie X")).getByRole("button", { name: "Grąžinti vadybininkei" }));
+  const prompt = screen.getByRole("heading", { level: 3, name: "Grąžinti veiklą vadybininkei" }).parentElement;
+  await user.type(within(prompt).getByLabelText("Grąžinimo priežastis"), "Patikslinkite temą");
+  await user.click(within(prompt).getByRole("button", { name: "Patvirtinti grąžinimą" }));
+
+  expect(await screen.findByText("Klaida: netikėtas serverio atsakymas.")).toHaveClass("form-status--error");
+  await waitFor(() => expect(within(prompt).getByRole("button", { name: "Patvirtinti grąžinimą" })).toBeEnabled());
+  expect(within(prompt).getByLabelText("Grąžinimo priežastis")).toHaveValue("Patikslinkite temą");
+  expect(rowNamed("Seminaras apie X")).toBeInTheDocument();
+  expect(requestsTo("PATCH", "/api/activities/1/committee")).toHaveLength(1);
 });
 
 

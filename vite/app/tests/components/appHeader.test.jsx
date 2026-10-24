@@ -5,13 +5,15 @@
 //  mount (roles as strings or { name } objects, the name with
 //  its email and "—" fallbacks, a refused answer — or a 200
 //  that is not /api/me's — changing nothing), the activeRole
-//  repair rules and the "(nėra)" text once an answer holds no
-//  roles, the role switcher only for several roles, named by
-//  its caption, and its navigation, the brand click, the
-//  "app:roles-updated" refetch, and sign-out — the POST, the
-//  cleared role, and the redirect (a 2xx answer's, or "/"
-//  when the answer is refused, not JSON, or the request
-//  fails).
+//  repair rules, a repair that changes the role moving the
+//  tab to that role's workspace, and the "(nėra)" text once
+//  an answer holds no roles, the role switcher only for
+//  several roles, named by its caption, and its navigation,
+//  the brand click, the "app:roles-updated" refetch, and
+//  sign-out — the POST, the cleared role, and the redirect (a
+//  2xx answer's, or "/" when the answer is refused, not JSON,
+//  or the request fails), run once however often it is
+//  clicked.
 // -----------------------------------------------------------
 
 import { test, expect, vi, afterEach } from "vitest";
@@ -184,8 +186,10 @@ test("a 200 that is not /api/me's answer (a proxy's page, no roles list) leaves 
 // -----------------------------------------------------------
 //
 // A stored role the caller does not own becomes the first
-// owned role; no roles at all removes the stored role and
-// shows "(nėra)" — "Kraunama…" is only the time before
+// owned role, and the tab moves to that role's workspace, as
+// on a switch by hand; a stored role still owned leaves the
+// page where it is. No roles at all removes the stored role
+// and shows "(nėra)" — "Kraunama…" is only the time before
 // /api/me answers, never the answer itself.
 // -----------------------------------------------------------
 
@@ -198,6 +202,26 @@ test("a stored role the caller no longer owns is replaced by the first role", as
   await waitFor(() => expect(select.value).toBe("Darbuotojas"));
   expect(localStorage.getItem("activeRole")).toBe("Darbuotojas");
   expect(within(select).getAllByRole("option").map((o) => o.value)).toEqual(["Darbuotojas", "Komisijos narys"]);
+});
+
+test("a repair that changes the role moves the tab to its workspace; a role still owned stays put", async () => {
+  signInAs("Vadybininkas");
+  let roles = ME.roles;
+  onRequest("GET", "/api/me", () => ({ ...ME, roles }));
+  renderHeader("/manager/roles");
+  await screen.findByText("Jonas Jonaitis");
+  expect(path()).toBe("/manager/roles");
+
+  roles = ["Darbuotojas", "Komisijos narys"];
+  fireEvent(window, new Event("app:roles-updated"));
+  await waitFor(() => expect(path()).toBe("/employee"));
+  expect(localStorage.getItem("activeRole")).toBe("Darbuotojas");
+  expect(screen.getByRole("combobox").value).toBe("Darbuotojas");
+
+  fireEvent(window, new Event("app:roles-updated"));
+  await settle();
+  expect(requestsTo("GET", "/api/me")).toHaveLength(3);
+  expect(path()).toBe("/employee");
 });
 
 test("no roles: activeRole is removed and the bar shows (nėra); the logo then goes to /", async () => {
@@ -395,21 +419,19 @@ test("a failed logout request lands on /", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — a second Atsijungti click undoes VU's logout
+// sign-out runs once
 // -----------------------------------------------------------
 //
-// Nothing stops a second click while the browser is still on
-// its way to VU's logout: it POSTs the logout again, and as
-// the first POST has already ended the session, the second
-// answer sends the browser home, replacing the navigation to
-// VU that was still pending. The VU SSO session survives,
-// and on a shared computer the next person who signs in is
-// let in as the previous one without a password. Sign-out
-// should run once: one POST, and the navigation its answer
-// asks for.
+// A second click while the browser is still on its way to
+// VU's logout does nothing: a second POST would be answered
+// for the session the first one already ended and send the
+// browser home, replacing the pending navigation to VU — the
+// VU SSO session would survive, and on a shared computer let
+// the next person in as the previous one without a password.
+// One POST, and the navigation its answer asks for.
 // -----------------------------------------------------------
 
-test.fails("BUG: a second Atsijungti click sends no second POST and keeps the navigation to VU's logout", async () => {
+test("a second Atsijungti click sends no second POST and keeps the navigation to VU's logout", async () => {
   signInAs("Vadybininkas");
   onRequest("GET", "/api/me", ME);
   let posts = 0;

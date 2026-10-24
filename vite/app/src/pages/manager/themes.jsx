@@ -486,10 +486,12 @@ function ThemeTree({ themes, loading, expanded, onToggle, onDeleteTheme, onDelet
 // -----------------------------------------------------------
 //
 // Owns the tree, the expanded map, the subtheme form's parent
-// theme (load() seeds it with the first theme) and one status
-// line shared by both forms, which shows the backend's text
-// for a refused request; every successful mutation reloads
-// the whole tree.
+// theme and one status line shared by both forms, which shows
+// the backend's text for a refused request; every successful
+// mutation reloads the whole tree. Each load keeps the parent
+// only while it still names a theme in the tree and otherwise
+// seeds the first theme, or nothing when no theme is left, so
+// the form never posts under a deleted theme.
 //
 // Used by:
 //   - App.jsx — route /manager/themes
@@ -521,11 +523,14 @@ export default function ThemesPage() {
 
       setThemes(data);
 
-      // The subtheme form's parent is seeded with the first
-      // theme only while nothing has been picked yet
-      if (data[0]) {
-        setSubParent((prev) => prev || String(data[0].id));
-      }
+      // The subtheme form's parent stays while it names a
+      // theme still in the tree — a pick survives a reload, a
+      // deleted theme does not — and otherwise falls to the
+      // first theme, or to nothing when the tree is empty
+      setSubParent((prev) => {
+        if (data.some((t) => String(t.id) === prev)) return prev;
+        return data[0] ? String(data[0].id) : "";
+      });
 
       const def = Object.fromEntries(data.map((t) => [t.id, false]));
       setExpanded(def);

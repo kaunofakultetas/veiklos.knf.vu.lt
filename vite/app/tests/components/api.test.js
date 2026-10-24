@@ -6,8 +6,10 @@
 //  opts out, a JSON body is announced as JSON while a
 //  FormData one is left to the browser, a refusal throws the
 //  backend's text — else the caller's fallback, else the
-//  HTTP status — a body-less answer is fine and a 2xx that is
-//  not JSON reads as {}, several calls report their refusals
+//  HTTP status — a call that gets no answer at all throws the
+//  fallback, else the client's own text, never the browser's
+//  error, a body-less answer is fine and a 2xx that is not
+//  JSON reads as {}, several calls report their refusals
 //  in the order they are listed, an attachment is saved
 //  under its original name, and reasonOf drops the backend's
 //  leading "Klaida:". The calls go to real routes of the
@@ -107,21 +109,34 @@ test("apiSend: a body-less answer is fine; apiJson reads a 2xx that is not JSON 
 
 
 // -----------------------------------------------------------
-// BUG — a failed fetch skips the fallback
+// no answer at all
 // -----------------------------------------------------------
 //
-// Only a refusal gets the caller's fallback: when fetch
-// itself fails — no network, the backend out of reach — the
-// browser's own error goes through untouched, and the page
-// shows its English text instead of the Lithuanian fallback
-// it passed. A call that never got an answer should throw
-// the caller's fallback too.
+// When fetch itself fails — no network, the backend out of
+// reach — the browser's own error is English and names
+// nothing a user could act on, so it never reaches the page:
+// the call throws the caller's fallback, and without one the
+// client's own "could not reach the server" text, with the
+// browser's error kept as the cause.
 // -----------------------------------------------------------
 
-test.fails("BUG: a fetch that fails outright throws the caller's fallback", async () => {
+test("a fetch that fails outright throws the caller's fallback", async () => {
   onRequest("GET", "/api/themes", () => { throw new TypeError("Failed to fetch"); });
 
   await expect(apiJson("/api/themes", { fallback: "Klaida: Nepavyko įkelti." })).rejects.toThrowError(/^Klaida: Nepavyko įkelti\.$/);
+});
+
+test("without a fallback, a call with no answer throws the client's own text, the browser's error as its cause", async () => {
+  const offline = new TypeError("Failed to fetch");
+  onRequest("GET", "/api/themes", () => { throw offline; });
+  onRequest("DELETE", "/api/themes/5", () => { throw offline; });
+
+  const thrown = await apiJson("/api/themes").catch((e) => e);
+  expect(thrown).toBeInstanceOf(Error);
+  expect(thrown.message).toBe("Klaida: nepavyko susisiekti su serveriu.");
+  expect(thrown.cause).toBe(offline);
+  await expect(apiSend("/api/themes/5", { method: "DELETE" })).rejects.toThrowError(/^Klaida: nepavyko susisiekti su serveriu\.$/);
+  expect(reasonOf(thrown)).toBe("nepavyko susisiekti su serveriu.");
 });
 
 

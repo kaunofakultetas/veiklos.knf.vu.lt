@@ -8,17 +8,18 @@
 //  deny and return from the comment modals, where an empty
 //  comment is refused without a request — and the queue
 //  follows the RESPONSE: a status that left PATEIKTA drops
-//  the row, one still PATEIKTA patches it in place. The
-//  review modal shows the activity read-only, saves theme /
-//  subtheme / manager comments with numeric ids, downloads
-//  the attachment with the header, every refused request
-//  surfaces as "Klaida: <reason>", and each comment textarea
-//  is reachable by its label. Pinned as expected failures,
-//  the known bugs: one busy marker shared by every row, the
-//  comment prompts' messages shown behind them, a cancelled
-//  edit that comes back, a save sent for a theme without
-//  subthemes, and a backdrop click closing the review modal
-//  mid-save.
+//  the row, one still PATEIKTA patches it in place, and each
+//  row stays busy until its own PATCH ends. The review modal
+//  is a dialog named by its heading that takes the focus and
+//  gives it back; it shows the activity read-only, saves
+//  theme / subtheme / manager comments with numeric ids but
+//  never a theme without a subtheme, stays open while its
+//  save is in flight and leaves a modal moved on to another
+//  row alone when that save answers. The attachment downloads
+//  with the header, every refused request surfaces as
+//  "Klaida: <reason>", and each comment textarea is reachable
+//  by its label. The prompts show their messages inside
+//  them, and a cancelled edit puts the stored values back.
 // -----------------------------------------------------------
 
 import { test, expect, vi } from "vitest";
@@ -248,20 +249,16 @@ test("a PATCH answered with status PATEIKTA replaces the row instead of removing
 
 
 // -----------------------------------------------------------
-// BUG — one busy marker for the whole queue
+// one busy flag per row
 // -----------------------------------------------------------
 //
-// The page keeps a single acting id: a verdict on a second
-// row while the first row's PATCH is still in flight moves
-// the marker, so the first row's buttons come back to life
-// mid-request — and whichever answer lands first clears the
-// marker for both, re-enabling the row that is still
-// waiting. Each row should stay disabled until its own
-// request ends. A known bug, pinned as an expected failure
-// until it is fixed.
+// A verdict on a second row while the first row's PATCH is
+// still in flight disables the second row and leaves the
+// first one disabled; the first answer then removes its row
+// and leaves the second disabled until its own answer lands.
 // -----------------------------------------------------------
 
-test.fails("BUG: a row's verdict buttons stay disabled until its own PATCH ends, whatever another row does", async () => {
+test("a row's verdict buttons stay disabled until its own PATCH ends, whatever another row does", async () => {
   scriptQueue();
   // Both approvals wait until the test answers them
   const answer = {};
@@ -434,19 +431,15 @@ test("a refused verdict shows Klaida: <reason>, keeps the row and keeps the comm
 
 
 // -----------------------------------------------------------
-// BUG — prompt messages behind the overlay
+// the deny prompt's messages show inside it
 // -----------------------------------------------------------
 //
-// The deny and return prompts report through the page's
-// status line under the queue table — the empty-comment
-// refusal and a refused PATCH alike — and that line sits
-// behind the prompt's overlay, so the manager presses the
-// button and sees nothing happen. The message should show
-// inside the open prompt. A known bug, pinned as an expected
-// failure until it is fixed.
+// The empty-comment refusal and a refused PATCH show on the
+// prompt's own status line, inside the dialog, not on the
+// page's line behind the overlay.
 // -----------------------------------------------------------
 
-test.fails("BUG: the deny prompt shows the empty-comment refusal and a refused PATCH inside the dialog", async () => {
+test("the deny prompt shows the empty-comment refusal and a refused PATCH inside the dialog", async () => {
   scriptQueue();
   onRequest("PATCH", "/api/activities/1/manager", { status: 400, body: { error: "Klaida: Netinkama būsena" } });
   const { user } = renderPage(ManagerReviewPage);
@@ -571,7 +564,8 @@ test("edit: the pickers, first-subtheme preselect in code order, PATCH with nume
   await user.type(within(m).getByRole("textbox"), "Perkelta į mokslą");
   await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
 
-  await screen.findByText("Veikla atnaujinta.");
+  // The modal stays open, so it confirms the save itself
+  expect(await within(m).findByText("Veikla atnaujinta.")).not.toHaveClass("form-status--error");
   const [patch] = requestsTo("PATCH", "/api/activities/1/manager");
   expect(patch.headers).toEqual({ "x-active-role": "Vadybininkas", "content-type": "application/json" });
   expect(patch.body).toEqual({ manager_comments: "Perkelta į mokslą", theme_id: 2, subtheme_id: 22 });
@@ -597,9 +591,9 @@ test("edit: the pickers, first-subtheme preselect in code order, PATCH with nume
 // review modal — refused save
 // -----------------------------------------------------------
 //
-// A refused edit shows "Klaida: <reason>" and leaves the
-// modal in edit mode with Išsaugoti enabled again and the row
-// untouched.
+// A refused edit shows "Klaida: <reason>" on the modal's own
+// status line, inside the box, and leaves the modal in edit
+// mode with Išsaugoti enabled again and the row untouched.
 // -----------------------------------------------------------
 
 test("a refused edit save shows Klaida: <reason> and stays in edit mode", async () => {
@@ -614,7 +608,7 @@ test("a refused edit save shows Klaida: <reason> and stays in edit mode", async 
   await user.type(within(m).getByRole("textbox"), "Pastaba");
   await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
 
-  expect(await screen.findByText("Klaida: Potemė nepriklauso temai")).toBeInTheDocument();
+  expect(await within(m).findByText("Klaida: Potemė nepriklauso temai")).toHaveClass("form-status--error");
   expect(requestsTo("PATCH", "/api/activities/1/manager")[0].body).toEqual({ manager_comments: "Pastaba", theme_id: 1, subtheme_id: 11 });
   expect(screen.queryByText("Veikla atnaujinta.")).not.toBeInTheDocument();
   expect(within(m).getByRole("button", { name: "Atšaukti redagavimą" })).toBeInTheDocument();
@@ -630,19 +624,16 @@ test("a refused edit save shows Klaida: <reason> and stays in edit mode", async 
 
 
 // -----------------------------------------------------------
-// BUG — Atšaukti redagavimą keeps the edit
+// Atšaukti redagavimą restores the stored values
 // -----------------------------------------------------------
 //
-// The modal seeds its theme, subtheme and comment fields once
-// and "Atšaukti redagavimą" only leaves edit mode: the read-
-// only textarea goes on showing the cancelled comment, the
-// next "Redaguoti" brings the cancelled theme and subtheme
-// back, and "Išsaugoti" then sends them. Cancelling should
-// put all three back to the activity's stored values. A
-// known bug, pinned as an expected failure until it is fixed.
+// Cancelling an edit puts the activity's theme, subtheme and
+// manager comments back: view mode shows the stored values,
+// the next Redaguoti starts from them, and a save after that
+// sends them.
 // -----------------------------------------------------------
 
-test.fails("BUG: Atšaukti redagavimą restores the stored theme, subtheme and manager comments", async () => {
+test("Atšaukti redagavimą restores the stored theme, subtheme and manager comments", async () => {
   scriptQueue();
   onRequest("PATCH", "/api/activities/2/manager", verdict(ACT2, { status: "PATEIKTA" }));
   const { user } = renderPage(ManagerReviewPage);
@@ -675,21 +666,19 @@ test.fails("BUG: Atšaukti redagavimą restores the stored theme, subtheme and m
 
 
 // -----------------------------------------------------------
-// BUG — a theme without subthemes is saved anyway
+// review modal — no save without a subtheme
 // -----------------------------------------------------------
 //
 // Picking a theme that has no subthemes leaves the subtheme
-// empty, yet "Išsaugoti" stays enabled and sends the PATCH
-// with a null subtheme_id, which the backend refuses with
-// the misleading "potemė nepriklauso pasirinktai temai". An
-// activity needs a subtheme, so such a save should never
-// leave the modal. A known bug, pinned as an expected
-// failure until it is fixed.
+// empty, and an activity needs one: the save sends nothing,
+// rather than a PATCH with a null subtheme_id that the
+// backend would refuse with the misleading "potemė
+// nepriklauso pasirinktai temai".
 // -----------------------------------------------------------
 
-test.fails("BUG: a theme without subthemes is not saved — no PATCH goes out without a subtheme", async () => {
+test("a theme without subthemes is not saved — no PATCH goes out without a subtheme", async () => {
   scriptQueue();
-  // How the backend answers the pair the page sends today
+  // How the backend answers such a pair, should one go out
   onRequest("PATCH", "/api/activities/1/manager", { status: 400, body: { error: "Klaida: potemė nepriklauso pasirinktai temai" } });
   const { user } = renderPage(ManagerReviewPage);
   await screen.findByText("Paskaitų ciklas");
@@ -716,22 +705,16 @@ test.fails("BUG: a theme without subthemes is not saved — no PATCH goes out wi
 
 
 // -----------------------------------------------------------
-// BUG — the review modal closes mid-save
+// review modal — open until its save ends
 // -----------------------------------------------------------
 //
-// While a save is in flight only the modal's buttons are
-// disabled: a click on the backdrop still closes it. When
-// the save answers, the page makes the saved activity the
-// selected one again, so the closed modal pops back open —
-// and a modal opened for another row in the meantime is
-// taken over by the first row's activity while it keeps the
-// other row's edit fields, so its next save would write them
-// onto the first row. The modal should stay open until its
-// save ends. A known bug, pinned as an expected failure until
-// it is fixed.
+// While a save is in flight a click on the backdrop closes
+// nothing, like the modal's disabled buttons; when the
+// answer lands, the same modal confirms the save and drops
+// back to view mode with the saved comment.
 // -----------------------------------------------------------
 
-test.fails("BUG: the review modal stays open while its save is in flight", async () => {
+test("the review modal stays open while its save is in flight", async () => {
   scriptQueue();
   // The save waits until the test answers it
   let answer;
@@ -762,6 +745,69 @@ test.fails("BUG: the review modal stays open while its save is in flight", async
 
 
 // -----------------------------------------------------------
+// review modal — moved on to another row mid-save
+// -----------------------------------------------------------
+//
+// The overlay stops the mouse, not the keyboard, so the rows
+// behind it stay within reach while a save is in flight.
+// Another row's Peržiūrėti then shows that row afresh, in
+// view mode with its own comment; the first save's answer,
+// landing later, leaves the modal on that row, and the
+// modal's own save goes to its own activity with its own
+// fields.
+// -----------------------------------------------------------
+
+test("a save answered after the modal moved on to another row leaves that row's modal alone", async () => {
+  scriptQueue();
+  // The first row's save waits until the test answers it
+  let answer;
+  onRequest("PATCH", "/api/activities/1/manager", () => new Promise((resolve) => { answer = resolve; }));
+  onRequest("PATCH", "/api/activities/2/manager", verdict(ACT2, { status: "PATEIKTA" }));
+  const { user } = renderPage(ManagerReviewPage);
+  await screen.findByText("Paskaitų ciklas");
+
+  await user.click(within(rowNamed("Paskaitų ciklas")).getByRole("button", { name: "Peržiūrėti" }));
+  let m = modal("Pateiktos veiklos peržiūra");
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  await user.type(within(m).getByRole("textbox"), "Pastaba");
+  await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
+
+  // A click stands in for the keyboard: jsdom lays out no
+  // overlay that could stop it
+  await user.click(within(rowNamed("Konferencijos pranešimas")).getByRole("button", { name: "Peržiūrėti" }));
+  m = modal("Pateiktos veiklos peržiūra");
+  expect(within(m).getByText("Ona Onaitė")).toBeInTheDocument();
+  expect(within(m).getByRole("textbox")).toHaveValue("Senas komentaras");
+  expect(within(m).getByRole("textbox")).toHaveAttribute("readonly");
+  expect(within(m).getByRole("button", { name: "Išsaugoti" })).toBeDisabled();
+
+  // The first row's buttons come back once its answer has
+  // been taken in; the modal that saved is gone, so no
+  // confirmation shows anywhere
+  answer(verdict(ACT1, { status: "PATEIKTA", manager_comments: "Pastaba" }));
+  await waitFor(() => expect(within(rowNamed("Paskaitų ciklas")).getByRole("button", { name: "Patvirtinti" })).toBeEnabled());
+  expect(screen.queryByText("Veikla atnaujinta.")).not.toBeInTheDocument();
+  m = modal("Pateiktos veiklos peržiūra");
+  expect(within(m).getByText("Ona Onaitė")).toBeInTheDocument();
+  expect(within(m).queryByText("Jonas Jonaitis")).not.toBeInTheDocument();
+  expect(within(m).getByRole("textbox")).toHaveValue("Senas komentaras");
+
+  await user.click(within(m).getByRole("button", { name: "Redaguoti" }));
+  await user.click(within(m).getByRole("button", { name: "Išsaugoti" }));
+  await waitFor(() => expect(within(m).getByRole("button", { name: "Redaguoti" })).toBeInTheDocument());
+  expect(requestsTo("PATCH", "/api/activities/2/manager").map((r) => r.body)).toEqual([
+    { manager_comments: "Senas komentaras", theme_id: 2, subtheme_id: 21 },
+  ]);
+  expect(requestsTo("PATCH", "/api/activities/1/manager")).toHaveLength(1);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // attachment
 // -----------------------------------------------------------
 //
@@ -772,7 +818,7 @@ test.fails("BUG: the review modal stays open while its save is in flight", async
 // swallowed — only the request is pinned. Without an original
 // name the button reads "Atsisiųsti priedą"; a refused
 // download reports "Klaida: Nepavyko atsisiųsti priedo:
-// <reason>".
+// <reason>" inside the modal.
 // -----------------------------------------------------------
 
 test("attachment: GET /api/activities/:id/attachment with the header; a refused download reports the reason", async () => {
@@ -804,7 +850,7 @@ test("attachment: GET /api/activities/:id/attachment with the header; a refused 
     await user.click(within(rowNamed("Konferencijos pranešimas")).getByRole("button", { name: "Peržiūrėti" }));
     m = modal("Pateiktos veiklos peržiūra");
     await user.click(within(m).getByRole("button", { name: "Atsisiųsti priedą" }));
-    expect(await screen.findByText("Klaida: Nepavyko atsisiųsti priedo: Priedas nerastas")).toBeInTheDocument();
+    expect(await within(m).findByText("Klaida: Nepavyko atsisiųsti priedo: Priedas nerastas")).toHaveClass("form-status--error");
     expect(requestsTo("GET", "/api/activities/2/attachment")[0].headers).toEqual({ "x-active-role": "Vadybininkas" });
     expect(within(m).getByRole("button", { name: "Atsisiųsti priedą" })).toBeEnabled();
   } finally {
@@ -905,4 +951,36 @@ test("the review modal's theme and subtheme pickers are named by their captions"
   const [themeTrigger, subthemeTrigger] = m.querySelectorAll(".app-select-trigger");
   expect(within(m).getByLabelText("Tema")).toBe(themeTrigger);
   expect(within(m).getByLabelText("Potemė")).toBe(subthemeTrigger);
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// review modal — a dialog
+// -----------------------------------------------------------
+//
+// Peržiūrėti opens a modal dialog named by its heading and
+// moves the focus into it, so assistive tech announces it;
+// Uždaryti hands the focus back to the row's Peržiūrėti.
+// -----------------------------------------------------------
+
+test("the review modal is a dialog named by its heading that takes the focus and gives it back", async () => {
+  scriptQueue();
+  const { user } = renderPage(ManagerReviewPage);
+  await screen.findByText("Paskaitų ciklas");
+
+  const opener = within(rowNamed("Paskaitų ciklas")).getByRole("button", { name: "Peržiūrėti" });
+  await user.click(opener);
+  const dialog = screen.getByRole("dialog", { name: "Pateiktos veiklos peržiūra" });
+  expect(dialog).toBe(modal("Pateiktos veiklos peržiūra"));
+  expect(dialog).toHaveAttribute("aria-modal", "true");
+  expect(dialog).toContainElement(document.activeElement);
+
+  await user.click(within(dialog).getByRole("button", { name: "Uždaryti" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(opener).toHaveFocus();
 });

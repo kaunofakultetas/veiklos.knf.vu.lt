@@ -18,6 +18,7 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { authorize } from "../auth/authorize.js";
 import { TBL_ROLES, TBL_USER_ROLES } from "../db/tables.js";
+import { isDataError, MSG_BAD_DATA } from "../utils/dbErrors.js";
 
 
 const router = Router();
@@ -70,7 +71,8 @@ router.get("/", async (_req, res) => {
 // Body: { user_eid, role_name }. Grants the role; re-granting
 // is a no-op (ON CONFLICT DO NOTHING). 404 when the role name
 // is unknown or no user has the eid (the foreign key refuses
-// it); a DB failure answers the usual 500.
+// it); a value Postgres cannot store (a NUL character) is a
+// 400; a DB failure answers the usual 500.
 //
 // Used by:
 //   - nothing calls this at the moment — the frontend assigns
@@ -101,6 +103,7 @@ router.post("/assign", async (req, res) => {
   } catch (e) {
     // An eid with no users row fails user_roles' foreign key
     if (e.code === "23503") return res.status(404).json({ error: "Klaida: Vartotojas nerastas" });
+    if (isDataError(e)) return res.status(400).json({ error: MSG_BAD_DATA });
     console.error("POST /api/roles/assign", e);
     res.status(500).json({ error: "internal error" });
   }

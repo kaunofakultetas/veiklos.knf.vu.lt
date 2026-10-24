@@ -15,10 +15,6 @@
 //  without its cookie. A fake express-session (with a fake
 //  store) stands in for the cookie store; the pool is the
 //  usual fake.
-//
-//  Pinned as an expected failure until it is fixed, the known
-//  bug: a database that cannot be reached after a valid
-//  assertion is answered as the IdP's fault.
 // -----------------------------------------------------------
 
 import { test, before, after, beforeEach } from "node:test";
@@ -568,22 +564,18 @@ test("assert: a DB error after a valid assertion → 500, not 'parsing failed'",
 
 
 // -----------------------------------------------------------
-// BUG — the database unreachable after a valid assertion
+// assert — the database unreachable
 // -----------------------------------------------------------
 //
-// Only an error carrying a five-character SQLSTATE counts as
-// ours once the assertion is accepted. A database that cannot
-// be reached fails with a socket error code instead, so the
-// catch takes it for the IdP's fault: the browser gets a 401
-// that blames the assertion and shows the database's internal
-// address and port. It must be the same 500 as any other
-// database failure after a valid assertion, with nothing of
-// the connection error in the page.
+// Once the assertion has passed every check, any failure is
+// ours: a lost database connection carries no SQLSTATE, yet
+// it too is answered 500 with the text that clears the IdP,
+// and its details — the database's address — stay in the log,
+// out of the page the browser shows.
 // -----------------------------------------------------------
 
 test(
-  "BUG: assert: the database unreachable after a valid assertion → 500 on our side, no connection details in the page",
-  { todo: "known bug: /assert's catch counts only 5-character SQLSTATE codes as database errors — a connection failure (code ECONNREFUSED) is answered 401 \"SAML assertion parsing failed: connect ECONNREFUSED 172.18.110.30:5432\", blaming the IdP and showing the database's host and port" },
+  "assert: the database unreachable after a valid assertion → 500 on our side, no connection details in the page",
   async () => {
     nextExtract = { audience: audienceOf(), nameID: "n", sessionIndex: "s", attributes: { eID: "112546", mail: "u1@vu.lt" } };
     onQuery(/INSERT INTO users/, () => {

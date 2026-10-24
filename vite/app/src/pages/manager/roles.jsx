@@ -18,9 +18,15 @@
 //  calls send no X-Active-Role.
 // -----------------------------------------------------------
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { apiJson, apiSend } from "@/components/api.js";
 import "@/components/employee.css";
+
+
+// The card with nobody on it: before the first lookup and
+// after a refused one, so stale roles never sit under a bad
+// search
+const NO_CARD = { user: null, roles: [], allRoles: [], assignRole: "" };
 
 
 
@@ -36,7 +42,13 @@ import "@/components/employee.css";
 // local pill list from the 2xx response without re-fetching
 // the user. Both act on the user the card shows, never on
 // the search box, which can be edited after the lookup — and
-// the self-revoke confirm asks about that same user.
+// the self-revoke confirm asks about that same user. An
+// answer computes the pills and the dropdown's pick from the
+// card as it stands when it lands, so changes in flight
+// together never undo each other; when a lookup has put
+// someone else on the card meanwhile, the answer leaves the
+// card and the status line alone. Priskirti rolę waits for
+// its own answer, so a double click grants once.
 //
 // Used by:
 //   - App.jsx — route /manager/roles
@@ -47,11 +59,21 @@ export default function RolesPage() {
 
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const [user, setUser] = useState(null);
-  const [roles, setRoles] = useState([]);
-  const [allRoles, setAllRoles] = useState([]);
-  const [assignRole, setAssignRole] = useState("");
   const [msg, setMsg] = useState("");
+  const [assigning, setAssigning] = useState(false);
+
+  // The user found, their roles, the catalog and the role
+  // picked to grant, kept as one state so that an answer can
+  // compute the next pills and pick from the latest card
+  // rather than from the render its button was pressed in
+  const [card, setCard] = useState(NO_CARD);
+  const { user, roles, allRoles, assignRole } = card;
+
+  // The email of the user on the card, for an answer to check
+  // when it lands: the state it closed over still names the
+  // user of its press, even once a lookup has put someone
+  // else on the card
+  const shownEmail = useRef(null);
 
 
   // Own email from /api/me — needed to detect the "removing
@@ -83,20 +105,19 @@ export default function RolesPage() {
       // without both arrays blanks the page or shows nothing
       if (!Array.isArray(data?.roles) || !Array.isArray(data?.allRoles)) throw new Error("Klaida: netikėtas serverio atsakymas.");
 
-      setUser(data.user);
-      setRoles(data.roles || []);
-      setAllRoles(data.allRoles || []);
-
       // Preselect the first grantable role
-      const unowned = (data.allRoles || []).filter(
-        (r) => !(data.roles || []).includes(r)
-      );
-      setAssignRole(unowned[0] || "");
+      const unowned = data.allRoles.filter((r) => !data.roles.includes(r));
+
+      shownEmail.current = data.user?.email ?? null;
+      setCard({
+        user: data.user,
+        roles: data.roles,
+        allRoles: data.allRoles,
+        assignRole: unowned[0] || "",
+      });
     } catch (e) {
-      setUser(null);
-      setRoles([]);
-      setAllRoles([]);
-      setAssignRole("");
+      shownEmail.current = null;
+      setCard(NO_CARD);
       setMsg(e.message);
     } finally {
       setLoading(false);
@@ -104,39 +125,53 @@ export default function RolesPage() {
   };
 
 
+  // One grant at a time: the button stays disabled until the
+  // answer, so a double click cannot send the POST twice
   const doAssign = async () => {
-    if (!assignRole) return;
+    if (!assignRole || assigning) return;
+    const target = user.email;
+    const role = assignRole;
+    setAssigning(true);
     setMsg("");
     try {
       await apiSend("/api/user-roles/assign", {
         method: "POST",
-        json: { email: user.email, role: assignRole },
+        json: { email: target, role },
         activeRole: false,
         fallback: "Nepavyko priskirti rolės.",
       });
 
-      const next = [...roles, assignRole].sort();
-      setRoles(next);
-
-      const unowned = allRoles.filter((r) => !next.includes(r));
-      setAssignRole(unowned[0] || "");
-
-      setMsg(`Priskirta rolė: ${assignRole}`);
+      // The grant stands whoever the card shows by now, so
+      // the header refreshes either way; the pills and the
+      // message only while the card still shows the user it
+      // was for. The next pick is the first role still not
+      // owned
+      if (shownEmail.current === target) {
+        setCard((prev) => {
+          const next = prev.roles.includes(role) ? prev.roles : [...prev.roles, role].sort();
+          const unowned = prev.allRoles.filter((r) => !next.includes(r));
+          return { ...prev, roles: next, assignRole: unowned[0] || "" };
+        });
+        setMsg(`Priskirta rolė: ${role}`);
+      }
       window.dispatchEvent(new Event("app:roles-updated"));
     } catch (e) {
-      setMsg(e.message);
+      if (shownEmail.current === target) setMsg(e.message);
+    } finally {
+      setAssigning(false);
     }
   };
 
 
   const doRemove = async (role) => {
     setMsg("");
+    const target = user.email;
 
     // Removing your own manager role kicks you off this page
     // on the next header refresh — confirm it first
     const isSelf =
       currentUserEmail &&
-      (user.email || "").toLowerCase() === currentUserEmail;
+      (target || "").toLowerCase() === currentUserEmail;
 
     if (role === "Vadybininkas" && isSelf) {
       const ok = window.confirm(
@@ -148,22 +183,26 @@ export default function RolesPage() {
     try {
       await apiSend("/api/user-roles/remove", {
         method: "POST",
-        json: { email: user.email, role },
+        json: { email: target, role },
         activeRole: false,
         fallback: "Nepavyko pašalinti rolės.",
       });
 
-      const next = roles.filter((r) => r !== role);
-      setRoles(next);
-
-      const unowned = allRoles.filter((r) => !next.includes(r));
-      if (!assignRole && unowned.length) setAssignRole(unowned[0]);
-
-      setMsg(`Pašalinta rolė: ${role}`);
-
+      // As for a grant: the header refreshes either way, the
+      // card only while it shows the user this was for. A
+      // pick in place stays; with none, the first role no
+      // longer owned becomes the pick
+      if (shownEmail.current === target) {
+        setCard((prev) => {
+          const next = prev.roles.filter((r) => r !== role);
+          const unowned = prev.allRoles.filter((r) => !next.includes(r));
+          return { ...prev, roles: next, assignRole: prev.assignRole || unowned[0] || "" };
+        });
+        setMsg(`Pašalinta rolė: ${role}`);
+      }
       window.dispatchEvent(new Event("app:roles-updated"));
     } catch (e) {
-      setMsg(e.message);
+      if (shownEmail.current === target) setMsg(e.message);
     }
   };
 
@@ -293,7 +332,10 @@ export default function RolesPage() {
                         id="roles-assign"
                         className="field-select"
                         value={assignRole}
-                        onChange={(e) => setAssignRole(e.target.value)}
+                        onChange={(e) => {
+                          const picked = e.target.value;
+                          setCard((prev) => ({ ...prev, assignRole: picked }));
+                        }}
                       >
                         {availableRoles.map((r) => (
                           <option key={r} value={r}>
@@ -305,7 +347,7 @@ export default function RolesPage() {
                         type="button"
                         className="btn btn-primary"
                         onClick={doAssign}
-                        disabled={!assignRole}
+                        disabled={!assignRole || assigning}
                       >
                         Priskirti rolę
                       </button>

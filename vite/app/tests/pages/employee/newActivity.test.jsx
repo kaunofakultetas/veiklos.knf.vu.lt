@@ -5,18 +5,17 @@
 //  theme tree is loaded with the employee's X-Active-Role and
 //  the first theme + its first subtheme in code order are
 //  preselected, a theme switch re-sorts and preselects the
-//  subthemes, the text fields and the file input are found by
-//  their labels, the submit POSTs multipart with the fields
-//  in the documented order (codes before the attachment) and
-//  only the role header, a success resets the text fields and
-//  the file but keeps the selection, the client refuses empty
-//  required fields and oversized picks without a request, and
-//  backend errors are shown with the page's own prefix.
+//  subthemes while a re-pick of the selected theme keeps the
+//  chosen subtheme, the text fields and the file input are
+//  found by their labels, the submit POSTs multipart with the
+//  fields in the documented order (codes before the
+//  attachment) and only the role header, a success resets the
+//  text fields and the file but keeps the selection, the
+//  client refuses empty required fields and oversized picks —
+//  a file the size of the limit included — without a request,
+//  and backend errors are shown with the page's own prefix.
 //
-//  Pinned as expected failures, the known bugs: re-picking
-//  the selected theme resets the subtheme, the form stays
-//  editable while it is being sent, and a file the size of
-//  the limit passes.
+//  The form is locked while it is being sent.
 // -----------------------------------------------------------
 
 import { test, expect } from "vitest";
@@ -44,7 +43,7 @@ const createdReply = (overrides) => ({
   status: 201,
   body: {
     id: 7, employee_eid: "u10001", theme_id: 1, subtheme_id: 12, title: "Konferencija", description: "Pranešimas konferencijoje",
-    status: "PATEIKTA", rejection_comment: null, manager_comments: null, score: null, attachment_path: null, attachment_original_name: null,
+    status: "PATEIKTA", rejection_comment: null, score: null, attachment_path: null, attachment_original_name: null,
     created_at: "2026-03-05T10:20:00Z", updated_at: "2026-03-05T10:20:00Z",
     ...overrides,
   },
@@ -207,18 +206,18 @@ test("a theme switch re-sorts the subthemes and preselects the first; none → d
 
 
 // -----------------------------------------------------------
-// BUG — re-picking the selected theme resets the subtheme
+// theme re-pick
 // -----------------------------------------------------------
 //
 // The picker reports a click on the option already selected
-// like any other pick, and the form answers every theme pick
-// by preselecting that theme's first subtheme in code order.
-// Opening the theme list and clicking the theme already
-// selected thus silently drops the subtheme the employee
-// chose. Picking the same theme again should change nothing.
+// like any other pick. The form ignores a theme pick that
+// names the theme already selected, so opening the theme
+// list and clicking that theme keeps the subtheme the
+// employee chose instead of falling back to the theme's
+// first in code order.
 // -----------------------------------------------------------
 
-test.fails("BUG: picking the theme already selected keeps the chosen subtheme", async () => {
+test("picking the theme already selected keeps the chosen subtheme", async () => {
   signInAs("Darbuotojas");
   onRequest("GET", "/api/themes", THEMES);
   const { user } = renderPage(NewActivityPage);
@@ -290,17 +289,16 @@ test("submits multipart with the fields in order and only the role header; reset
 
 
 // -----------------------------------------------------------
-// BUG — the form stays editable while it is being sent
+// the form is locked while it is being sent
 // -----------------------------------------------------------
 //
-// Only the submit button is disabled while the POST is in
-// flight: the title, the description and the file input
-// still take input, and the reset after a success wipes
-// whatever was typed or picked in the meantime. They should
-// be locked until the answer arrives.
+// While the submit is in flight the title and description are
+// read-only and the file input disabled: the request carries
+// the values of the moment it was sent and its success clears
+// the form, so nothing typed meanwhile can be lost.
 // -----------------------------------------------------------
 
-test.fails("BUG: the title, description and file inputs are locked while the submit is in flight", async () => {
+test("the title, description and file inputs are locked while the submit is in flight", async () => {
   signInAs("Darbuotojas");
   onRequest("GET", "/api/themes", THEMES);
   const post = deferred();
@@ -483,17 +481,17 @@ test("an oversized pick is refused on the spot and never sent", async () => {
 
 
 // -----------------------------------------------------------
-// BUG — a file the size of the limit passes the form
+// file at the limit
 // -----------------------------------------------------------
 //
-// The form refuses a pick only when it is larger than the
-// 100 MB limit, while the backend refuses a file that
-// reaches the limit, so a file of exactly that size is taken
-// here, uploaded in full and only then turned away. The form
-// should refuse it at the pick, like any larger file.
+// The backend refuses a file that reaches the 100 MB limit,
+// not only a larger one, so the form refuses a pick of
+// exactly that size at the pick, like any larger file,
+// rather than upload it in full only to have it turned away;
+// the following submit goes out without an attachment.
 // -----------------------------------------------------------
 
-test.fails("BUG: a file the size of the 100 MB limit is refused at the pick and never sent", async () => {
+test("a file the size of the 100 MB limit is refused at the pick and never sent", async () => {
   signInAs("Darbuotojas");
   onRequest("GET", "/api/themes", THEMES);
   onRequest("POST", "/api/activities", createdReply({ id: 9, description: "Aprašymas" }));

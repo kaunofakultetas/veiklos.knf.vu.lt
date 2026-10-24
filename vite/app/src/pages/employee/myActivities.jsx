@@ -13,6 +13,14 @@
 //  refetching. Auth rides in the session cookie; only the
 //  X-Active-Role header travels.
 //
+//  The review modal is a modal dialog keyed by its activity:
+//  opening another activity always mounts a fresh one, and a
+//  save or resubmit answer refreshes it only while it still
+//  shows that activity. Its backdrop closes it only on a
+//  press and release of its own, never mid-save. The row
+//  actions keep their busy flags per row, so one row's
+//  request never re-enables another row's buttons.
+//
 //  Split into (root component last):
 //
 //    statusClass         — status → pill css class
@@ -28,7 +36,14 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from "react";
-import { AppSelect, ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, ATTACHMENT_TOO_BIG } from "@/components/appCommon.jsx";
+import {
+  AppSelect,
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_TOO_BIG,
+  ModalStatus,
+} from "@/components/appCommon.jsx";
+import { useBackdropClose, useBusyIds, useModalDialog } from "@/components/sharedHooks.js";
 import { apiJson, apiJsonAll, apiSend, downloadAttachment, reasonOf } from "@/components/api.js";
 import "@/components/employee.css";
 
@@ -250,8 +265,9 @@ function ActivityRow({
 // -----------------------------------------------------------
 //
 // The employee's activities as a table of ActivityRows; the
-// per-row busy ids are turned into booleans per row. Loading
-// and empty states are early returns.
+// page's per-row busy flags are asked about each row and
+// handed down as booleans. Loading and empty states are early
+// returns.
 //
 // Used by:
 //   - MyActivitiesPage (below)
@@ -260,9 +276,9 @@ function ActivityRow({
 function ActivitiesTable({
   items,
   loading,
-  downloadingId,
-  deletingId,
-  resubmittingId,
+  isDownloading,
+  isDeleting,
+  isResubmitting,
   onDownload,
   onOpen,
   onResubmit,
@@ -301,9 +317,9 @@ function ActivitiesTable({
             <ActivityRow
               key={act.id}
               act={act}
-              downloading={downloadingId === act.id}
-              deleting={deletingId === act.id}
-              resubmitting={resubmittingId === act.id}
+              downloading={isDownloading(act.id)}
+              deleting={isDeleting(act.id)}
+              resubmitting={isResubmitting(act.id)}
               onDownload={onDownload}
               onOpen={onOpen}
               onResubmit={onResubmit}
@@ -330,8 +346,10 @@ function ActivitiesTable({
 // pair as text in view mode, two AppSelects in edit mode.
 // Picking a new theme preselects its first subtheme (in the
 // order the API returned them), or "" when it has none — then
-// the subtheme field shows "(potemių nėra)". The pickers are
-// named by the captions (ids activity-edit-theme-label and
+// the subtheme field shows "(potemių nėra)". Picking the
+// theme already shown changes nothing, so the activity's
+// subtheme survives a re-pick. The pickers are named by the
+// captions (ids activity-edit-theme-label and
 // activity-edit-subtheme-label) through labelledBy.
 //
 // Used by:
@@ -352,7 +370,12 @@ function ThemeSubthemeFields({
   const subthemesForEdit = themeForEdit?.subthemes || [];
 
 
+  // AppSelect reports a click on the option already selected
+  // like any other pick; answering it would swap the
+  // activity's subtheme for the theme's first, so a pick of
+  // the theme already shown is ignored
   const handleThemeChange = (val) => {
+    if (String(val) === String(themeId)) return;
     onThemeChange(val);
     const t = themes.find(
       (t) => String(t.id) === String(val)
@@ -489,16 +512,31 @@ function AttachmentField({ act, editing, downloading, onDownload, file, onFileCh
 // ActivityModal
 // -----------------------------------------------------------
 //
-// The review/edit modal for one activity. It owns the edit
-// state — mounted fresh per opened row, so the fields seed
-// from the row in view mode. "Redaguoti" appears only for
-// PATEIKTA / TIKSLINTI activities; "Išsaugoti" validates
-// theme, subtheme and title, builds the multipart body —
-// theme_code / subtheme_code go along (before any file) so a
-// replacement attachment gets the right filename prefix on
-// the backend — and hands it to onSave, which resolves with
-// the updated activity or throws. Status text goes up through
-// onMessage.
+// The review/edit dialog for one activity. It owns the edit
+// state and is keyed by the activity's id, so another
+// activity always mounts a fresh dialog whose fields seed
+// from its row in view mode, while an answer for the same
+// activity only swaps `activity` and keeps the edit state.
+// "Redaguoti" appears only for PATEIKTA / TIKSLINTI
+// activities; "Išsaugoti" validates theme, subtheme and
+// title, builds the multipart body — theme_code /
+// subtheme_code go along (before any file) so a replacement
+// attachment gets the right filename prefix on the backend —
+// and hands it to onSave with the dialog's own activity id,
+// which resolves with the updated activity or throws. A
+// successful save clears the picked file, so the next edit
+// starts with none. A file that reaches the 100 MB limit is
+// refused at the pick and again at the save, the way the
+// backend would refuse it. The dialog's status — those
+// refusals, a refused save or download, and the saved
+// confirmation — shows on its own line, inside the box.
+//
+// The box is a modal dialog named by its title: the focus
+// moves in when it opens and back to the opener when it
+// closes. The backdrop closes it only on a press and release
+// of its own — a selection dragged out of a field does not —
+// and not at all while a save is in flight, when Uždaryti is
+// disabled too.
 //
 // The field captions are divs, not <label>s —
 // .employee-modal-label counts on the div's block display and
@@ -511,7 +549,7 @@ function AttachmentField({ act, editing, downloading, onDownload, file, onFileCh
 //   - MyActivitiesPage (below) — while an activity is selected
 // -----------------------------------------------------------
 
-function ActivityModal({ activity, themes, downloading, onDownload, onSave, onClose, onMessage }) {
+function ActivityModal({ activity, themes, downloading, onDownload, onSave, onClose }) {
 
   const act = activity;
 
@@ -524,6 +562,12 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
   const [editTitle, setEditTitle] = useState(act.title || "");
   const [editDescription, setEditDescription] = useState(act.description || "");
   const [editAttachmentFile, setEditAttachmentFile] = useState(null);
+  const [status, setStatus] = useState(null);
+
+  // The backdrop stays as shut as Uždaryti while a save is in
+  // flight, so the answer always finds this dialog open
+  const backdrop = useBackdropClose(onClose, savingEdit);
+  const dialogRef = useModalDialog();
 
 
   const canEdit =
@@ -532,32 +576,33 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
 
 
   // An oversized pick is refused on the spot and the input
-  // cleared, so nothing is sent
+  // cleared, so nothing is sent. A file of exactly the limit
+  // counts: the backend turns away one that reaches it
   const handleFileChange = (picked, input) => {
-    if (picked && picked.size > ATTACHMENT_MAX_BYTES) {
-      onMessage(ATTACHMENT_TOO_BIG);
+    if (picked && picked.size >= ATTACHMENT_MAX_BYTES) {
+      setStatus({ text: ATTACHMENT_TOO_BIG, error: true });
       setEditAttachmentFile(null);
       if (input) input.value = "";
       return;
     }
-    onMessage("");
+    setStatus(null);
     setEditAttachmentFile(picked);
   };
 
 
   const handleSaveEdit = async () => {
     if (!editThemeId || !editSubthemeId || !editTitle.trim()) {
-      onMessage("Prašome užpildyti temą, potemę ir pavadinimą.");
+      setStatus({ text: "Prašome užpildyti temą, potemę ir pavadinimą.", error: true });
       return;
     }
-    if (editAttachmentFile && editAttachmentFile.size > ATTACHMENT_MAX_BYTES) {
-      onMessage(ATTACHMENT_TOO_BIG);
+    if (editAttachmentFile && editAttachmentFile.size >= ATTACHMENT_MAX_BYTES) {
+      setStatus({ text: ATTACHMENT_TOO_BIG, error: true });
       return;
     }
 
     try {
       setSavingEdit(true);
-      onMessage("");
+      setStatus(null);
 
       const formData = new FormData();
       formData.append("theme_id", editThemeId);
@@ -578,25 +623,47 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
         formData.append("attachment", editAttachmentFile);
       }
 
-      await onSave(formData);
+      // The save goes to this dialog's own activity, never to
+      // whatever the page has selected by now
+      await onSave(act.id, formData);
 
+      // The pick has been uploaded and the file input leaves
+      // with the edit form, so the next edit starts with
+      // nothing picked instead of sending the file again
+      setEditAttachmentFile(null);
       setEditing(false);
-      onMessage("Veikla sėkmingai atnaujinta.");
+      setStatus({ text: "Veikla sėkmingai atnaujinta.", error: false });
     } catch (e) {
-      onMessage(`Klaida: Nepavyko atnaujinti: ${reasonOf(e)}`);
+      setStatus({ text: `Klaida: Nepavyko atnaujinti: ${reasonOf(e)}`, error: true });
     } finally {
       setSavingEdit(false);
     }
   };
 
 
+  // A refused download is told here, not behind the overlay
+  const download = async (a) => {
+    setStatus(null);
+    try {
+      await onDownload(a);
+    } catch (e) {
+      setStatus({ text: e.message, error: true });
+    }
+  };
+
+
   return (
-    <div className="employee-modal-backdrop" onClick={onClose}>
+    <div className="employee-modal-backdrop" {...backdrop}>
       <div
+        ref={dialogRef}
         className="employee-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="activity-dialog-title"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="employee-modal-title">Veiklos peržiūra</h3>
+        <h3 className="employee-modal-title" id="activity-dialog-title">Veiklos peržiūra</h3>
         <div className="employee-modal-meta">
           Sukurta: {formatDate(act.created_at)}
         </div>
@@ -668,11 +735,13 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
             act={act}
             editing={editing}
             downloading={downloading}
-            onDownload={onDownload}
+            onDownload={download}
             file={editAttachmentFile}
             onFileChange={handleFileChange}
           />
         </div>
+
+        <ModalStatus status={status} />
 
         <div className="employee-modal-footer">
           <button
@@ -715,11 +784,17 @@ function ActivityModal({ activity, themes, downloading, onDownload, onSave, onCl
 // -----------------------------------------------------------
 //
 // Owns the list, the theme tree, the selected activity, the
-// per-row busy ids (downloadingId / deletingId /
-// resubmittingId — each disables only the touched row's
-// button) and every request. All mutations patch the local
-// list in place; a resubmit or save also refreshes the open
-// modal's activity. One status line (msg) serves everything.
+// per-row busy flags for downloads, deletes and resubmits
+// (useBusyIds — a row stays busy until its own request
+// answers, however many run at once) and every request. All
+// mutations patch the local list in place; a resubmit or
+// save answer also refreshes the open dialog, but only while
+// it still shows that activity — it may have been opened,
+// closed or switched to another row since the click.
+// handleDownload rejects with the text to show: the dialog
+// shows it on its own status line, a row's download on the
+// page's line, which also serves the load, the deletes and
+// the resubmits.
 //
 // Used by:
 //   - App.jsx — route /employee/my
@@ -730,11 +805,14 @@ export default function MyActivitiesPage() {
   const [items, setItems] = useState([]);
   const [themes, setThemes] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [downloadingId, setDownloadingId] = useState(null);
-  const [deletingId, setDeletingId] = useState(null);
-  const [resubmittingId, setResubmittingId] = useState(null);
   const [msg, setMsg] = useState("");
   const [selectedActivity, setSelectedActivity] = useState(null);
+
+  // Kept per row, so a second row's request never re-enables
+  // the first row's buttons while its own is in flight
+  const downloading = useBusyIds();
+  const deleting = useBusyIds();
+  const resubmitting = useBusyIds();
 
 
   // Activities and themes load in parallel on mount
@@ -771,13 +849,23 @@ export default function MyActivitiesPage() {
   const handleDownload = async (act) => {
     if (!act.attachment_path) return;
     try {
-      setDownloadingId(act.id);
-      setMsg("");
+      downloading.start(act.id);
       await downloadAttachment(act);
     } catch (e) {
-      setMsg(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
+      throw new Error(`Klaida: Nepavyko atsisiųsti priedo: ${reasonOf(e)}`);
     } finally {
-      setDownloadingId(null);
+      downloading.stop(act.id);
+    }
+  };
+
+
+  // A row's download reports on the page's line
+  const downloadFromRow = async (act) => {
+    setMsg("");
+    try {
+      await handleDownload(act);
+    } catch (e) {
+      setMsg(e.message);
     }
   };
 
@@ -785,7 +873,7 @@ export default function MyActivitiesPage() {
   const handleDelete = async (act) => {
     if (!window.confirm("Ar tikrai norite ištrinti šią veiklą?")) return;
     try {
-      setDeletingId(act.id);
+      deleting.start(act.id);
       setMsg("");
       await apiSend(`/api/activities/${act.id}`, { method: "DELETE" });
 
@@ -794,7 +882,7 @@ export default function MyActivitiesPage() {
     } catch (e) {
       setMsg(`Klaida: Nepavyko ištrinti veiklos: ${reasonOf(e)}`);
     } finally {
-      setDeletingId(null);
+      deleting.stop(act.id);
     }
   };
 
@@ -804,34 +892,37 @@ export default function MyActivitiesPage() {
     if (!window.confirm("Ar tikrai norite pateikti veiklą iš naujo?")) return;
 
     try {
-      setResubmittingId(act.id);
+      resubmitting.start(act.id);
       setMsg("");
       const data = await apiJson(`/api/activities/${act.id}/resubmit`, { method: "POST" });
 
-      // Patch the row (and the open modal) with the returned
-      // fresh copy
+      // Patch the row with the returned fresh copy, and the
+      // dialog if it shows this activity when the answer
+      // arrives — it may have been opened since the click, so
+      // the selection of that moment is no guide
       setItems((prev) => prev.map((x) => (x.id === data.id ? data : x)));
-      if (selectedActivity && selectedActivity.id === data.id) {
-        setSelectedActivity(data);
-      }
+      setSelectedActivity((cur) => (cur && cur.id === data.id ? data : cur));
 
       setMsg("Veikla sėkmingai pateikta iš naujo.");
     } catch (e) {
       setMsg(`Klaida: Nepavyko pateikti iš naujo: ${reasonOf(e)}`);
     } finally {
-      setResubmittingId(null);
+      resubmitting.stop(act.id);
     }
   };
 
 
-  // The modal's save: multipart PATCH, then patch the row and
-  // the open modal in place. Throws on a failed response —
-  // the modal shows the message
-  const handleSave = async (formData) => {
-    const data = await apiJson(`/api/activities/${selectedActivity.id}`, { method: "PATCH", form: formData });
+  // The dialog's save: multipart PATCH of the activity the
+  // dialog was opened for, then patch the row in place, and
+  // the dialog only while it still shows that activity —
+  // another row's dialog may be open by the time the answer
+  // arrives, and a closed one stays closed. Throws on a
+  // failed response; the dialog reports it
+  const handleSave = async (id, formData) => {
+    const data = await apiJson(`/api/activities/${id}`, { method: "PATCH", form: formData });
 
     setItems((prev) => prev.map((x) => (x.id === data.id ? data : x)));
-    setSelectedActivity(data);
+    setSelectedActivity((cur) => (cur && cur.id === data.id ? data : cur));
     return data;
   };
 
@@ -849,10 +940,10 @@ export default function MyActivitiesPage() {
           <ActivitiesTable
             items={items}
             loading={loading}
-            downloadingId={downloadingId}
-            deletingId={deletingId}
-            resubmittingId={resubmittingId}
-            onDownload={handleDownload}
+            isDownloading={downloading.isBusy}
+            isDeleting={deleting.isBusy}
+            isResubmitting={resubmitting.isBusy}
+            onDownload={downloadFromRow}
             onOpen={setSelectedActivity}
             onResubmit={handleResubmit}
             onDelete={handleDelete}
@@ -862,17 +953,19 @@ export default function MyActivitiesPage() {
         </section>
       </main>
 
-      {/* Mounted fresh per opened row — the modal seeds its
-          edit fields from the activity on mount */}
+      {/* Keyed by the activity: another row always mounts a
+          fresh dialog, which seeds its edit fields from the
+          activity on mount, while an answer for the activity
+          shown refreshes it in place */}
       {selectedActivity && (
         <ActivityModal
+          key={selectedActivity.id}
           activity={selectedActivity}
           themes={themes}
-          downloading={downloadingId === selectedActivity.id}
+          downloading={downloading.isBusy(selectedActivity.id)}
           onDownload={handleDownload}
           onSave={handleSave}
           onClose={() => setSelectedActivity(null)}
-          onMessage={setMsg}
         />
       )}
     </div>
